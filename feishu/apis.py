@@ -13,6 +13,7 @@ from lark_oapi.api.im.v1 import (
 
 from dataclasses import dataclass, field
 
+
 @dataclass(slots=True)
 class BotProfile:
     bot_id: str
@@ -26,6 +27,7 @@ class BotProfile:
     llm_api_key: str = ""
     llm_model_id: str = ""
     llm_base_url: str = ""
+
 
 @dataclass(slots=True)
 class IncomingMessage:

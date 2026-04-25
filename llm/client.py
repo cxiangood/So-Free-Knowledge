@@ -1,6 +1,7 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from dataclasses import dataclass
+import os
 from typing import Any
 
 import requests
@@ -13,6 +14,24 @@ class LLMConfig:
     base_url: str
     temperature: float = 0.2
     max_tokens: int = 512
+
+    @classmethod
+    def from_env(
+        cls,
+        *,
+        api_key: str = "",
+        model_id: str = "",
+        base_url: str = "",
+        temperature: float = 0.2,
+        max_tokens: int = 512,
+    ) -> "LLMConfig":
+        return cls(
+            api_key=(api_key or os.environ.get("LLM_API_KEY", "")).strip(),
+            model_id=(model_id or os.environ.get("LLM_MODEL_ID", "")).strip(),
+            base_url=(base_url or os.environ.get("LLM_BASE_URL", "")).strip(),
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
 
     def missing_fields(self) -> list[str]:
         missing = []

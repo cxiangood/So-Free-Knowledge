@@ -1,8 +1,16 @@
-﻿from __future__ import annotations
+from __future__ import annotations
+
+import os
 
 import lark_oapi as lark
 
-from feishu.apis import FeishuBotGateway, FeishuEventListener, MessageGateway,BotProfile,IncomingMessage
+from feishu.apis import (
+    BotProfile,
+    FeishuBotGateway,
+    FeishuEventListener,
+    IncomingMessage,
+    MessageGateway,
+)
 from llm.client import LLMClient, LLMConfig
 
 
@@ -44,7 +52,7 @@ class Bot:
         )
         self.reply_type = normalized_reply_type
         self.llm_client = LLMClient(
-            LLMConfig(
+            LLMConfig.from_env(
                 api_key=llm_api_key,
                 model_id=llm_model_id,
                 base_url=llm_base_url,
@@ -80,35 +88,33 @@ class Bot:
 
 
 if __name__ == "__main__":
-
-    role_prompt = \
-    """
-    You are the top-tier coordinator & supervisor in the multi-agent collaboration system.
-    Core Responsibilities
-    Decompose overall objectives into clear, actionable subtasks.
-    Assign tasks rationally to subordinate agents based on their capabilities and boundaries.
-    Arrange execution sequence: serial/parallel workflow, control overall progress.
-    Mediate conflicts, unify logic and standardize output when agent results diverge.
-    Review content quality, correct errors, reject unqualified deliverables for revision.
-    Integrate, summarize and polish all sub-agent outputs into a complete, coherent final result.
-    Only undertake management, scheduling and review; do not replace professional agents to execute detailed work.
-    Behavior Rules
-    Issue precise, unambiguous instructions with clear deliverance requirements.
-    Keep logic rigorous, communication efficient, no redundant dialogue.
-    Proactively collect key information if missing; ensure full-task closed-loop delivery.
+    role_prompt = """
+    你在这个多智能体协作系统中，担任最高级别的协调者与管理者。
+    核心职责
+    将整体目标拆解为清晰、可执行的子任务。
+    根据各下属智能体的能力与边界，合理分配任务。
+    安排执行顺序：串行或并行的工作流程，掌控整体进度。
+    当智能体的产出出现分歧时，调解冲突、统一逻辑并规范输出标准。
+    审核内容质量，纠正错误，驳回不合格的成果要求其修改。
+    整合、归纳并润色所有子智能体的输出，形成完整、连贯的最终成果。
+    仅承担管理、调度与审核工作，不替代专业智能体执行具体任务。
+    行为准则
+    发布精准、不含糊的指令，并明确交付要求。
+    保持逻辑严谨、沟通高效，不进行冗余对话。
+    若关键信息缺失，主动收集；确保全任务闭环交付。
     """
 
     listener_bot_config = {
-        "bot_id": "listener_host",
-        "display_name": "listener_host",
+        "bot_id": os.getenv("SOFREE_BOT_ID", "listener_host"),
+        "display_name": os.getenv("SOFREE_BOT_DISPLAY_NAME", "listener_host"),
         "role_name": "listener",
         "role_prompt": role_prompt,
-        "app_id": "",
-        "app_secret": "",
-        "llm_api_key": "",
-        "llm_model_id": "",
-        "llm_base_url": "https://ark.cn-beijing.volces.com/api/v3",
-        "reply_type": "llm",
+        "app_id": os.getenv("SOFREE_FEISHU_APP_ID") or os.getenv("FEISHU_APP_ID", ""),
+        "app_secret": os.getenv("SOFREE_FEISHU_APP_SECRET") or os.getenv("FEISHU_APP_SECRET", ""),
+        "llm_api_key": os.getenv("LLM_API_KEY", ""),
+        "llm_model_id": os.getenv("LLM_MODEL_ID", ""),
+        "llm_base_url": os.getenv("LLM_BASE_URL", "https://ark.cn-beijing.volces.com/api/v3"),
+        "reply_type": os.getenv("SOFREE_BOT_REPLY_TYPE", "llm"),
         "gateway": None,
         "log_level": lark.LogLevel.INFO,
     }
