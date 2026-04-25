@@ -48,8 +48,6 @@ def collect_messages(
     with messages_path.open("w", encoding="utf-8") as message_file:
         for chat in chat_records:
             chat_id = str(chat.get("chat_id", ""))
-            if not chat_id:
-                continue
             messages = list_chat_messages(
                 client,
                 chat_id=chat_id,
@@ -144,7 +142,6 @@ def normalize_chat_message(item: dict[str, Any], fallback_chat_id: str = "") -> 
         raw_content = str(body.get("content", "") or "")
     elif isinstance(body, str):
         raw_content = body
-
     sender = item.get("sender", {})
     if not isinstance(sender, dict):
         sender = {}
@@ -198,9 +195,7 @@ def split_chat_ids(chat_ids: str | list[str] | None) -> list[str]:
 
 def normalize_feishu_time(value: str, end_of_day: bool = False) -> str:
     value = str(value or "").strip()
-    if not value:
-        return ""
-    if value.isdigit():
+    if not value or value.isdigit():
         return value
     try:
         if len(value) == 10 and value[4] == "-" and value[7] == "-":

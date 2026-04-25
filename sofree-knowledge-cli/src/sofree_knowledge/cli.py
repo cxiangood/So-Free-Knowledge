@@ -7,6 +7,14 @@ from pathlib import Path
 from typing import Any
 
 from .archive import collect_messages
+from .auth import (
+    DEFAULT_REDIRECT_URI,
+    DEFAULT_SCOPE,
+    auth_status,
+    build_authorization_url,
+    exchange_code_for_token,
+    init_token,
+)
 from .config import load_env_file
 from .feishu_client import FeishuClient
 from .policy import KnowledgePolicyStore, VALID_SCOPES
@@ -31,7 +39,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="sofree-knowledge")
     parser.add_argument("--env-file", default="", help="Path to .env file.")
     parser.add_argument("--output-dir", default=".", help="Archive and policy root directory.")
-
     subparsers = parser.add_subparsers(dest="command")
 
     collect = subparsers.add_parser("collect-messages", help="Collect Feishu messages.")
@@ -54,12 +61,32 @@ def build_parser() -> argparse.ArgumentParser:
     get_scope.add_argument("chat_id")
     get_scope.set_defaults(func=cmd_get_knowledge_scope)
 
+    auth_url = subparsers.add_parser("auth-url", help="Print Feishu OAuth authorization URL.")
+    auth_url.add_argument("--redirect-uri", default=DEFAULT_REDIRECT_URI)
+    auth_url.add_argument("--scope", default=DEFAULT_SCOPE)
+    auth_url.set_defaults(func=cmd_auth_url)
+
+    init = subparsers.add_parser("init-token", help="Start Feishu OAuth flow.")
+    init.add_argument("--redirect-uri", default=DEFAULT_REDIRECT_URI)
+    init.add_argument("--scope", default=DEFAULT_SCOPE)
+    init.add_argument("--token-file", default="")
+    init.add_argument("--enable-autofill", action="store_true")
+    init.set_defaults(func=cmd_init_token)
+
+    exchange = subparsers.add_parser("exchange-code", help="Exchange OAuth code or redirect URL for token.")
+    exchange.add_argument("code_or_url")
+    exchange.add_argument("--token-file", default="")
+    exchange.set_defaults(func=cmd_exchange_code)
+
+    status = subparsers.add_parser("auth-status", help="Show local Feishu token status.")
+    status.add_argument("--token-file", default="")
+    status.set_defaults(func=cmd_auth_status)
     return parser
 
 
 def cmd_collect_messages(args: argparse.Namespace) -> dict[str, Any]:
     prepare_env(args)
-    manifest = collect_messages(
+    result = collect_messages(
         client=FeishuClient(),
         output_dir=args.output_dir,
         output_subdir=args.output_subdir,
@@ -71,8 +98,8 @@ def cmd_collect_messages(args: argparse.Namespace) -> dict[str, Any]:
         max_messages_per_chat=args.max_messages_per_chat,
         page_size=args.page_size,
     )
-    manifest["ok"] = True
-    return manifest
+    result["ok"] = True
+    return result
 
 
 def cmd_set_knowledge_scope(args: argparse.Namespace) -> dict[str, Any]:
@@ -85,6 +112,43 @@ def cmd_set_knowledge_scope(args: argparse.Namespace) -> dict[str, Any]:
 def cmd_get_knowledge_scope(args: argparse.Namespace) -> dict[str, Any]:
     prepare_env(args)
     result = KnowledgePolicyStore(args.output_dir).get_scope(args.chat_id)
+    result["ok"] = True
+    return result
+
+
+def cmd_auth_url(args: argparse.Namespace) -> dict[str, Any]:
+    prepare_env(args)
+    return {
+        "ok": True,
+        "authorization_url": build_authorization_url(
+            redirect_uri=args.redirect_uri,
+            scope=args.scope,
+        ),
+    }
+
+
+def cmd_init_token(args: argparse.Namespace) -> dict[str, Any]:
+    prepare_env(args)
+    result = init_token(
+        enable_autofill=args.enable_autofill,
+        redirect_uri=args.redirect_uri,
+        scope=args.scope,
+        token_file=args.token_file or None,
+    )
+    result["ok"] = True
+    return result
+
+
+def cmd_exchange_code(args: argparse.Namespace) -> dict[str, Any]:
+    prepare_env(args)
+    result = exchange_code_for_token(args.code_or_url, token_file=args.token_file or None)
+    result["ok"] = True
+    return result
+
+
+def cmd_auth_status(args: argparse.Namespace) -> dict[str, Any]:
+    prepare_env(args)
+    result = auth_status(token_file=args.token_file or None)
     result["ok"] = True
     return result
 

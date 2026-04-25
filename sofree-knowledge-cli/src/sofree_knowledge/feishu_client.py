@@ -27,10 +27,7 @@ class FeishuClient:
         self._tenant_access_token = tenant_access_token
 
     def list_visible_chats(self, page_size: int = 100, page_token: str = "") -> dict[str, Any]:
-        params: dict[str, Any] = {
-            "user_id_type": "open_id",
-            "page_size": min(max(page_size, 1), 100),
-        }
+        params: dict[str, Any] = {"user_id_type": "open_id", "page_size": min(max(page_size, 1), 100)}
         if page_token:
             params["page_token"] = page_token
         data = self.request(
@@ -86,7 +83,6 @@ class FeishuClient:
                 access_token=self.get_tenant_access_token(),
                 params=params,
             )
-
         body = data.get("data", data)
         return {
             "items": body.get("items", []),
@@ -99,10 +95,7 @@ class FeishuClient:
             return self._tenant_access_token
         app_id, app_secret = get_app_credentials()
         if not app_id or not app_secret:
-            raise MissingFeishuConfigError(
-                "Set FEISHU_APP_ID and FEISHU_APP_SECRET, or SOFREE_FEISHU_APP_ID and "
-                "SOFREE_FEISHU_APP_SECRET, before collecting visible bot chats."
-            )
+            raise MissingFeishuConfigError("FEISHU_APP_ID and FEISHU_APP_SECRET are required.")
         response = httpx.post(
             f"{self.base_url}/open-apis/auth/v3/tenant_access_token/internal",
             json={"app_id": app_id, "app_secret": app_secret},
@@ -118,19 +111,12 @@ class FeishuClient:
         self._tenant_access_token = str(token)
         return self._tenant_access_token
 
-    def request(
-        self,
-        method: str,
-        path: str,
-        access_token: str | None = None,
-        **kwargs: Any,
-    ) -> dict[str, Any]:
+    def request(self, method: str, path: str, access_token: str | None = None, **kwargs: Any) -> dict[str, Any]:
         token = access_token or self.user_access_token
         if not token:
-            raise MissingFeishuConfigError("Missing Feishu user or tenant access token.")
+            raise MissingFeishuConfigError("Missing Feishu access token.")
         headers = dict(kwargs.pop("headers", {}) or {})
         headers["Authorization"] = f"Bearer {token}"
-
         with httpx.Client(base_url=self.base_url, timeout=30) as client:
             response = client.request(method, path, headers=headers, **kwargs)
         try:

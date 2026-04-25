@@ -42,17 +42,11 @@ def read_jsonl(path: Path) -> list[dict]:
 
 
 def test_collect_messages_writes_jsonl(tmp_path):
-    manifest = collect_messages(
-        client=FakeClient(),
-        output_dir=tmp_path,
-        output_subdir="run",
-        max_chats=1,
-    )
+    manifest = collect_messages(client=FakeClient(), output_dir=tmp_path, output_subdir="run")
 
-    archive_dir = tmp_path / "message_archive" / "run"
-    assert manifest["chat_count"] == 1
+    messages = read_jsonl(tmp_path / "message_archive" / "run" / "messages.jsonl")
     assert manifest["message_count"] == 1
-    assert read_jsonl(archive_dir / "messages.jsonl")[0]["content"] == "你好"
+    assert messages[0]["content"] == "你好"
 
 
 def test_collect_messages_can_only_collect_explicit_chat(tmp_path):

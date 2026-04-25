@@ -1,31 +1,23 @@
 # sofree-knowledge
 
-Standalone CLI for SoFree Knowledge message collection and per-chat knowledge scope.
+Standalone CLI for SoFree Knowledge message collection, Feishu OAuth, and per-chat knowledge scope.
 
-This package does not depend on `feishu_sync` or Feishu skills. It calls Feishu OpenAPI directly.
+It does not depend on `feishu_sync` or Feishu skills.
 
 ## Install
-
-From this repository:
 
 ```bash
 cd sofree-knowledge-cli
 python -m pip install -e .
 ```
 
-Or run without installing:
+## Configure App Credentials
+
+Use environment variables or an env file:
 
 ```bash
-python -m sofree_knowledge.cli --help
-```
-
-## Configure
-
-Set app credentials through environment variables:
-
-```bash
-export FEISHU_APP_ID="cli_xxx"
-export FEISHU_APP_SECRET="xxx"
+FEISHU_APP_ID=cli_xxx
+FEISHU_APP_SECRET=xxx
 ```
 
 Equivalent names are also supported:
@@ -35,26 +27,52 @@ SOFREE_FEISHU_APP_ID / SOFREE_FEISHU_APP_SECRET
 LARKSUITE_CLI_APP_ID / LARKSUITE_CLI_APP_SECRET
 ```
 
-For reading chats that require user membership, provide a user access token:
+Pass an env file when running:
 
 ```bash
-export FEISHU_ACCESS_TOKEN="u-xxx"
+sofree-knowledge --env-file ../So-Free-Knowledge/.env auth-status
 ```
 
-If `FEISHU_ACCESS_TOKEN` is not set, the CLI tries to read `~/.feishu/token.json`.
+## OAuth
 
-You can also pass an env file:
+Print an authorization URL:
 
 ```bash
-sofree-knowledge --env-file ../So-Free-Knowledge/.env collect-messages
+sofree-knowledge --env-file ../So-Free-Knowledge/.env auth-url
 ```
 
-## Commands
-
-Collect messages from chats visible to the bot:
+Start OAuth flow. Without `--enable-autofill`, this opens the browser and prints the next step:
 
 ```bash
-sofree-knowledge --output-dir . collect-messages
+sofree-knowledge --env-file ../So-Free-Knowledge/.env init-token
+```
+
+Capture the local callback automatically:
+
+```bash
+sofree-knowledge --env-file ../So-Free-Knowledge/.env init-token --enable-autofill
+```
+
+Exchange a copied code or redirect URL:
+
+```bash
+sofree-knowledge --env-file ../So-Free-Knowledge/.env exchange-code "http://localhost:8000/callback?code=..."
+```
+
+Check token status:
+
+```bash
+sofree-knowledge auth-status
+```
+
+Tokens are saved to `~/.feishu/token.json` by default. CLI output redacts token values.
+
+## Message Collection
+
+Collect messages from bot-visible chats:
+
+```bash
+sofree-knowledge --env-file ../So-Free-Knowledge/.env --output-dir . collect-messages
 ```
 
 Collect a specific chat only:
@@ -69,22 +87,7 @@ Collect with a time range:
 sofree-knowledge --output-dir . collect-messages --start-time 2026-04-01 --end-time 2026-04-25
 ```
 
-Set a chat's knowledge scope:
-
-```bash
-sofree-knowledge --output-dir . set-knowledge-scope oc_xxx chat_only
-sofree-knowledge --output-dir . set-knowledge-scope oc_xxx global_review
-```
-
-Read a chat's knowledge scope:
-
-```bash
-sofree-knowledge --output-dir . get-knowledge-scope oc_xxx
-```
-
-## Output
-
-`collect-messages` prints a JSON summary and writes:
+Output:
 
 ```text
 message_archive/<run_id>/
@@ -93,23 +96,29 @@ message_archive/<run_id>/
   messages.jsonl
 ```
 
-`set-knowledge-scope` writes:
+## Knowledge Scope
+
+```bash
+sofree-knowledge --output-dir . set-knowledge-scope oc_xxx chat_only
+sofree-knowledge --output-dir . set-knowledge-scope oc_xxx global_review
+sofree-knowledge --output-dir . get-knowledge-scope oc_xxx
+```
+
+Policy is saved to:
 
 ```text
 knowledge_policy.json
 ```
 
-All CLI commands print JSON to stdout, so OpenClaw or other automation can parse the result.
-
 ## Permissions
 
-For bot-visible chat collection:
+Bot-visible collection:
 
 - `im:chat:read`
 - `im:message:readonly`
 - bot must be in the chat
 
-For user-token chat reading:
+User-token chat reading:
 
 - `im:message.group_msg:get_as_user`
 - `im:message.p2p_msg:get_as_user`
