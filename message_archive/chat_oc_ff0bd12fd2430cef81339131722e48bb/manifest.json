@@ -1,0 +1,17 @@
+{
+  "run_id": "20260425T081654Z",
+  "archive_dir": "D:\\学习\\Lark-Knowledge\\message_archive\\chat_oc_ff0bd12fd2430cef81339131722e48bb",
+  "start_time": "",
+  "end_time": "",
+  "max_chats": 10,
+  "max_messages_per_chat": 500,
+  "page_size": 50,
+  "include_visible_chats": false,
+  "chat_count": 1,
+  "message_count": 363,
+  "files": {
+    "manifest": "D:\\学习\\Lark-Knowledge\\message_archive\\chat_oc_ff0bd12fd2430cef81339131722e48bb\\manifest.json",
+    "chats": "D:\\学习\\Lark-Knowledge\\message_archive\\chat_oc_ff0bd12fd2430cef81339131722e48bb\\chats.jsonl",
+    "messages": "D:\\学习\\Lark-Knowledge\\message_archive\\chat_oc_ff0bd12fd2430cef81339131722e48bb\\messages.jsonl"
+  }
+}

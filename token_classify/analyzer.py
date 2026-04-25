@@ -1,13 +1,10 @@
-import os
-import re
-import math
-from collections import Counter
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Sequence, Set, Tuple
 
 import torch
 import torch.nn.functional as F
 
+from token_classify.domain_tokenizer import DomainAdaptiveTokenizer
 from token_classify.model_loader import HFModelLoader
 
 
@@ -25,229 +22,8 @@ class WordInstance:
     word: str
     char_start: int
     char_end: int
-    token_indices: List[int]  # Global BERT token indices (without special tokens)
+    token_indices: List[int]
 
-
-class JiebaNgramSegmenter:
-    # Keep mixed-language and domain terms as a single protected span.
-    DEFAULT_PROTECTED_PATTERNS = [
-        re.compile(r"https?://[^\s]+", re.IGNORECASE),
-        re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"),
-        re.compile(r"[A-Za-z][A-Za-z0-9]*(?:[-_/+.][A-Za-z0-9]+)+"),  # e.g. A/B, GPT-4o, anti-fraud_v2
-        re.compile(r"[A-Za-z]+[A-Za-z0-9]*"),  # e.g. CRM, OpenAI, L4
-        re.compile(r"\d+(?:\.\d+)?(?:%|ms|s|m|h|Hz|kHz|MHz|GHz|GB|MB|TB)?"),
-    ]
-    SYMBOL_MAP = {
-        "，": ",",
-        "。": ".",
-        "；": ";",
-        "：": ":",
-        "！": "!",
-        "？": "?",
-        "（": "(",
-        "）": ")",
-        "【": "[",
-        "】": "]",
-        "《": "<",
-        "》": ">",
-        "“": "\"",
-        "”": "\"",
-        "‘": "'",
-        "’": "'",
-        "—": "-",
-        "－": "-",
-        "～": "~",
-    }
-
-    def __init__(
-        self,
-        user_dict_path: Optional[str] = None,
-        custom_terms: Optional[List[str]] = None,
-        min_count: int = 2,
-        min_pmi: float = 4.0,
-        max_n: int = 3,
-    ):
-        try:
-            import jieba  # type: ignore
-        except ImportError as exc:
-            raise ImportError(
-                "jieba is required. Please install it with `pip install jieba`."
-            ) from exc
-        self._jieba = jieba
-        self.min_count = min_count
-        self.min_pmi = min_pmi
-        self.max_n = max_n
-        self._dynamic_terms: Set[str] = set()
-        self._custom_terms = [term.strip() for term in (custom_terms or []) if term and term.strip()]
-        self._normalized_custom_terms = [self._normalize_text(term) for term in self._custom_terms]
-        if user_dict_path and os.path.exists(user_dict_path):
-            self._jieba.load_userdict(user_dict_path)
-        for term in self._custom_terms:
-            self._jieba.add_word(term)
-
-    def segment_with_spans(self, text: str) -> List[Tuple[str, int, int]]:
-        if not text:
-            return []
-
-        normalized_text = self._normalize_text(text)
-        protected = self._collect_non_overlapping_spans(normalized_text)
-        segments: List[Tuple[str, int, int]] = []
-
-        cursor = 0
-        for start, end in protected:
-            if cursor < start:
-                segments.extend(self._segment_plain_text(text, normalized_text, cursor, start))
-            protected_word = text[start:end]
-            if protected_word.strip():
-                segments.append((protected_word, start, end))
-            cursor = end
-
-        if cursor < len(text):
-            segments.extend(self._segment_plain_text(text, normalized_text, cursor, len(text)))
-
-        return [(w, s, e) for (w, s, e) in segments if w and w.strip()]
-
-    def _segment_plain_text(
-        self,
-        original_text: str,
-        normalized_text: str,
-        start: int,
-        end: int,
-    ) -> List[Tuple[str, int, int]]:
-        piece = normalized_text[start:end]
-        if not piece.strip():
-            return []
-
-        results: List[Tuple[str, int, int]] = []
-        token_spans = [(token, t_start, t_end) for token, t_start, t_end in self._jieba.tokenize(piece, mode="default") if token and token.strip()]
-        if not token_spans:
-            return []
-
-        token_texts = [token for token, _, _ in token_spans]
-        candidates = self._mine_ngram_candidates(token_texts)
-
-        dynamic_terms = {"".join(item) for item in candidates["2"]}
-        if self.max_n >= 3:
-            dynamic_terms.update({"".join(item) for item in candidates["3"]})
-        for term in dynamic_terms:
-            if term and term not in self._dynamic_terms:
-                self._jieba.add_word(term)
-                self._dynamic_terms.add(term)
-
-        # Re-tokenize after dynamic lexicon injection, then do greedy n-gram merge.
-        token_spans = [(token, t_start, t_end) for token, t_start, t_end in self._jieba.tokenize(piece, mode="default") if token and token.strip()]
-        token_texts = [token for token, _, _ in token_spans]
-        candidates = self._mine_ngram_candidates(token_texts)
-
-        merged_spans = self._merge_by_ngram(token_spans, candidates)
-        for _, local_start, local_end in merged_spans:
-            global_start = start + local_start
-            global_end = start + local_end
-            word = original_text[global_start:global_end]
-            if word.strip():
-                results.append((word, global_start, global_end))
-        return results
-
-    def _mine_ngram_candidates(self, tokens: List[str]) -> Dict[str, Set[Tuple[str, ...]]]:
-        candidates: Dict[str, Set[Tuple[str, ...]]] = {
-            "2": set(),
-            "3": set(),
-        }
-        if len(tokens) < 2:
-            return candidates
-
-        unigram = Counter(tokens)
-        bigram = Counter(zip(tokens[:-1], tokens[1:]))
-        total_unigram = max(1, sum(unigram.values()))
-
-        for (w1, w2), freq in bigram.items():
-            if freq < self.min_count:
-                continue
-            denom = unigram[w1] * unigram[w2]
-            if denom <= 0:
-                continue
-            pmi = math.log2((freq * total_unigram) / denom)
-            if pmi >= self.min_pmi:
-                candidates["2"].add((w1, w2))
-
-        if self.max_n >= 3 and len(tokens) >= 3:
-            trigram = Counter(zip(tokens[:-2], tokens[1:-1], tokens[2:]))
-            for (w1, w2, w3), freq in trigram.items():
-                if freq < self.min_count:
-                    continue
-                if (w1, w2) in candidates["2"] and (w2, w3) in candidates["2"]:
-                    candidates["3"].add((w1, w2, w3))
-
-        return candidates
-
-    def _merge_by_ngram(
-        self,
-        token_spans: List[Tuple[str, int, int]],
-        candidates: Dict[str, Set[Tuple[str, ...]]],
-    ) -> List[Tuple[str, int, int]]:
-        merged: List[Tuple[str, int, int]] = []
-        i = 0
-        n = len(token_spans)
-        while i < n:
-            if self.max_n >= 3 and i + 2 < n:
-                tri = (token_spans[i][0], token_spans[i + 1][0], token_spans[i + 2][0])
-                if tri in candidates["3"]:
-                    merged.append(("".join(tri), token_spans[i][1], token_spans[i + 2][2]))
-                    i += 3
-                    continue
-
-            if i + 1 < n:
-                bi = (token_spans[i][0], token_spans[i + 1][0])
-                if bi in candidates["2"]:
-                    merged.append(("".join(bi), token_spans[i][1], token_spans[i + 1][2]))
-                    i += 2
-                    continue
-
-            merged.append(token_spans[i])
-            i += 1
-
-        return merged
-
-    def _collect_non_overlapping_spans(self, normalized_text: str) -> List[Tuple[int, int]]:
-        candidates: List[Tuple[int, int]] = []
-        for term in self._normalized_custom_terms:
-            start = 0
-            while True:
-                idx = normalized_text.find(term, start)
-                if idx < 0:
-                    break
-                candidates.append((idx, idx + len(term)))
-                start = idx + len(term)
-
-        for pattern in self.DEFAULT_PROTECTED_PATTERNS:
-            for match in pattern.finditer(normalized_text):
-                start, end = match.span()
-                if end > start:
-                    candidates.append((start, end))
-
-        candidates.sort(key=lambda item: (item[0], -(item[1] - item[0])))
-        merged: List[Tuple[int, int]] = []
-        current_end = -1
-        for start, end in candidates:
-            if start < current_end:
-                continue
-            merged.append((start, end))
-            current_end = end
-        return merged
-
-    def _normalize_text(self, text: str) -> str:
-        normalized_chars: List[str] = []
-        for ch in text:
-            normalized_chars.append(self._normalize_char(ch))
-        return "".join(normalized_chars).lower()
-
-    def _normalize_char(self, ch: str) -> str:
-        code = ord(ch)
-        if code == 0x3000:
-            return " "
-        if 0xFF01 <= code <= 0xFF5E:
-            return chr(code - 0xFEE0)
-        return self.SYMBOL_MAP.get(ch, ch)
 
 class SemanticDensityAnalyzer:
     def __init__(
@@ -263,12 +39,12 @@ class SemanticDensityAnalyzer:
         ngram_min_pmi: float = 4.0,
         ngram_max_n: int = 3,
     ):
-        self.segmenter = JiebaNgramSegmenter(
+        self.segmenter = DomainAdaptiveTokenizer(
             user_dict_path=user_dict_path,
             custom_terms=custom_terms,
-            min_count=ngram_min_count,
-            min_pmi=ngram_min_pmi,
-            max_n=ngram_max_n,
+            ngram_min_count=ngram_min_count,
+            ngram_min_pmi=ngram_min_pmi,
+            ngram_max_n=ngram_max_n,
         )
 
         self.loader = HFModelLoader(model_name=model_name, device=device, hf_token=hf_token)
@@ -313,7 +89,7 @@ class SemanticDensityAnalyzer:
             self._cached_scores = []
             return []
 
-        words = self.segmenter.segment_with_spans(text)
+        words = self.segmenter.tokenize_with_spans(text)
         instances = self._build_word_instances(words, offsets)
         scores = self._compute_metrics_for_instances(input_ids, instances)
 
@@ -330,7 +106,6 @@ class SemanticDensityAnalyzer:
         for word, char_start, char_end in segmented_words:
             token_indices: List[int] = []
             for idx, (tok_start, tok_end) in enumerate(token_offsets):
-                # Keep tokens that overlap this word span.
                 if tok_end <= char_start or tok_start >= char_end:
                     continue
                 token_indices.append(idx)
@@ -373,7 +148,6 @@ class SemanticDensityAnalyzer:
                 if inst.token_indices[0] < chunk_start or inst.token_indices[-1] >= chunk_end:
                     continue
 
-                # Avoid duplicated evaluation in overlap area.
                 first_tok = inst.token_indices[0]
                 if first_tok >= chunk_start + step and chunk_end < len(input_ids):
                     continue

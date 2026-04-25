@@ -1,0 +1,16 @@
+{
+  "run_id": "20260425T080519Z",
+  "archive_dir": "D:\\学习\\Lark-Knowledge\\message_archive\\current_visible",
+  "start_time": "",
+  "end_time": "",
+  "max_chats": 100,
+  "max_messages_per_chat": 200,
+  "page_size": 50,
+  "chat_count": 1,
+  "message_count": 45,
+  "files": {
+    "manifest": "D:\\学习\\Lark-Knowledge\\message_archive\\current_visible\\manifest.json",
+    "chats": "D:\\学习\\Lark-Knowledge\\message_archive\\current_visible\\chats.jsonl",
+    "messages": "D:\\学习\\Lark-Knowledge\\message_archive\\current_visible\\messages.jsonl"
+  }
+}
