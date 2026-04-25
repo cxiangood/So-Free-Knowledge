@@ -3,3 +3,5 @@ lark-samples-main/
 __pycache__/
 .env
 plans/
+skills-lock.json
+.agents/
