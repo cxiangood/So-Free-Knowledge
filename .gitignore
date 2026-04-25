@@ -5,3 +5,4 @@ __pycache__/
 plans/
 skills-lock.json
 .agents/
+message_archive/
