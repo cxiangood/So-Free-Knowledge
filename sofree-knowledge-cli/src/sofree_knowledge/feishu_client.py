@@ -96,18 +96,21 @@ class FeishuClient:
         app_id, app_secret = get_app_credentials()
         if not app_id or not app_secret:
             raise MissingFeishuConfigError("FEISHU_APP_ID and FEISHU_APP_SECRET are required.")
-        response = httpx.post(
-            f"{self.base_url}/open-apis/auth/v3/tenant_access_token/internal",
-            json={"app_id": app_id, "app_secret": app_secret},
-            timeout=30,
-        )
+        try:
+            response = httpx.post(
+                f"{self.base_url}/open-apis/auth/v3/tenant_access_token/internal",
+                json={"app_id": app_id, "app_secret": app_secret},
+                timeout=30,
+            )
+        except (httpx.HTTPError, OSError) as exc:
+            raise FeishuAPIError(self._format_network_error(exc)) from exc
         response.raise_for_status()
         data = response.json()
         if data.get("code", 0) not in (0, None):
-            raise FeishuAPIError(f"tenant_access_token failed: {data}")
+            raise FeishuAPIError(self._format_feishu_error(data, prefix="tenant_access_token failed"))
         token = data.get("tenant_access_token") or data.get("data", {}).get("tenant_access_token")
         if not token:
-            raise FeishuAPIError(f"tenant_access_token response missing token: {data}")
+            raise FeishuAPIError(self._format_feishu_error(data, prefix="tenant_access_token response missing token"))
         self._tenant_access_token = str(token)
         return self._tenant_access_token
 
@@ -117,14 +120,62 @@ class FeishuClient:
             raise MissingFeishuConfigError("Missing Feishu access token.")
         headers = dict(kwargs.pop("headers", {}) or {})
         headers["Authorization"] = f"Bearer {token}"
-        with httpx.Client(base_url=self.base_url, timeout=30) as client:
-            response = client.request(method, path, headers=headers, **kwargs)
+        try:
+            with httpx.Client(base_url=self.base_url, timeout=30) as client:
+                response = client.request(method, path, headers=headers, **kwargs)
+        except (httpx.HTTPError, OSError) as exc:
+            raise FeishuAPIError(self._format_network_error(exc)) from exc
         try:
             data = response.json()
         except ValueError:
             data = {"body": response.text}
         if response.is_error:
-            raise FeishuAPIError(f"HTTP {response.status_code}: {data}")
+            raise FeishuAPIError(self._format_feishu_error(data, status_code=response.status_code))
         if isinstance(data, dict) and data.get("code", 0) not in (0, None):
-            raise FeishuAPIError(str(data))
+            raise FeishuAPIError(self._format_feishu_error(data))
         return data
+
+    def _format_network_error(self, exc: Exception) -> str:
+        if isinstance(exc, OSError) and getattr(exc, "winerror", None) == 10013:
+            return (
+                "Network access denied (WinError 10013). "
+                "Check firewall/proxy/sandbox permissions, then retry."
+            )
+        return f"Network request failed: {exc}"
+
+    def _format_feishu_error(
+        self,
+        data: Any,
+        *,
+        status_code: int | None = None,
+        prefix: str | None = None,
+    ) -> str:
+        if not isinstance(data, dict):
+            base = f"Feishu API error: {data}"
+            if status_code is not None:
+                base = f"HTTP {status_code}: {base}"
+            if prefix:
+                return f"{prefix}: {base}"
+            return base
+
+        code = data.get("code")
+        msg = str(data.get("msg", "")).strip()
+        parts: list[str] = []
+        if prefix:
+            parts.append(prefix)
+        if status_code is not None:
+            parts.append(f"HTTP {status_code}")
+        if code is not None:
+            parts.append(f"code={code}")
+        if msg:
+            parts.append(f"msg={msg}")
+
+        if code == 230002:
+            parts.append("hint=Bot/User is not in the target chat. Add bot to the chat or use user token as a member.")
+
+        error_obj = data.get("error")
+        if isinstance(error_obj, dict):
+            log_id = error_obj.get("log_id")
+            if log_id:
+                parts.append(f"log_id={log_id}")
+        return "; ".join(parts) if parts else str(data)

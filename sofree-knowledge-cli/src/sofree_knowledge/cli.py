@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from pathlib import Path
 from typing import Any
 
 from .archive import collect_messages
@@ -15,7 +14,7 @@ from .auth import (
     exchange_code_for_token,
     init_token,
 )
-from .config import load_env_file
+from .config import load_env_file, resolve_env_file
 from .feishu_client import FeishuClient
 from .policy import KnowledgePolicyStore, VALID_SCOPES
 
@@ -154,10 +153,7 @@ def cmd_auth_status(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def prepare_env(args: argparse.Namespace) -> None:
-    env_file = args.env_file
-    if not env_file:
-        candidate = Path(args.output_dir).expanduser() / "So-Free-Knowledge" / ".env"
-        env_file = str(candidate) if candidate.exists() else ""
+    env_file = resolve_env_file(args.env_file, output_dir=args.output_dir)
     load_env_file(env_file)
 
 

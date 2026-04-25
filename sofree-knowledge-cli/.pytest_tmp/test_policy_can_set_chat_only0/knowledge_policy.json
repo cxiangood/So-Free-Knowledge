@@ -1,0 +1,8 @@
+{
+  "default_scope": "global_review",
+  "chats": {
+    "oc_test": {
+      "scope": "chat_only"
+    }
+  }
+}

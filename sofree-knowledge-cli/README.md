@@ -25,6 +25,7 @@ Equivalent names are also supported:
 ```bash
 SOFREE_FEISHU_APP_ID / SOFREE_FEISHU_APP_SECRET
 LARKSUITE_CLI_APP_ID / LARKSUITE_CLI_APP_SECRET
+APP_ID / APP_SECRET
 ```
 
 Pass an env file when running:
@@ -32,6 +33,13 @@ Pass an env file when running:
 ```bash
 sofree-knowledge --env-file ../So-Free-Knowledge/.env auth-status
 ```
+
+If `--env-file` is omitted, CLI will auto-discover `.env` in this order:
+
+1. `<output-dir>/.env`
+2. `./.env`
+3. `../.env`
+4. `<output-dir>/So-Free-Knowledge/.env` (legacy fallback)
 
 ## OAuth
 
