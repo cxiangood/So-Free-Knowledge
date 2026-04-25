@@ -17,6 +17,12 @@ from .auth import (
 )
 from .config import load_env_file
 from .feishu_client import FeishuClient
+from .lingo_context import (
+    build_lingo_judge_prompt,
+    extract_keyword_contexts,
+    parse_lingo_judgements,
+    publishable_lingo_judgements,
+)
 from .policy import KnowledgePolicyStore, VALID_SCOPES
 
 
@@ -81,6 +87,29 @@ def build_parser() -> argparse.ArgumentParser:
     status = subparsers.add_parser("auth-status", help="Show local Feishu token status.")
     status.add_argument("--token-file", default="")
     status.set_defaults(func=cmd_auth_status)
+
+    # Lingo commands
+    lingo = subparsers.add_parser("lingo", help="Lingo (glossary) operations.")
+    lingo_subparsers = lingo.add_subparsers(dest="lingo_command")
+
+    extract_contexts = lingo_subparsers.add_parser("extract-contexts", help="Extract keyword contexts from messages.")
+    extract_contexts.add_argument("--keywords", required=True, help="Comma-separated keywords to search for.")
+    extract_contexts.add_argument("--messages-file", required=True, help="JSON file containing messages array.")
+    extract_contexts.add_argument("--before", type=int, default=1, help="Number of messages before match to include.")
+    extract_contexts.add_argument("--after", type=int, default=1, help="Number of messages after match to include.")
+    extract_contexts.add_argument("--max-contexts", type=int, default=30, help="Maximum number of contexts to return.")
+    extract_contexts.set_defaults(func=cmd_lingo_extract_contexts)
+
+    build_prompt = lingo_subparsers.add_parser("build-judge-prompt", help="Build LLM prompt for lingo judgement.")
+    build_prompt.add_argument("--keywords", required=True, help="Comma-separated keywords.")
+    build_prompt.add_argument("--contexts-file", required=True, help="JSON file containing contexts array from extract-contexts.")
+    build_prompt.set_defaults(func=cmd_lingo_build_judge_prompt)
+
+    parse_judgements = lingo_subparsers.add_parser("parse-judgements", help="Parse LLM judgement output.")
+    parse_judgements.add_argument("--judgements-file", required=True, help="File containing raw LLM output (JSON or text with code fences).")
+    parse_judgements.add_argument("--publishable-only", action="store_true", help="Only return publishable judgements (key/black types with value).")
+    parse_judgements.set_defaults(func=cmd_lingo_parse_judgements)
+
     return parser
 
 
@@ -159,6 +188,55 @@ def prepare_env(args: argparse.Namespace) -> None:
         candidate = Path(args.output_dir).expanduser() / "So-Free-Knowledge" / ".env"
         env_file = str(candidate) if candidate.exists() else ""
     load_env_file(env_file)
+
+
+def cmd_lingo_extract_contexts(args: argparse.Namespace) -> dict[str, Any]:
+    prepare_env(args)
+    keywords = [k.strip() for k in args.keywords.split(",") if k.strip()]
+    with open(args.messages_file, "r", encoding="utf-8") as f:
+        messages = json.load(f)
+    contexts = extract_keyword_contexts(
+        keywords=keywords,
+        messages=messages,
+        before=args.before,
+        after=args.after,
+        max_contexts=args.max_contexts,
+    )
+    return {
+        "ok": True,
+        "keywords": keywords,
+        "contexts": contexts,
+        "count": len(contexts),
+    }
+
+
+def cmd_lingo_build_judge_prompt(args: argparse.Namespace) -> dict[str, Any]:
+    prepare_env(args)
+    keywords = [k.strip() for k in args.keywords.split(",") if k.strip()]
+    with open(args.contexts_file, "r", encoding="utf-8") as f:
+        contexts = json.load(f)
+    prompt = build_lingo_judge_prompt(
+        keywords=keywords,
+        contexts=contexts,
+    )
+    return {
+        "ok": True,
+        "prompt": prompt,
+    }
+
+
+def cmd_lingo_parse_judgements(args: argparse.Namespace) -> dict[str, Any]:
+    prepare_env(args)
+    with open(args.judgements_file, "r", encoding="utf-8") as f:
+        raw_judgements = f.read()
+    judgements = parse_lingo_judgements(raw_judgements)
+    if args.publishable_only:
+        judgements = publishable_lingo_judgements(judgements)
+    return {
+        "ok": True,
+        "judgements": judgements,
+        "count": len(judgements),
+    }
 
 
 if __name__ == "__main__":
