@@ -6,3 +6,4 @@ plans/
 skills-lock.json
 .agents/
 message_archive/
+token_classify/outputs/

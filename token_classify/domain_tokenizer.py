@@ -52,6 +52,7 @@ class DomainAdaptiveTokenizer:
         self.ngram_min_count = ngram_min_count
         self.ngram_min_pmi = ngram_min_pmi
         self.ngram_max_n = ngram_max_n
+        self._dynamic_terms: Set[str] = set()
 
         self._custom_terms = [term.strip() for term in (custom_terms or []) if term and term.strip()]
         self._normalized_custom_terms = [self._normalize_text(term) for term in self._custom_terms]
@@ -87,12 +88,7 @@ class DomainAdaptiveTokenizer:
 
         return [(token, start, end) for token, start, end in segments if token and token.strip()]
 
-    def _segment_plain_text(
-        self,
-        normalized_text: str,
-        start: int,
-        end: int,
-    ) -> List[Tuple[str, int, int]]:
+    def _segment_plain_text(self, normalized_text: str, start: int, end: int) -> List[Tuple[str, int, int]]:
         piece = normalized_text[start:end]
         if not piece.strip():
             return []
@@ -112,8 +108,9 @@ class DomainAdaptiveTokenizer:
         if self.ngram_max_n >= 3:
             dynamic_terms.update({"".join(item) for item in candidates["3"]})
         for term in dynamic_terms:
-            if term:
+            if term and term not in self._dynamic_terms:
                 self._jieba.add_word(term)
+                self._dynamic_terms.add(term)
 
         token_spans = [
             (token, t_start, t_end)

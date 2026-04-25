@@ -2,5 +2,8 @@ lark-oapi==1.4.8
 PyYAML==6.0.3
 requests==2.33.1
 jieba==0.42.1
+scikit-learn==1.8.0
+matplotlib==3.10.9
+wordcloud==1.9.6
 torch>=2.0.0
 transformers>=4.40.0
