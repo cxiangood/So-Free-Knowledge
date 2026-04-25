@@ -10,7 +10,7 @@ if __package__ is None or __package__ == "":
     if project_root not in sys.path:
         sys.path.insert(0, project_root)
 
-from message_archive.extract_chat_messages import extract_plain_messages, load_records
+from message_extract.extract_chat_messages import extract_plain_messages, load_records
 from token_classify.domain_tokenizer import tokenize_text
 
 
