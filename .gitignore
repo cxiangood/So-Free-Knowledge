@@ -1,3 +1,5 @@
 .venv/
 lark-samples-main/
 __pycache__/
+skills-lock.json
+.agents/
