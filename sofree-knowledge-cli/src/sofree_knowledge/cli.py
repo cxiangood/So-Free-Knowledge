@@ -210,6 +210,7 @@ def build_parser() -> argparse.ArgumentParser:
     assistant_build.add_argument("--max-messages-per-chat", type=int, default=200)
     assistant_build.add_argument("--max-drive-docs", type=int, default=50)
     assistant_build.add_argument("--max-knowledge", type=int, default=30)
+    assistant_build.add_argument("--recent-days", type=int, default=7, help="Recent window in days for online docs/messages.")
     assistant_build.add_argument("--max-docs", type=int, default=10, help="Maximum number of ranked documents.")
     assistant_build.add_argument("--max-related", type=int, default=5, help="Maximum number of related messages/knowledge per document.")
     assistant_build.add_argument("--max-interest-items", type=int, default=8, help="Maximum number of interest digest messages.")
@@ -226,6 +227,7 @@ def build_parser() -> argparse.ArgumentParser:
     assistant_build.add_argument("--nightly-enabled", action=argparse.BooleanOptionalAction, default=None)
     assistant_build.add_argument("--push", action="store_true", help="Push assistant result to Feishu.")
     assistant_build.add_argument("--push-interest-card", action=argparse.BooleanOptionalAction, default=None, help="Whether to also push interest digest card.")
+    assistant_build.add_argument("--push-summary-card", action=argparse.BooleanOptionalAction, default=False, help="Whether to also push summary card.")
     assistant_build.add_argument("--receive-chat-id", default="", help="Explicit target chat_id for push. If set, push to group chat.")
     assistant_build.add_argument("--receive-open-id", default="", help="Explicit target open_id for push. Used when --receive-chat-id is empty.")
     assistant_build.add_argument("--output-format", choices=["all", "json", "doc", "card"], default="all")
@@ -758,6 +760,7 @@ def cmd_assistant_build_personal_brief(args: argparse.Namespace) -> dict[str, An
             max_messages_per_chat=args.max_messages_per_chat,
             max_drive_docs=args.max_drive_docs,
             max_knowledge=args.max_knowledge,
+            recent_days=args.recent_days,
         )
         documents = [item for item in online.get("documents", []) if isinstance(item, dict)]
         access_records = [item for item in online.get("access_records", []) if isinstance(item, dict)]
@@ -814,6 +817,7 @@ def cmd_assistant_build_personal_brief(args: argparse.Namespace) -> dict[str, An
 
     base_meta = {
         "mode": "online" if args.online else "offline",
+        "recent_days": int(args.recent_days),
         "resolved_target_user_id": resolved_target_user_id,
         "inputs": {
             "document_count": len(documents),
@@ -827,15 +831,23 @@ def cmd_assistant_build_personal_brief(args: argparse.Namespace) -> dict[str, An
     if args.push:
         receive_id_type, receive_id = resolve_push_target(args, resolved_target_user_id=resolved_target_user_id)
         client = FeishuClient()
-        push_result = client.send_message(
+        doc_push_result = client.send_message(
             receive_id=receive_id,
             receive_id_type=receive_id_type,
-            msg_type="interactive",
-            content=report["card"],
+            msg_type="text",
+            content={"text": report["doc_markdown"]},
         )
         push_interest_card = args.push_interest_card
         if push_interest_card is None:
             push_interest_card = args.output_format in {"card", "all"}
+        summary_push_result: dict[str, Any] | None = None
+        if args.push_summary_card:
+            summary_push_result = client.send_message(
+                receive_id=receive_id,
+                receive_id_type=receive_id_type,
+                msg_type="interactive",
+                content=report["card"],
+            )
         interest_push_result: dict[str, Any] | None = None
         if push_interest_card:
             interest_push_result = client.send_message(
@@ -848,8 +860,10 @@ def cmd_assistant_build_personal_brief(args: argparse.Namespace) -> dict[str, An
             "enabled": True,
             "receive_id_type": receive_id_type,
             "receive_id": receive_id,
-            "message_id": push_result.get("message_id", ""),
-            "chat_id": push_result.get("chat_id", ""),
+            "doc_message_id": doc_push_result.get("message_id", ""),
+            "chat_id": doc_push_result.get("chat_id", ""),
+            "summary_enabled": bool(args.push_summary_card),
+            "summary_message_id": (summary_push_result or {}).get("message_id", ""),
             "interest_enabled": bool(push_interest_card),
             "interest_message_id": (interest_push_result or {}).get("message_id", ""),
         }

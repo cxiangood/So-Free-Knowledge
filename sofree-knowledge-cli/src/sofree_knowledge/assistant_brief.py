@@ -47,6 +47,34 @@ DOC_TYPE_PATTERNS = (
     ("doc", ("/docx/", "/docs/", "文档", "doc")),
 )
 
+INTEREST_SIGNAL_KEYWORDS = (
+    "需求",
+    "上线",
+    "风险",
+    "客户",
+    "review",
+    "排期",
+    "交付",
+    "发布",
+    "故障",
+    "截止",
+    "待办",
+)
+
+INTEREST_NOISE_PATTERNS = (
+    "llm 调用失败",
+    "too many requests",
+    "429",
+    "[plan_command]",
+    "write_policy:",
+    "output_format:",
+    "llm 配置不完整",
+    "缺少:",
+    "我没办法直接帮你",
+    "可以和我说说",
+    "我是有什么问题",
+)
+
 
 def build_personal_brief(
     documents: list[dict[str, Any]],
@@ -461,28 +489,37 @@ def _group_documents_by_business(documents: list[dict[str, Any]]) -> list[dict[s
 
 
 def _build_interest_digest(messages: list[dict[str, str]], interests: list[str], max_items: int) -> dict[str, Any]:
-    interest_keywords = set()
-    for item in interests:
-        interest_keywords |= _extract_keywords(item)
-    if not interest_keywords:
-        interest_keywords = {"需求", "上线", "风险", "客户", "复盘"}
+    interest_terms = [item.strip().lower() for item in interests if item and item.strip()]
+    if not interest_terms:
+        interest_terms = ["需求", "上线", "风险", "客户", "复盘"]
 
     items: list[dict[str, Any]] = []
+    dedupe_summary: set[str] = set()
     for message in messages:
         text = message.get("text", "")
         if not text:
             continue
-        message_keywords = _extract_keywords(text)
-        overlap = len(interest_keywords & message_keywords)
-        if overlap <= 0:
+        normalized_text = _normalize_interest_text(text)
+        if _is_noise_interest_text(normalized_text):
             continue
-        urgency_hit = any(keyword in text.lower() for keyword in URGENCY_KEYWORDS)
-        score = overlap * 20 + (30 if urgency_hit else 0)
+        hit_terms = [term for term in interest_terms if term in normalized_text.lower()]
+        if not hit_terms:
+            continue
+        signal_hits = sum(1 for keyword in INTEREST_SIGNAL_KEYWORDS if keyword in normalized_text.lower())
+        urgency_hit = any(keyword in normalized_text.lower() for keyword in URGENCY_KEYWORDS)
+        if len(hit_terms) < 2 and signal_hits <= 0 and not urgency_hit:
+            continue
+        summary = _trim(normalized_text, 120)
+        if summary in dedupe_summary:
+            continue
+        dedupe_summary.add(summary)
+        score = len(hit_terms) * 30 + signal_hits * 8 + (20 if urgency_hit else 0)
         items.append(
             {
                 "message_id": message.get("message_id", ""),
                 "chat_id": message.get("chat_id", ""),
-                "summary": _trim(text, 120),
+                "summary": summary,
+                "hit_terms": hit_terms[:5],
                 "score": score,
                 "create_time": message.get("create_time", ""),
             }
@@ -492,6 +529,21 @@ def _build_interest_digest(messages: list[dict[str, str]], interests: list[str],
         "interests": interests,
         "items": items[:max_items],
     }
+
+
+def _normalize_interest_text(text: str) -> str:
+    return re.sub(r"\s+", " ", str(text or "").strip())
+
+
+def _is_noise_interest_text(text: str) -> bool:
+    lowered = text.lower()
+    if len(lowered) < 6:
+        return True
+    if "\ncommand:" in lowered:
+        return True
+    if lowered.startswith("command:"):
+        return True
+    return any(pattern in lowered for pattern in INTEREST_NOISE_PATTERNS)
 
 
 def _build_runtime_plan(schedule: dict[str, Any]) -> dict[str, Any]:
@@ -568,12 +620,11 @@ def _to_markdown(
         business = str(group.get("business") or "General")
         lines.append(f"### {business}")
         for item in group.get("documents", [])[:5]:
+            title = f"[{item['title']}]({item['url']})" if item.get("url") else item["title"]
             lines.append(
                 f"- {'★' * int(item['urgency_stars'])}{'☆' * (5 - int(item['urgency_stars']))} "
-                f"[{item['doc_type']}] {item['title']}"
+                f"[{item['doc_type']}] {title}"
             )
-            if item.get("url"):
-                lines.append(f"  - 链接: {item['url']}")
             lines.append(f"  - 描述: {item['summary'] or '无'}")
             if item["todo_items"]:
                 lines.append(f"  - 待办: {item['todo_items'][0]}")
@@ -583,9 +634,10 @@ def _to_markdown(
         lines.append("- 暂无可推荐文档")
         return "\n".join(lines)
     for index, item in enumerate(documents, start=1):
+        title = f"[{item['title']}]({item['url']})" if item.get("url") else item["title"]
         lines.append(
             f"{index}. {'★' * int(item['urgency_stars'])}{'☆' * (5 - int(item['urgency_stars']))} "
-            f"[{item['priority'].upper()}] {item['title']} "
+            f"[{item['priority'].upper()}] {title} "
             f"(紧急:{item['urgency_score']} 推荐:{item['recommend_score']})"
         )
         for reason in item["reasons"][:2]:

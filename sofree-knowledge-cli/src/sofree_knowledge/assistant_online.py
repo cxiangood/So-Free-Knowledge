@@ -2,6 +2,7 @@
 
 import re
 from collections import Counter
+from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urlparse
 
@@ -11,6 +12,17 @@ from .feishu_client import FeishuClient, FeishuAPIError
 
 _DOC_HOST_HINTS = ("feishu.cn", "larksuite.com")
 _DOC_PATH_HINTS = ("/docx/", "/wiki/", "/base/", "/sheet/", "/slides/", "/file/")
+_MESSAGE_NOISE_PATTERNS = (
+    "llm 调用失败",
+    "too many requests",
+    "llm 配置不完整",
+    "缺少:",
+    "[plan_command]",
+    "write_policy:",
+    "output_format:",
+    "我没办法直接帮你",
+    "可以和我说说具体情况",
+)
 
 
 def collect_online_personal_inputs(
@@ -23,6 +35,7 @@ def collect_online_personal_inputs(
     max_messages_per_chat: int = 200,
     max_drive_docs: int = 50,
     max_knowledge: int = 30,
+    recent_days: int = 7,
 ) -> dict[str, Any]:
     resolved_target = str(target_user_id or "").strip()
     if not resolved_target:
@@ -53,12 +66,17 @@ def collect_online_personal_inputs(
             page_size=min(50, max_messages_per_chat),
         )
         for msg in chat_messages:
+            text = _normalize_message_text(msg.get("content", ""))
+            if _is_noise_message_text(text):
+                continue
+            if not _is_within_recent_days(str(msg.get("create_time") or ""), recent_days):
+                continue
             messages.append(
                 {
                     "message_id": msg.get("message_id", ""),
                     "chat_id": msg.get("chat_id", chat_id),
-                    "content": msg.get("content", ""),
-                    "text": msg.get("content", ""),
+                    "content": text,
+                    "text": text,
                     "create_time": msg.get("create_time", ""),
                     "sender": msg.get("sender", {}),
                 }
@@ -67,7 +85,7 @@ def collect_online_personal_inputs(
     drive_docs: list[dict[str, Any]] = []
     drive_error = ""
     try:
-        drive_docs = list_recent_drive_docs(client, max_items=max_drive_docs)
+        drive_docs = list_recent_drive_docs(client, max_items=max_drive_docs, recent_days=recent_days)
     except FeishuAPIError as exc:
         drive_error = str(exc)
 
@@ -87,25 +105,29 @@ def collect_online_personal_inputs(
             "chat_count": len(chat_records),
             "message_count": len(messages),
             "document_count": len(documents),
+            "recent_days": recent_days,
             "drive_error": drive_error,
         },
     }
 
 
-def list_recent_drive_docs(client: FeishuClient, max_items: int = 50) -> list[dict[str, Any]]:
+def list_recent_drive_docs(client: FeishuClient, max_items: int = 50, recent_days: int = 7) -> list[dict[str, Any]]:
     docs: list[dict[str, Any]] = []
     page_token = ""
     while len(docs) < max_items:
         page = client.list_drive_files(page_size=min(50, max_items - len(docs)), page_token=page_token)
         items = page.get("items", []) if isinstance(page, dict) else []
         for item in items:
+            updated_at = str(item.get("modified_time") or item.get("edit_time") or "")
+            if not _is_within_recent_days(updated_at, recent_days):
+                continue
             docs.append(
                 {
                     "doc_id": str(item.get("token") or item.get("file_token") or item.get("id") or ""),
                     "title": str(item.get("name") or item.get("title") or ""),
                     "summary": str(item.get("name") or item.get("title") or ""),
                     "url": str(item.get("url") or item.get("link") or ""),
-                    "updated_at": str(item.get("modified_time") or item.get("edit_time") or ""),
+                    "updated_at": updated_at,
                     "source": "drive",
                 }
             )
@@ -256,3 +278,43 @@ def _trim(text: str, max_len: int) -> str:
     if len(value) <= max_len:
         return value
     return value[: max_len - 1] + "…"
+
+
+def _normalize_message_text(text: str) -> str:
+    return re.sub(r"\s+", " ", str(text or "").strip())
+
+
+def _is_noise_message_text(text: str) -> bool:
+    lowered = str(text or "").lower().strip()
+    if not lowered:
+        return True
+    if lowered.startswith("command:"):
+        return True
+    if lowered.startswith("[plan_command]"):
+        return True
+    return any(pattern in lowered for pattern in _MESSAGE_NOISE_PATTERNS)
+
+
+def _is_within_recent_days(raw: str, recent_days: int) -> bool:
+    days = max(1, int(recent_days or 7))
+    value = str(raw or "").strip()
+    if not value:
+        return True
+    now = datetime.now(timezone.utc)
+    dt: datetime | None = None
+    if value.isdigit():
+        ts = int(value)
+        if ts > 10_000_000_000:
+            ts = ts // 1000
+        try:
+            dt = datetime.fromtimestamp(ts, tz=timezone.utc)
+        except (ValueError, OSError):
+            return True
+    else:
+        try:
+            dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+        except ValueError:
+            return True
+    return (now - dt).total_seconds() <= days * 24 * 3600

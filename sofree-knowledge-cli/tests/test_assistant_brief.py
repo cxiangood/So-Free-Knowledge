@@ -57,3 +57,18 @@ def test_build_personal_brief_outputs_doc_card_interest_and_schedule():
     assert report["documents"][0]["urgency_stars"] >= 1
     assert report["schedule"]["mode"] == "hybrid"
     assert report["runtime_plan"]["cron_jobs"][0]["job_name"] == "assistant_weekly_brief"
+
+
+def test_interest_digest_filters_noise_messages():
+    report = build_personal_brief(
+        documents=[{"doc_id": "d1", "title": "发布计划", "summary": "今晚发布"}],
+        messages=[
+            {"message_id": "m1", "chat_id": "oc_x", "content": "LLM 调用失败: 429 Too Many Requests"},
+            {"message_id": "m2", "chat_id": "oc_x", "content": "[PLAN_COMMAND] command: create_draft"},
+            {"message_id": "m3", "chat_id": "oc_x", "content": "客户需求变更，今晚上线风险较高，需要确认回滚方案"},
+        ],
+        user_profile={"interests": ["需求", "上线", "风险", "客户"]},
+    )
+    items = report["interest_digest"]["items"]
+    assert len(items) == 1
+    assert items[0]["message_id"] == "m3"
