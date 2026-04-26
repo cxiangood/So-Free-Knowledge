@@ -1,0 +1,5 @@
+[BOT] [2026-04-26 17:46:10,156] [INFO] connected to wss://msg-frontier.feishu.cn/ws/v2?fpid=493&aid=552564&device_id=7633001955984788665&access_key=af0f23cd9c594ef10a1405bd8e8f970f&service_id=33554678&ticket=a78d50ae-bb1b-45e7-9ab8-5cccf45f8dd0 [conn_id=7633001955984788665]
+[BOT] [2026-04-26 17:47:42,083] [INFO] event received: event_type=im.message.receive_v1
+[BOT] [2026-04-26 17:47:42,085] [INFO] message received: chat_id=oc_f482e00e55461a4d343f21334c9a96d7 message_id=om_x100b51e99167b4a0c333421355a84cc sender_type=user text=@_user_1 你好
+[BOT] [2026-04-26 17:55:14,166] [INFO] event received: event_type=im.message.receive_v1
+[BOT] [2026-04-26 17:55:14,174] [INFO] message received: chat_id=oc_f482e00e55461a4d343f21334c9a96d7 message_id=om_x100b51ea402000acc3533ea6de730c2 sender_type=user text=@_user_1 你好

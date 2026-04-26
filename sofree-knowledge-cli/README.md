@@ -118,6 +118,91 @@ Policy is saved to:
 knowledge_policy.json
 ```
 
+## Confused Detection
+
+Rule-trigger + LLM-judge workflow for lightweight "confused" detection:
+
+```bash
+sofree-knowledge confused detect-candidates --messages-file ./messages.json
+```
+
+Build prompt for one candidate:
+
+```bash
+sofree-knowledge confused build-judge-prompt --candidate-file ./candidate.json
+```
+
+Parse LLM result and get inline insert text:
+
+```bash
+sofree-knowledge confused parse-judgement --judgement-file ./judgement.json
+```
+
+Returned `inline_insert_text` is intentionally short, suitable for subtle inline insertion
+instead of a bot card or direct bot reply.
+
+## Lingo CRUD
+
+Write to Feishu Lingo directly (remote by default), while mirroring to local store:
+
+```bash
+sofree-knowledge --env-file ../So-Free-Knowledge/.env lingo upsert --keyword "北极星指标" --type black --value "团队核心牵引指标"
+```
+
+Delete remote Lingo entry by `entity_id`:
+
+```bash
+sofree-knowledge --env-file ../So-Free-Knowledge/.env lingo delete --entity-id enterprise_xxx
+```
+
+Local-only mode (no remote API call):
+
+```bash
+sofree-knowledge --output-dir . lingo upsert --no-remote --keyword "北极星指标" --type black --value "团队核心牵引指标"
+sofree-knowledge --output-dir . lingo delete --no-remote --keyword "北极星指标"
+```
+
+## Personal Assistant
+
+Build personal aggregation from documents + access records + chat messages + knowledge items, then score urgency/recommendation:
+
+```bash
+sofree-knowledge assistant build-personal-brief --documents-file ./documents.json --access-records-file ./access.json --messages-file ./messages.json --knowledge-file ./knowledge.json --target-user-id ou_xxx
+```
+
+Output can be selected:
+
+```bash
+sofree-knowledge assistant build-personal-brief --documents-file ./documents.json --output-format doc
+sofree-knowledge assistant build-personal-brief --documents-file ./documents.json --output-format card
+```
+
+`all` mode returns structured report + `doc_markdown` + Feishu card JSON.
+
+One-command online mode (auto pull Feishu chats + recent drive docs, auto resolve current user id from token):
+
+```bash
+sofree-knowledge --env-file ../So-Free-Knowledge/.env assistant build-personal-brief --online --output-format all
+```
+
+Limit source scope:
+
+```bash
+sofree-knowledge assistant build-personal-brief --online --chat-ids oc_xxx,oc_yyy --no-include-visible-chats --max-chats 10 --max-messages-per-chat 100
+```
+
+Push card after build (default target is personal session via open_id):
+
+```bash
+sofree-knowledge assistant build-personal-brief --online --push --output-format card
+```
+
+Only when `--receive-chat-id` is explicitly provided will push go to group chat:
+
+```bash
+sofree-knowledge assistant build-personal-brief --online --push --receive-chat-id oc_xxx --output-format card
+```
+
 ## Permissions
 
 Bot-visible collection:

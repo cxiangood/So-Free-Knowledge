@@ -66,7 +66,7 @@ def get_user_access_token(token_file: str | Path | None = None) -> str | None:
     path = Path(token_file).expanduser() if token_file else DEFAULT_TOKEN_FILE
     if not path.exists():
         return None
-    raw = path.read_text(encoding="utf-8")
+    raw = path.read_text(encoding="utf-8-sig")
     try:
         data: Any = json.loads(raw)
     except json.JSONDecodeError:
@@ -76,3 +76,27 @@ def get_user_access_token(token_file: str | Path | None = None) -> str | None:
         token = data.get("access_token")
         return str(token) if token else None
     return None
+
+
+def get_user_identity(token_file: str | Path | None = None) -> dict[str, str]:
+    path = Path(token_file).expanduser() if token_file else DEFAULT_TOKEN_FILE
+    if not path.exists():
+        return {}
+    raw = path.read_text(encoding="utf-8-sig")
+    try:
+        data: Any = json.loads(raw)
+    except json.JSONDecodeError:
+        result: dict[str, str] = {}
+        for key in ("open_id", "user_id", "union_id"):
+            match = re.search(rf'"{key}"\s*:\s*"([^"]+)"', raw)
+            if match:
+                result[key] = match.group(1)
+        return result
+    if not isinstance(data, dict):
+        return {}
+    result = {}
+    for key in ("open_id", "user_id", "union_id"):
+        value = data.get(key)
+        if value:
+            result[key] = str(value)
+    return result
