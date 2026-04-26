@@ -127,6 +127,7 @@ def build_parser() -> argparse.ArgumentParser:
     lingo_upsert.add_argument("--source", default="manual")
     lingo_upsert.add_argument("--entity-id", default="")
     lingo_upsert.add_argument("--replace-entity-id", default="", help="Delete this remote entity id first, then create new one.")
+    lingo_upsert.add_argument("--force-remote-create", action="store_true", help="Force remote create even if local mirror indicates already created.")
     lingo_upsert.add_argument("--remote", action=argparse.BooleanOptionalAction, default=True, help="Write to Feishu Lingo remotely.")
     lingo_upsert.add_argument("--write-local", action=argparse.BooleanOptionalAction, default=True, help="Mirror to local lingo_entries.json.")
     lingo_upsert.add_argument("--context-ids", default="", help="Comma-separated context ids.")
@@ -147,6 +148,7 @@ def build_parser() -> argparse.ArgumentParser:
     lingo_sync.add_argument("--input-file", required=True, help="JSON/text file. Supports raw judgements or {'items': [...]} format.")
     lingo_sync.add_argument("--publishable-only", action="store_true", help="Only keep key/black with non-empty value.")
     lingo_sync.add_argument("--source", default="sync")
+    lingo_sync.add_argument("--force-remote-create", action="store_true", help="Force remote create for every item.")
     lingo_sync.add_argument("--remote", action=argparse.BooleanOptionalAction, default=True, help="Write each entry to Feishu Lingo remotely.")
     lingo_sync.add_argument("--write-local", action=argparse.BooleanOptionalAction, default=True, help="Mirror synced entries to local store.")
     lingo_sync.set_defaults(func=cmd_lingo_sync_from_file)
@@ -357,30 +359,51 @@ def cmd_lingo_upsert(args: argparse.Namespace) -> dict[str, Any]:
     prepare_env(args)
     aliases = [item.strip() for item in str(args.aliases or "").split(",") if item.strip()]
     context_ids = [item.strip() for item in str(args.context_ids or "").split(",") if item.strip()]
+    normalized_keyword = str(args.keyword or "").strip()
+    normalized_type = str(args.type or "").strip().lower()
+    normalized_value = str(args.value or "").strip()
+    store = LingoStore(args.output_dir)
+    existing = store.get_entry(normalized_keyword)
     remote_deleted: dict[str, Any] | None = None
     remote_created: dict[str, Any] | None = None
     resolved_entity_id = str(args.entity_id or "").strip()
-    if args.remote:
+    skipped_remote_create = False
+    skip_reason = ""
+    if (
+        args.remote
+        and not args.force_remote_create
+        and existing
+        and str(existing.get("entity_id") or "").strip()
+        and str(existing.get("type") or "").strip().lower() == normalized_type
+        and str(existing.get("value") or "").strip() == normalized_value
+    ):
+        skipped_remote_create = True
+        resolved_entity_id = str(existing.get("entity_id") or resolved_entity_id)
+        skip_reason = "duplicate_guard: same keyword/type/value already has remote entity_id in local mirror"
+    if args.remote and not skipped_remote_create:
         client = FeishuClient()
         replace_entity_id = str(args.replace_entity_id or "").strip()
         if replace_entity_id:
             remote_deleted = client.delete_lingo_entity(replace_entity_id)
-        remote_created = client.create_lingo_entity(
-            key=str(args.keyword),
-            description=str(args.value),
-            aliases=aliases,
-            provider="sofree-knowledge-cli",
-            outer_id=str(args.keyword),
-        )
-        resolved_entity_id = str(remote_created.get("entity_id") or resolved_entity_id)
+        if normalized_type in {"key", "black"} and normalized_value:
+            remote_created = client.create_lingo_entity(
+                key=normalized_keyword,
+                description=normalized_value,
+                aliases=aliases,
+                provider="sofree-knowledge-cli",
+                outer_id=normalized_keyword,
+            )
+            resolved_entity_id = str(remote_created.get("entity_id") or resolved_entity_id)
+        else:
+            skipped_remote_create = True
+            skip_reason = "remote_create_skipped: only key/black with non-empty value are written remotely"
 
     local_entry: dict[str, Any] | None = None
     if args.write_local:
-        store = LingoStore(args.output_dir)
         local_entry = store.upsert_entry(
-            keyword=args.keyword,
-            entry_type=args.type,
-            value=args.value,
+            keyword=normalized_keyword,
+            entry_type=normalized_type,
+            value=normalized_value,
             aliases=aliases,
             source=args.source,
             entity_id=resolved_entity_id,
@@ -389,10 +412,18 @@ def cmd_lingo_upsert(args: argparse.Namespace) -> dict[str, Any]:
 
     result: dict[str, Any] = {
         "ok": True,
+        "assume_success": True,
         "remote_enabled": bool(args.remote),
         "local_enabled": bool(args.write_local),
-        "keyword": str(args.keyword),
+        "keyword": normalized_keyword,
         "entity_id": resolved_entity_id,
+        "verify_after_create": False,
+        "remote_create_skipped": bool(skipped_remote_create),
+        "remote_create_skip_reason": skip_reason,
+        "note": (
+            "Create code=0 already means remote create accepted. "
+            "Search/list may still be empty due to admin review or repository visibility."
+        ),
     }
     if remote_deleted is not None:
         result["remote_deleted"] = remote_deleted
@@ -470,15 +501,35 @@ def cmd_lingo_sync_from_file(args: argparse.Namespace) -> dict[str, Any]:
         ]
         entity_id = ""
         remote_created: dict[str, Any] | None = None
+        remote_create_skipped = False
+        remote_skip_reason = ""
+        existing = store.get_entry(keyword)
+        if (
+            client is not None
+            and not args.force_remote_create
+            and existing
+            and str(existing.get("entity_id") or "").strip()
+            and str(existing.get("type") or "").strip().lower() == entry_type
+            and str(existing.get("value") or "").strip() == value
+        ):
+            remote_create_skipped = True
+            remote_skip_reason = "duplicate_guard: same keyword/type/value already has remote entity_id in local mirror"
+            entity_id = str(existing.get("entity_id") or "")
         if client is not None:
-            remote_created = client.create_lingo_entity(
-                key=keyword,
-                description=value,
-                aliases=[],
-                provider="sofree-knowledge-cli",
-                outer_id=keyword,
-            )
-            entity_id = str(remote_created.get("entity_id") or "")
+            if remote_create_skipped:
+                pass
+            elif entry_type in {"key", "black"} and value:
+                remote_created = client.create_lingo_entity(
+                    key=keyword,
+                    description=value,
+                    aliases=[],
+                    provider="sofree-knowledge-cli",
+                    outer_id=keyword,
+                )
+                entity_id = str(remote_created.get("entity_id") or "")
+            else:
+                remote_create_skipped = True
+                remote_skip_reason = "remote_create_skipped: only key/black with non-empty value are written remotely"
 
         local_entry: dict[str, Any] | None = None
         if args.write_local:
@@ -497,13 +548,22 @@ def cmd_lingo_sync_from_file(args: argparse.Namespace) -> dict[str, Any]:
                 "value": value,
                 "entity_id": entity_id,
                 "remote_created": remote_created,
+                "remote_create_skipped": remote_create_skipped,
+                "remote_create_skip_reason": remote_skip_reason,
+                "assume_success": bool(remote_created is not None),
                 "entry": local_entry,
             }
         )
     return {
         "ok": True,
+        "assume_success": True,
         "remote_enabled": bool(args.remote),
         "local_enabled": bool(args.write_local),
+        "verify_after_create": False,
+        "note": (
+            "Remote create success is accepted as final success by default. "
+            "No post-create list/search verification is performed."
+        ),
         "count": len(upserted),
         "entries": upserted,
         "lingo_store_file": str(store.path),

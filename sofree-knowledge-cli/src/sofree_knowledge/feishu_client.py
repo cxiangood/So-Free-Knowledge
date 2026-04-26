@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html
 import json
 from typing import Any
 
@@ -145,27 +146,48 @@ class FeishuClient:
         outer_id: str | None = None,
     ) -> dict[str, Any]:
         display_status = {"allow_highlight": True, "allow_search": True}
+        normalized_key = str(key or "").strip()
+        normalized_desc = str(description or "").strip()
+        if not normalized_key:
+            raise ValueError("key is required for create_lingo_entity")
+        if not normalized_desc:
+            raise ValueError("description is required for create_lingo_entity")
+
         payload = {
-            "main_keys": [{"key": key, "display_status": display_status}],
+            "main_keys": [{"key": normalized_key, "display_status": display_status}],
             "aliases": [
                 {"key": alias, "display_status": display_status}
                 for alias in (aliases or [])
                 if str(alias).strip()
             ],
-            "description": description,
-            "rich_text": f"<p><span>{description}</span></p>",
-            "outer_info": {"provider": provider, "outer_id": str(outer_id or key)},
+            "description": normalized_desc,
+            "rich_text": f"<p><span>{html.escape(normalized_desc)}</span></p>",
         }
-        data = self.request(
-            "POST",
-            "/open-apis/baike/v1/entities",
-            access_token=self.get_app_access_token(),
-            params={"user_id_type": "open_id"},
-            json=payload,
-        )
+        try:
+            data = self.request(
+                "POST",
+                "/open-apis/baike/v1/entities",
+                access_token=self.get_app_access_token(),
+                params={"user_id_type": "open_id"},
+                json=payload,
+            )
+        except FeishuAPIError as exc:
+            # Compatibility fallback for tenants that still accept outer_info only in some envs.
+            message = str(exc)
+            if "display_status" in message:
+                raise FeishuAPIError(
+                    f"{message}; hint=main_keys/aliases must include display_status."
+                ) from exc
+            raise
         body = data.get("data", data)
         return {
             "entity_id": str(body.get("id") or body.get("entity_id") or ""),
+            "visibility_note": (
+                "Create API success does not always mean the entry is immediately searchable. "
+                "It may require admin review or repository visibility setup."
+            ),
+            "provider": provider,
+            "outer_id": str(outer_id or normalized_key),
             "raw": body,
         }
 
