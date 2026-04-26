@@ -15,6 +15,12 @@ from .auth import (
     init_token,
 )
 from .config import load_env_file, resolve_env_file
+from .confused_detector import (
+    build_confused_judge_prompt,
+    detect_confused_candidates,
+    format_inline_explanation,
+    parse_confused_judgement,
+)
 from .feishu_client import FeishuClient
 from .lingo_context import (
     build_lingo_judge_prompt,
@@ -108,6 +114,27 @@ def build_parser() -> argparse.ArgumentParser:
     parse_judgements.add_argument("--judgements-file", required=True, help="File containing raw LLM output (JSON or text with code fences).")
     parse_judgements.add_argument("--publishable-only", action="store_true", help="Only return publishable judgements (key/black types with value).")
     parse_judgements.set_defaults(func=cmd_lingo_parse_judgements)
+
+    # Confused conversation detection commands
+    confused = subparsers.add_parser("confused", help="Confused conversation detection helpers.")
+    confused_subparsers = confused.add_subparsers(dest="confused_command")
+
+    confused_detect = confused_subparsers.add_parser("detect-candidates", help="Detect confused candidates from messages with lightweight rules.")
+    confused_detect.add_argument("--messages-file", required=True, help="JSON file containing messages array.")
+    confused_detect.add_argument("--target-message-id", default="", help="Optional target message ID to filter on.")
+    confused_detect.add_argument("--reactions-file", default="", help="Optional JSON file containing reaction events array.")
+    confused_detect.add_argument("--confused-reaction-keys", default="", help="Comma-separated Feishu reaction keys that should be treated as confusion signals.")
+    confused_detect.add_argument("--max-followup-gap", type=int, default=3, help="How many recent messages to inspect for follow-up confusion.")
+    confused_detect.add_argument("--max-candidates", type=int, default=20, help="Maximum number of candidates to return.")
+    confused_detect.set_defaults(func=cmd_confused_detect_candidates)
+
+    confused_prompt = confused_subparsers.add_parser("build-judge-prompt", help="Build LLM prompt for one confused candidate.")
+    confused_prompt.add_argument("--candidate-file", required=True, help="JSON file containing one candidate object.")
+    confused_prompt.set_defaults(func=cmd_confused_build_judge_prompt)
+
+    confused_parse = confused_subparsers.add_parser("parse-judgement", help="Parse LLM confused judgement output.")
+    confused_parse.add_argument("--judgement-file", required=True, help="File containing raw LLM judgement output (JSON or fenced JSON).")
+    confused_parse.set_defaults(func=cmd_confused_parse_judgement)
 
     return parser
 
@@ -232,6 +259,61 @@ def cmd_lingo_parse_judgements(args: argparse.Namespace) -> dict[str, Any]:
         "ok": True,
         "judgements": judgements,
         "count": len(judgements),
+    }
+
+
+def cmd_confused_detect_candidates(args: argparse.Namespace) -> dict[str, Any]:
+    prepare_env(args)
+    with open(args.messages_file, "r", encoding="utf-8") as f:
+        messages = json.load(f)
+    reactions: list[dict[str, Any]] = []
+    if args.reactions_file:
+        with open(args.reactions_file, "r", encoding="utf-8") as f:
+            loaded = json.load(f)
+        if isinstance(loaded, list):
+            reactions = [item for item in loaded if isinstance(item, dict)]
+    confused_reaction_keys = {
+        key.strip() for key in str(args.confused_reaction_keys or "").split(",") if key.strip()
+    }
+
+    candidates = detect_confused_candidates(
+        messages=messages,
+        target_message_id=args.target_message_id,
+        reactions=reactions,
+        confused_reaction_keys=confused_reaction_keys or None,
+        max_followup_gap=args.max_followup_gap,
+        max_candidates=args.max_candidates,
+    )
+    return {
+        "ok": True,
+        "target_message_id": args.target_message_id,
+        "candidates": candidates,
+        "count": len(candidates),
+    }
+
+
+def cmd_confused_build_judge_prompt(args: argparse.Namespace) -> dict[str, Any]:
+    prepare_env(args)
+    with open(args.candidate_file, "r", encoding="utf-8") as f:
+        candidate = json.load(f)
+    if not isinstance(candidate, dict):
+        raise ValueError("--candidate-file must contain a single JSON object")
+    prompt = build_confused_judge_prompt(candidate)
+    return {
+        "ok": True,
+        "prompt": prompt,
+    }
+
+
+def cmd_confused_parse_judgement(args: argparse.Namespace) -> dict[str, Any]:
+    prepare_env(args)
+    with open(args.judgement_file, "r", encoding="utf-8") as f:
+        raw = f.read()
+    judgement = parse_confused_judgement(raw)
+    return {
+        "ok": True,
+        "judgement": judgement,
+        "inline_insert_text": format_inline_explanation(judgement.get("micro_explain", "")),
     }
 
 

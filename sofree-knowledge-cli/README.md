@@ -118,6 +118,29 @@ Policy is saved to:
 knowledge_policy.json
 ```
 
+## Confused Detection
+
+Rule-trigger + LLM-judge workflow for lightweight "confused" detection:
+
+```bash
+sofree-knowledge confused detect-candidates --messages-file ./messages.json
+```
+
+Build prompt for one candidate:
+
+```bash
+sofree-knowledge confused build-judge-prompt --candidate-file ./candidate.json
+```
+
+Parse LLM result and get inline insert text:
+
+```bash
+sofree-knowledge confused parse-judgement --judgement-file ./judgement.json
+```
+
+Returned `inline_insert_text` is intentionally short, suitable for subtle inline insertion
+instead of a bot card or direct bot reply.
+
 ## Permissions
 
 Bot-visible collection:
