@@ -377,6 +377,43 @@ def test_assistant_push_both_cards_requested_keeps_single_card(monkeypatch, tmp_
     assert out["meta"]["push"]["interest_enabled"] is True
 
 
+def test_assistant_push_interest_card_failure_does_not_fail_command(monkeypatch, tmp_path, capsys):
+    class FakeClient:
+        def __init__(self):
+            self.calls = 0
+
+        def send_message(self, receive_id, msg_type, content, receive_id_type="chat_id"):
+            self.calls += 1
+            if self.calls == 2:
+                raise RuntimeError("interest card push failed")
+            return {"message_id": f"om_{self.calls}", "chat_id": receive_id, "msg_type": msg_type}
+
+    monkeypatch.setattr(cli_module, "FeishuClient", lambda: FakeClient())
+    monkeypatch.setattr(cli_module, "get_user_identity", lambda token_file=None: {"open_id": "ou_self"})
+
+    documents_file = tmp_path / "documents.json"
+    documents_file.write_text(
+        json.dumps([{"doc_id": "d1", "title": "发布流程", "summary": "审批后发布"}], ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    code = main(
+        [
+            "assistant",
+            "build-personal-brief",
+            "--documents-file",
+            str(documents_file),
+            "--push",
+        ]
+    )
+
+    out = json.loads(capsys.readouterr().out)
+    assert code == 0
+    assert out["ok"] is True
+    assert out["meta"]["push"]["errors"]
+    assert out["meta"]["push"]["errors"][0]["card"] == "interest"
+
+
 def test_lingo_upsert_list_delete_cli(tmp_path, capsys):
     code = main(
         [

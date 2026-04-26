@@ -727,7 +727,7 @@ def _to_card(documents: list[dict[str, Any]], profile: dict[str, Any]) -> dict[s
     content_lines: list[str] = []
     for item in documents[:5]:
         title = (
-            f"<a href='{item['url']}'>{item['title']}</a>"
+            f"[{_safe_markdown_link_text(item['title'])}]({item['url']})"
             if item.get("url")
             else item["title"]
         )
@@ -762,7 +762,7 @@ def _to_interest_card(interest_digest: dict[str, Any], profile: dict[str, Any]) 
         if isinstance(hit_terms, list) and hit_terms:
             hit_label = f"（命中: {'+'.join(str(term) for term in hit_terms[:3])}）"
         if message_url:
-            lines.append(f"- <a href='{message_url}'>{summary}</a>{hit_label}")
+            lines.append(f"- [{_safe_markdown_link_text(summary)}]({message_url}){hit_label}")
         else:
             lines.append(f"- {summary}{hit_label}")
     if not lines:
@@ -778,3 +778,10 @@ def _to_interest_card(interest_digest: dict[str, Any], profile: dict[str, Any]) 
         },
         "elements": [{"tag": "markdown", "content": "\n".join(lines)}],
     }
+
+
+def _safe_markdown_link_text(text: str) -> str:
+    value = str(text or "").strip()
+    value = value.replace("[", "【").replace("]", "】")
+    value = value.replace("(", "（").replace(")", "）")
+    return value

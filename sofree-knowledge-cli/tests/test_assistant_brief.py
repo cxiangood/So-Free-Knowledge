@@ -105,7 +105,7 @@ def test_summary_card_contains_hyperlink_when_url_available():
         ]
     )
     content = report["card"]["elements"][0]["content"]
-    assert "<a href='https://foo.feishu.cn/docx/abc123'>Release Plan</a>" in content
+    assert "[Release Plan](https://foo.feishu.cn/docx/abc123)" in content
 
 
 def test_interest_card_contains_message_hyperlink():
@@ -115,4 +115,4 @@ def test_interest_card_contains_message_hyperlink():
         user_profile={"interests": ["需求", "上线", "风险", "客户"]},
     )
     content = report["interest_card"]["elements"][0]["content"]
-    assert "<a href='https://applink.feishu.cn/client/chat/oc_test?openMessageId=om_1'>" in content
+    assert "[客户需求今晚截止，有上线风险](https://applink.feishu.cn/client/chat/oc_test?openMessageId=om_1)" in content

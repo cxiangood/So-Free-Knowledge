@@ -837,20 +837,27 @@ def cmd_assistant_build_personal_brief(args: argparse.Namespace) -> dict[str, An
             push_interest_card = True
         summary_push_result: dict[str, Any] | None = None
         interest_push_result: dict[str, Any] | None = None
+        push_errors: list[dict[str, str]] = []
         if push_summary_card:
-            summary_push_result = client.send_message(
-                receive_id=receive_id,
-                receive_id_type=receive_id_type,
-                msg_type="interactive",
-                content=report["card"],
-            )
+            try:
+                summary_push_result = client.send_message(
+                    receive_id=receive_id,
+                    receive_id_type=receive_id_type,
+                    msg_type="interactive",
+                    content=report["card"],
+                )
+            except Exception as exc:
+                push_errors.append({"card": "summary", "error": str(exc)})
         if push_interest_card:
-            interest_push_result = client.send_message(
-                receive_id=receive_id,
-                receive_id_type=receive_id_type,
-                msg_type="interactive",
-                content=report["interest_card"],
-            )
+            try:
+                interest_push_result = client.send_message(
+                    receive_id=receive_id,
+                    receive_id_type=receive_id_type,
+                    msg_type="interactive",
+                    content=report["interest_card"],
+                )
+            except Exception as exc:
+                push_errors.append({"card": "interest", "error": str(exc)})
         base_meta["push"] = {
             "enabled": True,
             "receive_id_type": receive_id_type,
@@ -860,6 +867,7 @@ def cmd_assistant_build_personal_brief(args: argparse.Namespace) -> dict[str, An
             "summary_message_id": (summary_push_result or {}).get("message_id", ""),
             "interest_enabled": bool(push_interest_card),
             "interest_message_id": (interest_push_result or {}).get("message_id", ""),
+            "errors": push_errors,
         }
     else:
         base_meta["push"] = {"enabled": False}
