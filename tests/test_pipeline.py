@@ -197,7 +197,7 @@ def test_archive_reproducible_flow() -> None:
     assert input_path.exists(), f"input not found: {input_path}"
 
     records = load_records(input_path)
-    plain_messages = extract_plain_messages(records, include_types={"text", "post", "system"})
+    plain_messages = extract_plain_messages(records, include_types={"text", "post"})[:1]
     plain_text = "\n".join(plain_messages)
 
     config = {

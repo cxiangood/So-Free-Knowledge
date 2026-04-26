@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from statistics import median
 from typing import Dict, List, Optional, Sequence, Set, Tuple
 
 import torch
@@ -72,6 +73,88 @@ class SemanticDensityAnalyzer:
         words = [str(score["word"]) for score in scores]
         values = [float(score["attention_entropy"]) for score in scores]
         return words, values
+
+    def analyze_meaningful_tokens(
+        self,
+        text: str,
+        *,
+        alpha: float = 0.6,
+        beta: float = 0.4,
+        threshold_mode: str = "median",
+    ) -> Dict[str, object]:
+        scores = self._collect_word_metrics(text)
+        ordered_tokens = [str(item["word"]) for item in scores]
+        if not ordered_tokens:
+            return {
+                "tokens_in_order": [],
+                "meaningful_tokens": [],
+                "meaningless_tokens": [],
+                "meaningful_tokens_in_order": [],
+                "threshold": 0.0,
+                "token_scores": {},
+            }
+
+        vocabulary: List[str] = []
+        seen = set()
+        for token in ordered_tokens:
+            if token in seen:
+                continue
+            seen.add(token)
+            vocabulary.append(token)
+
+        agg: Dict[str, Dict[str, float]] = {}
+        for item in scores:
+            token = str(item["word"])
+            rec = agg.setdefault(token, {"count": 0.0, "sum_sd": 0.0, "sum_ae": 0.0})
+            rec["count"] += 1.0
+            rec["sum_sd"] += float(item["semantic_density"])
+            rec["sum_ae"] += float(item["attention_entropy"])
+
+        sd_values: List[float] = []
+        ae_values: List[float] = []
+        metric_by_token: Dict[str, Dict[str, float]] = {}
+        for token in vocabulary:
+            rec = agg.get(token, {"count": 0.0, "sum_sd": 0.0, "sum_ae": 0.0})
+            count = rec["count"] or 1.0
+            sd = rec["sum_sd"] / count
+            ae = rec["sum_ae"] / count
+            sd_values.append(sd)
+            ae_values.append(ae)
+            metric_by_token[token] = {"semantic_density": sd, "attention_entropy": ae}
+
+        sd_norm = self._minmax(sd_values)
+        ae_norm = self._minmax(ae_values)
+        scores_vec = [alpha * sd - beta * ae for sd, ae in zip(sd_norm, ae_norm)]
+
+        if threshold_mode != "median":
+            raise ValueError(f"Unsupported threshold_mode: {threshold_mode}")
+        threshold = median(scores_vec) if scores_vec else 0.0
+
+        meaningful_set = set()
+        meaningless_set = set()
+        token_scores: Dict[str, Dict[str, float]] = {}
+        for token, score in zip(vocabulary, scores_vec):
+            sd = metric_by_token[token]["semantic_density"]
+            ae = metric_by_token[token]["attention_entropy"]
+            token_scores[token] = {
+                "semantic_density": sd,
+                "attention_entropy": ae,
+                "score": score,
+            }
+            if score >= threshold:
+                meaningful_set.add(token)
+            else:
+                meaningless_set.add(token)
+
+        meaningful_tokens_in_order = [token for token in ordered_tokens if token in meaningful_set]
+        return {
+            "tokens_in_order": ordered_tokens,
+            "meaningful_tokens": sorted(meaningful_set),
+            "meaningless_tokens": sorted(meaningless_set),
+            "meaningful_tokens_in_order": meaningful_tokens_in_order,
+            "threshold": float(threshold),
+            "token_scores": token_scores,
+        }
 
     def _collect_word_metrics(self, text: str) -> List[Dict[str, object]]:
         if self._cached_text == text and self._cached_scores is not None:
@@ -244,3 +327,13 @@ class SemanticDensityAnalyzer:
         if not entropy_values:
             return 0.0
         return float(torch.stack(entropy_values).mean().item())
+
+    @staticmethod
+    def _minmax(values: List[float]) -> List[float]:
+        if not values:
+            return []
+        lo = min(values)
+        hi = max(values)
+        if hi - lo < 1e-12:
+            return [0.5 for _ in values]
+        return [(val - lo) / (hi - lo) for val in values]

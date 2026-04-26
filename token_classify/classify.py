@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import argparse
 import json
-from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
@@ -18,8 +17,8 @@ from message_extract.context_extractor import (
     group_context_instances,
 )
 from token_classify.domain_tokenizer import DomainAdaptiveTokenizer
-from token_classify.token_filter import filter_by_semantic_metrics
-from token_classify.word_frequency import calculate_word_frequency, get_top_keywords
+from token_classify.token_filter import filter_invalid_tokens
+from token_classify.word_frequency import summarize_word_frequency
 
 try:
     from token_classify.keyword_classifier import KeywordClassifier
@@ -41,36 +40,18 @@ class _FallbackTokenizer:
         return self._token_re.findall(text)
 
 
-def _aggregate_metrics(words: List[str], semantic_values: List[float], entropy_values: List[float]) -> Dict[str, Dict[str, float]]:
-    stats: Dict[str, Dict[str, float]] = defaultdict(lambda: {"count": 0.0, "sum_sd": 0.0, "sum_ae": 0.0})
-    for word, sd, ae in zip(words, semantic_values, entropy_values):
-        key = " ".join(str(word).split())
-        if not key:
-            continue
-        rec = stats[key]
-        rec["count"] += 1.0
-        rec["sum_sd"] += float(sd)
-        rec["sum_ae"] += float(ae)
-
-    out: Dict[str, Dict[str, float]] = {}
-    for word, rec in stats.items():
-        count = rec["count"] or 1.0
-        out[word] = {
-            "semantic_density": rec["sum_sd"] / count,
-            "attention_entropy": rec["sum_ae"] / count,
-        }
-    return out
-
-
-def _fallback_metrics(tokens: List[str]) -> Dict[str, Dict[str, float]]:
-    counts = Counter(tokens)
-    max_count = max(counts.values()) if counts else 1
-    out: Dict[str, Dict[str, float]] = {}
-    for token, count in counts.items():
-        sd = float(count) / float(max_count)
-        ae = max(0.0, 1.0 - sd)
-        out[token] = {"semantic_density": sd, "attention_entropy": ae}
-    return out
+def _fallback_meaningfulness(tokens: List[str]) -> Dict[str, Any]:
+    vocabulary = sorted(set(tokens))
+    return {
+        "tokens_in_order": list(tokens),
+        "meaningful_tokens": vocabulary,
+        "meaningless_tokens": [],
+        "meaningful_tokens_in_order": list(tokens),
+        "threshold": 0.0,
+        "token_scores": {
+            token: {"semantic_density": 0.0, "attention_entropy": 0.0, "score": 0.0} for token in vocabulary
+        },
+    }
 
 
 def _build_keyword_contexts(instances: List[Dict[str, object]], keywords: List[str]) -> Dict[str, List[str]]:
@@ -171,18 +152,16 @@ class TextKeywordClassifierPipeline:
             except Exception:
                 self.classifier = None
 
-    def _build_metrics(self, text: str, tokens: List[str]) -> Dict[str, Dict[str, float]]:
+    def _build_metrics(self, text: str, tokens: List[str]) -> Dict[str, Any]:
         if self.analyzer is None:
-            return _fallback_metrics(tokens)
+            return _fallback_meaningfulness(tokens)
         try:
-            words, semantic_values = self.analyzer.semantic_density(text)
-            words2, entropy_values = self.analyzer.attention_entropy(text)
-            if words != words2:
-                return _fallback_metrics(tokens)
-            metrics = _aggregate_metrics(words, semantic_values, entropy_values)
-            return metrics if metrics else _fallback_metrics(tokens)
+            meaningful = self.analyzer.analyze_meaningful_tokens(text)
+            if meaningful.get("tokens_in_order"):
+                return meaningful
+            return _fallback_meaningfulness(tokens)
         except Exception:
-            return _fallback_metrics(tokens)
+            return _fallback_meaningfulness(tokens)
 
     def _classify_groups(self, groups: List[Dict[str, object]]) -> Dict[str, Dict[str, Dict[str, str]]]:
         if not groups:
@@ -197,12 +176,19 @@ class TextKeywordClassifierPipeline:
         return self.classifier.batch_classify_with_groups(groups)
 
     def classify_text(self, text: str) -> Dict[str, Any]:
+        semantic_details = self._build_metrics(text, [])
         tokens = self.tokenizer.tokenize(text)
-        metrics = self._build_metrics(text, tokens)
-        filter_details = filter_by_semantic_metrics(tokens, metrics, return_details=True)
-        filtered_tokens = filter_details["filtered_tokens"]
-        word_frequency = calculate_word_frequency(filtered_tokens, stop_words=self.stop_words)
-        top_keywords = get_top_keywords(filtered_tokens, top_k=self.top_keywords, stop_words=self.stop_words)
+        if not semantic_details.get("tokens_in_order"):
+            semantic_details = _fallback_meaningfulness(tokens)
+        meaningful_tokens_in_order = list(semantic_details.get("meaningful_tokens_in_order", tokens))
+        filtered_tokens = filter_invalid_tokens(meaningful_tokens_in_order)
+        frequency_result = summarize_word_frequency(
+            filtered_tokens,
+            top_k=self.top_keywords,
+            stop_words=self.stop_words,
+        )
+        word_frequency = frequency_result["word_frequency"]
+        top_keywords = frequency_result["top_keywords"]
 
         instances = extract_keyword_context_instances_from_text(
             text,
@@ -235,7 +221,7 @@ class TextKeywordClassifierPipeline:
             "context_groups": groups,
             "group_classification": group_classification,
             "classification_results": classification_results,
-            "semantic_filter_details": filter_details,
+            "semantic_filter_details": semantic_details,
         }
 
     @staticmethod
@@ -262,12 +248,19 @@ class TextKeywordClassifierPipeline:
                 if isinstance(content, str) and content.strip():
                     text_parts.append(content)
         joined_text = "\n".join(text_parts)
+        semantic_details = self._build_metrics(joined_text, [])
         tokens = self.tokenizer.tokenize(joined_text)
-        metrics = self._build_metrics(joined_text, tokens)
-        filter_details = filter_by_semantic_metrics(tokens, metrics, return_details=True)
-        filtered_tokens = filter_details["filtered_tokens"]
-        word_frequency = calculate_word_frequency(filtered_tokens, stop_words=self.stop_words)
-        top_keywords = get_top_keywords(filtered_tokens, top_k=self.top_keywords, stop_words=self.stop_words)
+        if not semantic_details.get("tokens_in_order"):
+            semantic_details = _fallback_meaningfulness(tokens)
+        meaningful_tokens_in_order = list(semantic_details.get("meaningful_tokens_in_order", tokens))
+        filtered_tokens = filter_invalid_tokens(meaningful_tokens_in_order)
+        frequency_result = summarize_word_frequency(
+            filtered_tokens,
+            top_k=self.top_keywords,
+            stop_words=self.stop_words,
+        )
+        word_frequency = frequency_result["word_frequency"]
+        top_keywords = frequency_result["top_keywords"]
 
         instances = extract_keyword_context_instances_from_messages(
             normalized_messages,
@@ -300,7 +293,7 @@ class TextKeywordClassifierPipeline:
             "context_groups": groups,
             "group_classification": group_classification,
             "classification_results": classification_results,
-            "semantic_filter_details": filter_details,
+            "semantic_filter_details": semantic_details,
         }
 
 
