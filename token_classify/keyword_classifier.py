@@ -117,7 +117,14 @@ class KeywordClassifier:
             "请输出 JSON。"
         )
 
+        print("\n=== LLM INPUT: system_prompt ===")
+        print(self.system_prompt)
+        print("\n=== LLM INPUT: user_prompt ===")
+        print(user_prompt)
+
         response_text = self.client.build_reply(self.system_prompt, user_prompt)
+        print("\n=== LLM OUTPUT: response_text ===")
+        print(response_text)
         if not isinstance(response_text, str):
             return self._default_result(keywords, "模型返回异常")
 
@@ -153,4 +160,3 @@ def classify_keyword(keyword: str, contexts: Optional[List[str]] = None) -> Dict
         keyword,
         {"type": "confused", "sense": "分类失败"},
     )
-

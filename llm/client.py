@@ -69,7 +69,7 @@ class LLMClient:
         }
 
         try:
-            response = requests.post(endpoint, json=payload, headers=headers, timeout=30)
+            response = requests.post(endpoint, json=payload, headers=headers, timeout=600)
             response.raise_for_status()
             data = response.json()
         except requests.RequestException as exc:
