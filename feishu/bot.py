@@ -13,6 +13,8 @@ import logging
 
 import lark_oapi as lark
 
+from utils import getenv
+
 from feishu.apis import (
     BotProfile,
     FeishuBotGateway,
@@ -528,8 +530,8 @@ if __name__ == "__main__":
     role_prompt = "你是群聊助手。"
 
     listener_bot_config = {
-        "bot_id": os.getenv("SOFREE_BOT_ID", "listener_host"),
-        "display_name": os.getenv("SOFREE_BOT_DISPLAY_NAME", "listener_host"),
+        "bot_id": getenv("SOFREE_BOT_ID", "listener_host"),
+        "display_name": getenv("SOFREE_BOT_DISPLAY_NAME", "listener_host"),
         "role_name": "listener",
         "role_prompt": role_prompt,
         "app_id": os.getenv("SOFREE_FEISHU_APP_ID") or os.getenv("FEISHU_APP_ID", ""),

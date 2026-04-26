@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import os
 from typing import Any
 
 import requests
+
+from utils import getenv
 
 
 @dataclass(slots=True)
@@ -26,13 +27,12 @@ class LLMConfig:
         max_tokens: int = 512,
     ) -> "LLMConfig":
         return cls(
-            api_key=(api_key or os.environ.get("LLM_API_KEY", "")).strip(),
-            model_id=(model_id or os.environ.get("LLM_MODEL_ID", "")).strip(),
-            base_url=(base_url or os.environ.get("LLM_BASE_URL", "")).strip(),
+            api_key=(api_key or getenv("LLM_API_KEY", "")).strip(),
+            model_id=(model_id or getenv("LLM_MODEL_ID", "")).strip(),
+            base_url=(base_url or getenv("LLM_BASE_URL", "")).strip(),
             temperature=temperature,
             max_tokens=max_tokens,
         )
-
     def missing_fields(self) -> list[str]:
         missing = []
         if not self.api_key:
@@ -69,7 +69,7 @@ class LLMClient:
         }
 
         try:
-            response = requests.post(endpoint, json=payload, headers=headers, timeout=30)
+            response = requests.post(endpoint, json=payload, headers=headers, timeout=600)
             response.raise_for_status()
             data = response.json()
         except requests.RequestException as exc:

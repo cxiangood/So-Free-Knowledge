@@ -1,17 +1,34 @@
 import argparse
-from pathlib import Path
-from typing import List, Optional
-
+import importlib.util
 import os
 import sys
+from pathlib import Path
+from typing import List, Optional
 
 if __package__ is None or __package__ == "":
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     if project_root not in sys.path:
         sys.path.insert(0, project_root)
-
-from message_extract.extract_chat_messages import extract_plain_messages, load_records
 from token_classify.domain_tokenizer import tokenize_text
+
+
+def load_extract_chat_module():
+    project_root = Path(__file__).resolve().parent.parent
+    candidates = [
+        project_root / "message_archive" / "extract_chat_messages.py",
+        project_root / "message_extract" / "extract_chat_messages.py",
+    ]
+    for path in candidates:
+        if not path.exists():
+            continue
+        spec = importlib.util.spec_from_file_location("extract_chat_messages", path)
+        if spec and spec.loader:
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            return module
+    raise FileNotFoundError(
+        "extract_chat_messages.py not found under message_archive/ or message_extract/."
+    )
 
 
 def resolve_default_message_file() -> Optional[Path]:
@@ -24,6 +41,16 @@ def resolve_default_message_file() -> Optional[Path]:
     for path in candidates:
         if path.exists():
             return path
+
+    archive_root = Path("message_archive")
+    if archive_root.exists():
+        timestamp_dirs = [p for p in archive_root.iterdir() if p.is_dir()]
+        timestamp_dirs.sort(key=lambda p: p.name, reverse=True)
+        for folder in timestamp_dirs:
+            for name in ("messages.jsonl", "messages.json", "chats.jsonl", "chats.json"):
+                candidate = folder / name
+                if candidate.exists():
+                    return candidate
     return None
 
 
@@ -75,8 +102,9 @@ def main() -> None:
     if not include_types:
         include_types = {"text", "post"}
 
-    records = load_records(path)
-    plain_messages = extract_plain_messages(records, include_types=include_types)
+    extract_module = load_extract_chat_module()
+    records = extract_module.load_records(path)
+    plain_messages = extract_module.extract_plain_messages(records, include_types=include_types)
     custom_terms = parse_custom_terms(args.custom_terms)
 
     output_messages = plain_messages if args.limit < 0 else plain_messages[: args.limit]

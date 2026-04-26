@@ -8,3 +8,5 @@ skills-lock.json
 message_archive/
 **/.pytest_tmp/
 **/.pytest_cache/
+token_classify/outputs/
+.claude/
