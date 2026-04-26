@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-import os
-
 import lark_oapi as lark
+
+from utils import getenv
 
 from feishu.apis import (
     BotProfile,
@@ -105,16 +105,16 @@ if __name__ == "__main__":
     """
 
     listener_bot_config = {
-        "bot_id": os.getenv("SOFREE_BOT_ID", "listener_host"),
-        "display_name": os.getenv("SOFREE_BOT_DISPLAY_NAME", "listener_host"),
+        "bot_id": getenv("SOFREE_BOT_ID", "listener_host"),
+        "display_name": getenv("SOFREE_BOT_DISPLAY_NAME", "listener_host"),
         "role_name": "listener",
         "role_prompt": role_prompt,
-        "app_id": os.getenv("SOFREE_FEISHU_APP_ID") or os.getenv("FEISHU_APP_ID", ""),
-        "app_secret": os.getenv("SOFREE_FEISHU_APP_SECRET") or os.getenv("FEISHU_APP_SECRET", ""),
-        "llm_api_key": os.getenv("LLM_API_KEY", ""),
-        "llm_model_id": os.getenv("LLM_MODEL_ID", ""),
-        "llm_base_url": os.getenv("LLM_BASE_URL", "https://ark.cn-beijing.volces.com/api/v3"),
-        "reply_type": os.getenv("SOFREE_BOT_REPLY_TYPE", "llm"),
+        "app_id": getenv("SOFREE_FEISHU_APP_ID") or getenv("FEISHU_APP_ID", ""),
+        "app_secret": getenv("SOFREE_FEISHU_APP_SECRET") or getenv("FEISHU_APP_SECRET", ""),
+        "llm_api_key": getenv("LLM_API_KEY", ""),
+        "llm_model_id": getenv("LLM_MODEL_ID", ""),
+        "llm_base_url": getenv("LLM_BASE_URL", "https://ark.cn-beijing.volces.com/api/v3"),
+        "reply_type": getenv("SOFREE_BOT_REPLY_TYPE", "llm"),
         "gateway": None,
         "log_level": lark.LogLevel.INFO,
     }

@@ -45,7 +45,7 @@ env_manager = EnvManager()
 
 def getenv(name: str, default: Any = None) -> Optional[str]:
     """
-    暴露给外部的环境变量获取接口
+    环境变量获取
 
     Args:
         name: 环境变量名称

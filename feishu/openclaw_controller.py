@@ -8,6 +8,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from feishu.apis import BotProfile, FeishuBotGateway
+from utils import getenv
 
 
 def load_env_file(path: Path) -> None:
@@ -35,9 +36,9 @@ def resolve_config(
     chat_id: str | None = None,
 ) -> tuple[str, str, str]:
     load_env_file(Path(__file__).resolve().parents[1] / ".env")
-    resolved_app_id = app_id or os.getenv("SOFREE_FEISHU_APP_ID") or os.getenv("FEISHU_APP_ID")
-    resolved_app_secret = app_secret or os.getenv("SOFREE_FEISHU_APP_SECRET") or os.getenv("FEISHU_APP_SECRET")
-    resolved_chat_id = chat_id or os.getenv("OPENCLAW_CHAT_ID")
+    resolved_app_id = app_id or getenv("SOFREE_FEISHU_APP_ID") or getenv("FEISHU_APP_ID")
+    resolved_app_secret = app_secret or getenv("SOFREE_FEISHU_APP_SECRET") or getenv("FEISHU_APP_SECRET")
+    resolved_chat_id = chat_id or getenv("OPENCLAW_CHAT_ID")
 
     missing = [
         name
@@ -76,9 +77,9 @@ def send_openclaw_message(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Send a prompt to a Feishu chat that contains the OpenClaw bot.")
-    parser.add_argument("--app-id", default=os.getenv("SOFREE_FEISHU_APP_ID") or os.getenv("FEISHU_APP_ID"))
-    parser.add_argument("--app-secret", default=os.getenv("SOFREE_FEISHU_APP_SECRET") or os.getenv("FEISHU_APP_SECRET"))
-    parser.add_argument("--chat-id", default=os.getenv("OPENCLAW_CHAT_ID"), help="Feishu chat_id, usually starts with oc_.")
+    parser.add_argument("--app-id", default=getenv("SOFREE_FEISHU_APP_ID") or getenv("FEISHU_APP_ID"))
+    parser.add_argument("--app-secret", default=getenv("SOFREE_FEISHU_APP_SECRET") or getenv("FEISHU_APP_SECRET"))
+    parser.add_argument("--chat-id", default=getenv("OPENCLAW_CHAT_ID"), help="Feishu chat_id, usually starts with oc_.")
     parser.add_argument("--receive-id-type", default="chat_id", choices=["chat_id", "open_id", "user_id", "union_id"])
     parser.add_argument("--message", help="Message text to send.")
     parser.add_argument("--file", help="UTF-8 text/markdown file to send as the message body.")

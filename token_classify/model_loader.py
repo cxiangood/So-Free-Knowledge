@@ -1,8 +1,9 @@
-import os
 from typing import Optional, Tuple
 
 import torch
 from transformers import BertModel, BertTokenizer
+
+from utils import getenv
 
 
 class HFModelLoader:
@@ -14,7 +15,7 @@ class HFModelLoader:
     ):
         self.model_name = model_name
         self.device = device if device else ("cuda" if torch.cuda.is_available() else "cpu")
-        self.hf_token = hf_token or os.getenv("HF_TOKEN")
+        self.hf_token = hf_token or getenv("HF_TOKEN")
 
     def load(self) -> Tuple[BertTokenizer, BertModel]:
         tokenizer = self._load_tokenizer()
