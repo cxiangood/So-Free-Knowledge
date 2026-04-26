@@ -32,7 +32,6 @@ class LLMConfig:
             temperature=temperature,
             max_tokens=max_tokens,
         )
-
     def missing_fields(self) -> list[str]:
         missing = []
         if not self.api_key:
