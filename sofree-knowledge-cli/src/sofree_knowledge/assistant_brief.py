@@ -638,11 +638,9 @@ def _build_runtime_plan(schedule: dict[str, Any]) -> dict[str, Any]:
 
 def _build_lark_message_url(chat_id: str, message_id: str) -> str:
     normalized_chat_id = str(chat_id or "").strip()
-    normalized_message_id = str(message_id or "").strip()
     if not normalized_chat_id:
         return ""
-    if normalized_message_id:
-        return f"https://applink.feishu.cn/client/chat/{normalized_chat_id}?openMessageId={normalized_message_id}"
+    # Keep chat-level deep link only. openMessageId often falls back to browser and may not resolve.
     return f"https://applink.feishu.cn/client/chat/{normalized_chat_id}"
 
 
@@ -757,14 +755,16 @@ def _to_interest_card(interest_digest: dict[str, Any], profile: dict[str, Any]) 
     for item in interest_digest.get("items", [])[:5]:
         summary = str(item.get("summary", "") or "").strip()
         message_url = str(item.get("message_url", "") or "").strip()
+        message_id = str(item.get("message_id", "") or "").strip()
         hit_terms = item.get("hit_terms", [])
         hit_label = ""
         if isinstance(hit_terms, list) and hit_terms:
             hit_label = f"（命中: {'+'.join(str(term) for term in hit_terms[:3])}）"
+        id_label = f" [msg:{message_id[:12]}]" if message_id else ""
         if message_url:
-            lines.append(f"- [{_safe_markdown_link_text(summary)}]({message_url}){hit_label}")
+            lines.append(f"- [{_safe_markdown_link_text(summary)}]({message_url}){hit_label}{id_label}")
         else:
-            lines.append(f"- {summary}{hit_label}")
+            lines.append(f"- {summary}{hit_label}{id_label}")
     if not lines:
         lines.append("- 暂无命中兴趣的群聊内容")
     interests = profile.get("interests", [])

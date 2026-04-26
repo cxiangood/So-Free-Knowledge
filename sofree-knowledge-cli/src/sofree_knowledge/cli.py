@@ -230,7 +230,12 @@ def build_parser() -> argparse.ArgumentParser:
     assistant_build.add_argument("--push-summary-card", action=argparse.BooleanOptionalAction, default=True, help="Whether to push summary card.")
     assistant_build.add_argument("--receive-chat-id", default="", help="Explicit target chat_id for push. If set, push to group chat.")
     assistant_build.add_argument("--receive-open-id", default="", help="Explicit target open_id for push. Used when --receive-chat-id is empty.")
-    assistant_build.add_argument("--output-format", choices=["all", "json", "doc", "card"], default="all")
+    assistant_build.add_argument(
+        "--output-format",
+        choices=["all", "json", "doc", "card"],
+        default="all",
+        help="Output format. 'doc' is deprecated and kept for compatibility.",
+    )
     assistant_build.set_defaults(func=cmd_assistant_build_personal_brief)
 
     return parser
@@ -863,6 +868,8 @@ def cmd_assistant_build_personal_brief(args: argparse.Namespace) -> dict[str, An
             "receive_id_type": receive_id_type,
             "receive_id": receive_id,
             "chat_id": (summary_push_result or interest_push_result or {}).get("chat_id", ""),
+            "doc_push_enabled": False,
+            "doc_push_skipped": True,
             "summary_enabled": bool(push_summary_card),
             "summary_message_id": (summary_push_result or {}).get("message_id", ""),
             "interest_enabled": bool(push_interest_card),
@@ -870,7 +877,7 @@ def cmd_assistant_build_personal_brief(args: argparse.Namespace) -> dict[str, An
             "errors": push_errors,
         }
     else:
-        base_meta["push"] = {"enabled": False}
+        base_meta["push"] = {"enabled": False, "doc_push_enabled": False, "doc_push_skipped": True}
 
     if args.output_format == "json":
         return {
@@ -879,7 +886,15 @@ def cmd_assistant_build_personal_brief(args: argparse.Namespace) -> dict[str, An
             "report": {k: v for k, v in report.items() if k not in {"doc_markdown", "card", "interest_card"}},
         }
     if args.output_format == "doc":
-        return {"ok": True, "meta": base_meta, "doc_markdown": report["doc_markdown"]}
+        return {
+            "ok": True,
+            "meta": base_meta,
+            "doc_markdown": report["doc_markdown"],
+            "deprecated": {
+                "output_format_doc": True,
+                "message": "output-format=doc is deprecated; prefer output-format=card or output-format=all.",
+            },
+        }
     if args.output_format == "card":
         return {
             "ok": True,
@@ -887,7 +902,11 @@ def cmd_assistant_build_personal_brief(args: argparse.Namespace) -> dict[str, An
             "card": report["card"],
             "interest_card": report["interest_card"],
         }
-    return {"ok": True, "meta": base_meta, "report": report}
+    return {
+        "ok": True,
+        "meta": base_meta,
+        "report": {k: v for k, v in report.items() if k != "doc_markdown"},
+    }
 
 
 if __name__ == "__main__":

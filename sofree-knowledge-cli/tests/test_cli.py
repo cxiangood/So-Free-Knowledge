@@ -98,6 +98,30 @@ def test_assistant_build_personal_brief_cli_outputs_json(tmp_path, capsys):
     assert out["report"]["summary"]["doc_count"] >= 1
 
 
+def test_assistant_build_personal_brief_doc_output_is_deprecated(tmp_path, capsys):
+    documents_file = tmp_path / "documents.json"
+    documents_file.write_text(
+        json.dumps([{"doc_id": "d1", "title": "发布流程", "summary": "审批后发布"}], ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    code = main(
+        [
+            "assistant",
+            "build-personal-brief",
+            "--documents-file",
+            str(documents_file),
+            "--output-format",
+            "doc",
+        ]
+    )
+
+    out = json.loads(capsys.readouterr().out)
+    assert code == 0
+    assert out["ok"] is True
+    assert out["deprecated"]["output_format_doc"] is True
+
+
 def test_assistant_build_personal_brief_online_uses_collector(monkeypatch, capsys):
     monkeypatch.setattr(cli_module, "FeishuClient", lambda: object())
     monkeypatch.setattr(
@@ -256,6 +280,7 @@ def test_assistant_push_defaults_to_personal_open_id(monkeypatch, tmp_path, caps
     assert len(calls) == 2
     assert out["meta"]["push"]["summary_enabled"] is True
     assert out["meta"]["push"]["interest_enabled"] is True
+    assert out["meta"]["push"]["doc_push_enabled"] is False
 
 
 def test_assistant_push_explicit_chat_id_overrides_personal(monkeypatch, tmp_path, capsys):
