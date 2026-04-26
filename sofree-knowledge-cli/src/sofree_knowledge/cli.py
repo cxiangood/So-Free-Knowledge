@@ -15,6 +15,7 @@ from .auth import (
     init_token,
 )
 from .config import load_env_file, resolve_env_file
+from .config import get_user_identity
 from .confused_detector import (
     build_confused_judge_prompt,
     detect_confused_candidates,
@@ -22,12 +23,15 @@ from .confused_detector import (
     parse_confused_judgement,
 )
 from .feishu_client import FeishuClient
+from .assistant_brief import build_personal_brief
+from .assistant_online import collect_online_personal_inputs
 from .lingo_context import (
     build_lingo_judge_prompt,
     extract_keyword_contexts,
     parse_lingo_judgements,
     publishable_lingo_judgements,
 )
+from .lingo_store import LingoStore
 from .policy import KnowledgePolicyStore, VALID_SCOPES
 
 
@@ -115,6 +119,38 @@ def build_parser() -> argparse.ArgumentParser:
     parse_judgements.add_argument("--publishable-only", action="store_true", help="Only return publishable judgements (key/black types with value).")
     parse_judgements.set_defaults(func=cmd_lingo_parse_judgements)
 
+    lingo_upsert = lingo_subparsers.add_parser("upsert", help="Create/update one lingo entry (remote by default).")
+    lingo_upsert.add_argument("--keyword", required=True)
+    lingo_upsert.add_argument("--type", required=True, choices=["key", "black", "confused", "nothing"])
+    lingo_upsert.add_argument("--value", default="")
+    lingo_upsert.add_argument("--aliases", default="", help="Comma-separated aliases.")
+    lingo_upsert.add_argument("--source", default="manual")
+    lingo_upsert.add_argument("--entity-id", default="")
+    lingo_upsert.add_argument("--replace-entity-id", default="", help="Delete this remote entity id first, then create new one.")
+    lingo_upsert.add_argument("--remote", action=argparse.BooleanOptionalAction, default=True, help="Write to Feishu Lingo remotely.")
+    lingo_upsert.add_argument("--write-local", action=argparse.BooleanOptionalAction, default=True, help="Mirror to local lingo_entries.json.")
+    lingo_upsert.add_argument("--context-ids", default="", help="Comma-separated context ids.")
+    lingo_upsert.set_defaults(func=cmd_lingo_upsert)
+
+    lingo_delete = lingo_subparsers.add_parser("delete", help="Delete lingo entry (remote by default, local optional).")
+    lingo_delete.add_argument("--keyword", default="", help="Keyword for local delete.")
+    lingo_delete.add_argument("--entity-id", default="", help="Remote entity id for Feishu delete.")
+    lingo_delete.add_argument("--remote", action=argparse.BooleanOptionalAction, default=True, help="Delete in Feishu Lingo remotely.")
+    lingo_delete.add_argument("--delete-local", action=argparse.BooleanOptionalAction, default=True, help="Also delete local mirror by keyword if provided.")
+    lingo_delete.set_defaults(func=cmd_lingo_delete)
+
+    lingo_list = lingo_subparsers.add_parser("list", help="List lingo entries in local store.")
+    lingo_list.add_argument("--limit", type=int, default=200)
+    lingo_list.set_defaults(func=cmd_lingo_list)
+
+    lingo_sync = lingo_subparsers.add_parser("sync-from-file", help="Sync lingo entries from judgements or entries JSON file into local store.")
+    lingo_sync.add_argument("--input-file", required=True, help="JSON/text file. Supports raw judgements or {'items': [...]} format.")
+    lingo_sync.add_argument("--publishable-only", action="store_true", help="Only keep key/black with non-empty value.")
+    lingo_sync.add_argument("--source", default="sync")
+    lingo_sync.add_argument("--remote", action=argparse.BooleanOptionalAction, default=True, help="Write each entry to Feishu Lingo remotely.")
+    lingo_sync.add_argument("--write-local", action=argparse.BooleanOptionalAction, default=True, help="Mirror synced entries to local store.")
+    lingo_sync.set_defaults(func=cmd_lingo_sync_from_file)
+
     # Confused conversation detection commands
     confused = subparsers.add_parser("confused", help="Confused conversation detection helpers.")
     confused_subparsers = confused.add_subparsers(dest="confused_command")
@@ -135,6 +171,31 @@ def build_parser() -> argparse.ArgumentParser:
     confused_parse = confused_subparsers.add_parser("parse-judgement", help="Parse LLM confused judgement output.")
     confused_parse.add_argument("--judgement-file", required=True, help="File containing raw LLM judgement output (JSON or fenced JSON).")
     confused_parse.set_defaults(func=cmd_confused_parse_judgement)
+
+    assistant = subparsers.add_parser("assistant", help="Personal assistant operations.")
+    assistant_subparsers = assistant.add_subparsers(dest="assistant_command")
+
+    assistant_build = assistant_subparsers.add_parser("build-personal-brief", help="Build personal brief from docs/access/messages/knowledge.")
+    assistant_build.add_argument("--online", action="store_true", help="Collect data from Feishu APIs online in one command.")
+    assistant_build.add_argument("--documents-file", default="", help="JSON file containing documents array. Required in offline mode.")
+    assistant_build.add_argument("--access-records-file", default="", help="Optional JSON file containing access records array.")
+    assistant_build.add_argument("--messages-file", default="", help="Optional JSON file containing group messages array.")
+    assistant_build.add_argument("--knowledge-file", default="", help="Optional JSON file containing knowledge items array.")
+    assistant_build.add_argument("--target-user-id", default="", help="Optional target user id for access filtering.")
+    assistant_build.add_argument("--token-file", default="", help="Optional token file for auto-resolving current user id in online mode.")
+    assistant_build.add_argument("--chat-ids", default="", help="Comma-separated chat IDs for online mode.")
+    assistant_build.add_argument("--include-visible-chats", action=argparse.BooleanOptionalAction, default=True)
+    assistant_build.add_argument("--max-chats", type=int, default=20)
+    assistant_build.add_argument("--max-messages-per-chat", type=int, default=200)
+    assistant_build.add_argument("--max-drive-docs", type=int, default=50)
+    assistant_build.add_argument("--max-knowledge", type=int, default=30)
+    assistant_build.add_argument("--max-docs", type=int, default=10, help="Maximum number of ranked documents.")
+    assistant_build.add_argument("--max-related", type=int, default=5, help="Maximum number of related messages/knowledge per document.")
+    assistant_build.add_argument("--push", action="store_true", help="Push assistant result to Feishu.")
+    assistant_build.add_argument("--receive-chat-id", default="", help="Explicit target chat_id for push. If set, push to group chat.")
+    assistant_build.add_argument("--receive-open-id", default="", help="Explicit target open_id for push. Used when --receive-chat-id is empty.")
+    assistant_build.add_argument("--output-format", choices=["all", "json", "doc", "card"], default="all")
+    assistant_build.set_defaults(func=cmd_assistant_build_personal_brief)
 
     return parser
 
@@ -213,11 +274,43 @@ def prepare_env(args: argparse.Namespace) -> None:
     load_env_file(env_file)
 
 
+def load_json_file(path: str) -> Any:
+    with open(path, "r", encoding="utf-8-sig") as f:
+        return json.load(f)
+
+
+def load_text_file(path: str) -> str:
+    with open(path, "r", encoding="utf-8-sig") as f:
+        return f.read()
+
+
+def resolve_push_target(
+    args: argparse.Namespace,
+    resolved_target_user_id: str,
+) -> tuple[str, str]:
+    explicit_chat_id = str(args.receive_chat_id or "").strip()
+    if explicit_chat_id:
+        return "chat_id", explicit_chat_id
+
+    explicit_open_id = str(args.receive_open_id or "").strip()
+    if explicit_open_id:
+        return "open_id", explicit_open_id
+
+    identity = get_user_identity(token_file=args.token_file or None)
+    open_id = str(identity.get("open_id") or "").strip()
+    if open_id:
+        return "open_id", open_id
+
+    if str(resolved_target_user_id or "").strip().startswith("ou_"):
+        return "open_id", str(resolved_target_user_id).strip()
+
+    raise ValueError("Push target unresolved. Provide --receive-open-id or --receive-chat-id, or init token with open_id.")
+
+
 def cmd_lingo_extract_contexts(args: argparse.Namespace) -> dict[str, Any]:
     prepare_env(args)
     keywords = [k.strip() for k in args.keywords.split(",") if k.strip()]
-    with open(args.messages_file, "r", encoding="utf-8") as f:
-        messages = json.load(f)
+    messages = load_json_file(args.messages_file)
     contexts = extract_keyword_contexts(
         keywords=keywords,
         messages=messages,
@@ -236,8 +329,7 @@ def cmd_lingo_extract_contexts(args: argparse.Namespace) -> dict[str, Any]:
 def cmd_lingo_build_judge_prompt(args: argparse.Namespace) -> dict[str, Any]:
     prepare_env(args)
     keywords = [k.strip() for k in args.keywords.split(",") if k.strip()]
-    with open(args.contexts_file, "r", encoding="utf-8") as f:
-        contexts = json.load(f)
+    contexts = load_json_file(args.contexts_file)
     prompt = build_lingo_judge_prompt(
         keywords=keywords,
         contexts=contexts,
@@ -250,8 +342,7 @@ def cmd_lingo_build_judge_prompt(args: argparse.Namespace) -> dict[str, Any]:
 
 def cmd_lingo_parse_judgements(args: argparse.Namespace) -> dict[str, Any]:
     prepare_env(args)
-    with open(args.judgements_file, "r", encoding="utf-8") as f:
-        raw_judgements = f.read()
+    raw_judgements = load_text_file(args.judgements_file)
     judgements = parse_lingo_judgements(raw_judgements)
     if args.publishable_only:
         judgements = publishable_lingo_judgements(judgements)
@@ -262,14 +353,169 @@ def cmd_lingo_parse_judgements(args: argparse.Namespace) -> dict[str, Any]:
     }
 
 
+def cmd_lingo_upsert(args: argparse.Namespace) -> dict[str, Any]:
+    prepare_env(args)
+    aliases = [item.strip() for item in str(args.aliases or "").split(",") if item.strip()]
+    context_ids = [item.strip() for item in str(args.context_ids or "").split(",") if item.strip()]
+    remote_deleted: dict[str, Any] | None = None
+    remote_created: dict[str, Any] | None = None
+    resolved_entity_id = str(args.entity_id or "").strip()
+    if args.remote:
+        client = FeishuClient()
+        replace_entity_id = str(args.replace_entity_id or "").strip()
+        if replace_entity_id:
+            remote_deleted = client.delete_lingo_entity(replace_entity_id)
+        remote_created = client.create_lingo_entity(
+            key=str(args.keyword),
+            description=str(args.value),
+            aliases=aliases,
+            provider="sofree-knowledge-cli",
+            outer_id=str(args.keyword),
+        )
+        resolved_entity_id = str(remote_created.get("entity_id") or resolved_entity_id)
+
+    local_entry: dict[str, Any] | None = None
+    if args.write_local:
+        store = LingoStore(args.output_dir)
+        local_entry = store.upsert_entry(
+            keyword=args.keyword,
+            entry_type=args.type,
+            value=args.value,
+            aliases=aliases,
+            source=args.source,
+            entity_id=resolved_entity_id,
+            context_ids=context_ids,
+        )
+
+    result: dict[str, Any] = {
+        "ok": True,
+        "remote_enabled": bool(args.remote),
+        "local_enabled": bool(args.write_local),
+        "keyword": str(args.keyword),
+        "entity_id": resolved_entity_id,
+    }
+    if remote_deleted is not None:
+        result["remote_deleted"] = remote_deleted
+    if remote_created is not None:
+        result["remote_created"] = remote_created
+    if local_entry is not None:
+        result["entry"] = local_entry
+        result["lingo_store_file"] = str(LingoStore(args.output_dir).path)
+    return result
+
+
+def cmd_lingo_delete(args: argparse.Namespace) -> dict[str, Any]:
+    prepare_env(args)
+    result: dict[str, Any] = {"ok": True, "remote_enabled": bool(args.remote), "local_enabled": bool(args.delete_local)}
+    if args.remote:
+        entity_id = str(args.entity_id or "").strip()
+        if not entity_id:
+            raise ValueError("--entity-id is required when --remote is enabled")
+        result["remote"] = FeishuClient().delete_lingo_entity(entity_id)
+    if args.delete_local and str(args.keyword or "").strip():
+        store = LingoStore(args.output_dir)
+        local = store.delete_entry(args.keyword)
+        result["local"] = local
+        result["lingo_store_file"] = str(store.path)
+    return result
+
+
+def cmd_lingo_list(args: argparse.Namespace) -> dict[str, Any]:
+    prepare_env(args)
+    store = LingoStore(args.output_dir)
+    entries = store.list_entries()[: max(0, int(args.limit))]
+    return {
+        "ok": True,
+        "entries": entries,
+        "count": len(entries),
+        "lingo_store_file": str(store.path),
+    }
+
+
+def cmd_lingo_sync_from_file(args: argparse.Namespace) -> dict[str, Any]:
+    prepare_env(args)
+    raw = load_text_file(args.input_file)
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        parsed = raw
+
+    if isinstance(parsed, dict) and isinstance(parsed.get("items"), list):
+        parsed = parsed["items"]
+
+    if isinstance(parsed, list):
+        if parsed and all(isinstance(item, dict) and "keyword" in item and "type" in item for item in parsed):
+            judgements = parsed
+        else:
+            judgements = parse_lingo_judgements(parsed)
+    else:
+        judgements = parse_lingo_judgements(parsed)
+
+    if args.publishable_only:
+        judgements = publishable_lingo_judgements(judgements)
+
+    store = LingoStore(args.output_dir)
+    client = FeishuClient() if args.remote else None
+    upserted: list[dict[str, Any]] = []
+    for item in judgements:
+        if not isinstance(item, dict):
+            continue
+        keyword = str(item.get("keyword") or "").strip()
+        entry_type = str(item.get("type") or "nothing").strip().lower()
+        value = str(item.get("value") or "").strip()
+        context_ids = [
+            str(context_id).strip()
+            for context_id in item.get("context_ids", [])
+            if str(context_id).strip()
+        ]
+        entity_id = ""
+        remote_created: dict[str, Any] | None = None
+        if client is not None:
+            remote_created = client.create_lingo_entity(
+                key=keyword,
+                description=value,
+                aliases=[],
+                provider="sofree-knowledge-cli",
+                outer_id=keyword,
+            )
+            entity_id = str(remote_created.get("entity_id") or "")
+
+        local_entry: dict[str, Any] | None = None
+        if args.write_local:
+            local_entry = store.upsert_entry(
+                keyword=keyword,
+                entry_type=entry_type,
+                value=value,
+                source=args.source,
+                entity_id=entity_id,
+                context_ids=context_ids,
+            )
+        upserted.append(
+            {
+                "keyword": keyword,
+                "type": entry_type,
+                "value": value,
+                "entity_id": entity_id,
+                "remote_created": remote_created,
+                "entry": local_entry,
+            }
+        )
+    return {
+        "ok": True,
+        "remote_enabled": bool(args.remote),
+        "local_enabled": bool(args.write_local),
+        "count": len(upserted),
+        "entries": upserted,
+        "lingo_store_file": str(store.path),
+    }
+
+
 def cmd_confused_detect_candidates(args: argparse.Namespace) -> dict[str, Any]:
     prepare_env(args)
-    with open(args.messages_file, "r", encoding="utf-8") as f:
-        messages = json.load(f)
+    messages = load_json_file(args.messages_file)
     reactions: list[dict[str, Any]] = []
     if args.reactions_file:
-        with open(args.reactions_file, "r", encoding="utf-8") as f:
-            loaded = json.load(f)
+        loaded = load_json_file(args.reactions_file)
         if isinstance(loaded, list):
             reactions = [item for item in loaded if isinstance(item, dict)]
     confused_reaction_keys = {
@@ -294,8 +540,7 @@ def cmd_confused_detect_candidates(args: argparse.Namespace) -> dict[str, Any]:
 
 def cmd_confused_build_judge_prompt(args: argparse.Namespace) -> dict[str, Any]:
     prepare_env(args)
-    with open(args.candidate_file, "r", encoding="utf-8") as f:
-        candidate = json.load(f)
+    candidate = load_json_file(args.candidate_file)
     if not isinstance(candidate, dict):
         raise ValueError("--candidate-file must contain a single JSON object")
     prompt = build_confused_judge_prompt(candidate)
@@ -307,14 +552,127 @@ def cmd_confused_build_judge_prompt(args: argparse.Namespace) -> dict[str, Any]:
 
 def cmd_confused_parse_judgement(args: argparse.Namespace) -> dict[str, Any]:
     prepare_env(args)
-    with open(args.judgement_file, "r", encoding="utf-8") as f:
-        raw = f.read()
+    raw = load_text_file(args.judgement_file)
     judgement = parse_confused_judgement(raw)
     return {
         "ok": True,
         "judgement": judgement,
         "inline_insert_text": format_inline_explanation(judgement.get("micro_explain", "")),
     }
+
+
+def cmd_assistant_build_personal_brief(args: argparse.Namespace) -> dict[str, Any]:
+    prepare_env(args)
+    documents: list[dict[str, Any]] = []
+    access_records: list[dict[str, Any]] = []
+    messages: list[dict[str, Any]] = []
+    knowledge_items: list[dict[str, Any]] = []
+    resolved_target_user_id = str(args.target_user_id or "").strip()
+    online_meta: dict[str, Any] = {}
+
+    if args.online:
+        online = collect_online_personal_inputs(
+            client=FeishuClient(),
+            target_user_id=resolved_target_user_id,
+            token_file=args.token_file,
+            chat_ids=args.chat_ids or None,
+            include_visible_chats=bool(args.include_visible_chats),
+            max_chats=args.max_chats,
+            max_messages_per_chat=args.max_messages_per_chat,
+            max_drive_docs=args.max_drive_docs,
+            max_knowledge=args.max_knowledge,
+        )
+        documents = [item for item in online.get("documents", []) if isinstance(item, dict)]
+        access_records = [item for item in online.get("access_records", []) if isinstance(item, dict)]
+        messages = [item for item in online.get("messages", []) if isinstance(item, dict)]
+        knowledge_items = [item for item in online.get("knowledge_items", []) if isinstance(item, dict)]
+        resolved_target_user_id = str(online.get("resolved_target_user_id") or resolved_target_user_id)
+        online_meta = online.get("meta", {}) if isinstance(online.get("meta", {}), dict) else {}
+    else:
+        if not args.documents_file:
+            raise ValueError("--documents-file is required in offline mode, or use --online")
+        loaded_documents = load_json_file(args.documents_file)
+        if isinstance(loaded_documents, dict) and isinstance(loaded_documents.get("documents"), list):
+            documents = loaded_documents["documents"]
+        elif isinstance(loaded_documents, list):
+            documents = loaded_documents
+        else:
+            raise ValueError("--documents-file must contain a JSON array or {'documents': [...]} object")
+
+        if args.access_records_file:
+            loaded_access = load_json_file(args.access_records_file)
+            if isinstance(loaded_access, list):
+                access_records = [item for item in loaded_access if isinstance(item, dict)]
+
+        if args.messages_file:
+            loaded_messages = load_json_file(args.messages_file)
+            if isinstance(loaded_messages, dict) and isinstance(loaded_messages.get("messages"), list):
+                messages = [item for item in loaded_messages["messages"] if isinstance(item, dict)]
+            elif isinstance(loaded_messages, list):
+                messages = [item for item in loaded_messages if isinstance(item, dict)]
+
+        if args.knowledge_file:
+            loaded_knowledge = load_json_file(args.knowledge_file)
+            if isinstance(loaded_knowledge, dict) and isinstance(loaded_knowledge.get("items"), list):
+                knowledge_items = [item for item in loaded_knowledge["items"] if isinstance(item, dict)]
+            elif isinstance(loaded_knowledge, list):
+                knowledge_items = [item for item in loaded_knowledge if isinstance(item, dict)]
+
+        if not resolved_target_user_id:
+            identity = get_user_identity(token_file=args.token_file or None)
+            resolved_target_user_id = str(identity.get("open_id") or identity.get("user_id") or "")
+
+    report = build_personal_brief(
+        documents=documents,
+        access_records=access_records,
+        messages=messages,
+        target_user_id=resolved_target_user_id,
+        knowledge_items=knowledge_items,
+        max_docs=args.max_docs,
+        max_related=args.max_related,
+    )
+
+    base_meta = {
+        "mode": "online" if args.online else "offline",
+        "resolved_target_user_id": resolved_target_user_id,
+        "inputs": {
+            "document_count": len(documents),
+            "access_record_count": len(access_records),
+            "message_count": len(messages),
+            "knowledge_item_count": len(knowledge_items),
+        },
+    }
+    if online_meta:
+        base_meta["online"] = online_meta
+    if args.push:
+        receive_id_type, receive_id = resolve_push_target(args, resolved_target_user_id=resolved_target_user_id)
+        push_result = FeishuClient().send_message(
+            receive_id=receive_id,
+            receive_id_type=receive_id_type,
+            msg_type="interactive",
+            content=report["card"],
+        )
+        base_meta["push"] = {
+            "enabled": True,
+            "receive_id_type": receive_id_type,
+            "receive_id": receive_id,
+            "message_id": push_result.get("message_id", ""),
+            "chat_id": push_result.get("chat_id", ""),
+        }
+    else:
+        base_meta["push"] = {"enabled": False}
+
+    if args.output_format == "json":
+        return {
+            "ok": True,
+            "meta": base_meta,
+            "report": {k: v for k, v in report.items() if k not in {"doc_markdown", "card"}},
+        }
+    if args.output_format == "doc":
+        return {"ok": True, "meta": base_meta, "doc_markdown": report["doc_markdown"]}
+    if args.output_format == "card":
+        return {"ok": True, "meta": base_meta, "card": report["card"]}
+    return {"ok": True, "meta": base_meta, "report": report}
 
 
 if __name__ == "__main__":

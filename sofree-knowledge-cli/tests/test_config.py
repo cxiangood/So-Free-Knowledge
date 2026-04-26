@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from sofree_knowledge.config import get_app_credentials, resolve_env_file
+from sofree_knowledge.config import get_app_credentials, get_user_identity, resolve_env_file
 
 
 def test_get_app_credentials_supports_app_id_aliases(monkeypatch):
@@ -37,3 +37,16 @@ def test_resolve_env_file_falls_back_to_parent_cwd(tmp_path, monkeypatch):
     resolved = resolve_env_file(None, output_dir=".")
 
     assert Path(resolved) == parent_env
+
+
+def test_get_user_identity_reads_open_id_and_user_id(tmp_path):
+    token_file = tmp_path / "token.json"
+    token_file.write_text(
+        '{"access_token":"x","open_id":"ou_123","user_id":"u_123"}',
+        encoding="utf-8",
+    )
+
+    identity = get_user_identity(token_file=token_file)
+
+    assert identity["open_id"] == "ou_123"
+    assert identity["user_id"] == "u_123"

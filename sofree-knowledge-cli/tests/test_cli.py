@@ -1,5 +1,6 @@
-import json
+﻿import json
 
+import sofree_knowledge.cli as cli_module
 from sofree_knowledge.cli import main
 
 
@@ -54,3 +55,237 @@ def test_confused_detect_candidates_cli_outputs_json(tmp_path, capsys):
     assert out["ok"] is True
     assert out["count"] == 1
     assert out["candidates"][0]["target_message_id"] == "m1"
+
+
+def test_assistant_build_personal_brief_cli_outputs_json(tmp_path, capsys):
+    documents_file = tmp_path / "documents.json"
+    documents_file.write_text(
+        json.dumps(
+            [
+                {"doc_id": "d1", "title": "发布流程", "summary": "审批后发布"},
+                {"doc_id": "d2", "title": "周会纪要", "summary": "例行同步"},
+            ],
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    messages_file = tmp_path / "messages.json"
+    messages_file.write_text(
+        json.dumps(
+            [
+                {"message_id": "m1", "chat_id": "oc_x", "content": "发布今天截止，尽快确认"},
+                {"message_id": "m2", "chat_id": "oc_x", "content": "周会改到明天"},
+            ],
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    code = main(
+        [
+            "assistant",
+            "build-personal-brief",
+            "--documents-file",
+            str(documents_file),
+            "--messages-file",
+            str(messages_file),
+        ]
+    )
+
+    out = json.loads(capsys.readouterr().out)
+    assert code == 0
+    assert out["ok"] is True
+    assert out["report"]["summary"]["doc_count"] >= 1
+
+
+def test_assistant_build_personal_brief_online_uses_collector(monkeypatch, capsys):
+    monkeypatch.setattr(cli_module, "FeishuClient", lambda: object())
+    monkeypatch.setattr(
+        cli_module,
+        "collect_online_personal_inputs",
+        lambda **kwargs: {
+            "documents": [{"doc_id": "d1", "title": "紧急排障", "summary": "线上故障", "url": "", "updated_at": ""}],
+            "access_records": [{"doc_id": "d1", "user_id": "ou_test", "action": "view", "count": 2}],
+            "messages": [{"message_id": "m1", "chat_id": "oc_x", "text": "故障今天处理", "create_time": ""}],
+            "knowledge_items": [{"id": "k1", "title": "故障", "content": "近期高频"}],
+            "resolved_target_user_id": "ou_test",
+            "meta": {"message_count": 1},
+        },
+    )
+
+    code = main(["assistant", "build-personal-brief", "--online", "--output-format", "json"])
+
+    out = json.loads(capsys.readouterr().out)
+    assert code == 0
+    assert out["ok"] is True
+    assert out["meta"]["mode"] == "online"
+    assert out["meta"]["resolved_target_user_id"] == "ou_test"
+    assert out["report"]["summary"]["doc_count"] == 1
+
+
+def test_assistant_push_defaults_to_personal_open_id(monkeypatch, tmp_path, capsys):
+    calls: list[dict[str, str]] = []
+
+    class FakeClient:
+        def send_message(self, receive_id, msg_type, content, receive_id_type="chat_id"):
+            calls.append(
+                {
+                    "receive_id": receive_id,
+                    "receive_id_type": receive_id_type,
+                    "msg_type": msg_type,
+                }
+            )
+            return {"message_id": "om_test", "chat_id": "oc_personal", "msg_type": msg_type}
+
+    monkeypatch.setattr(cli_module, "FeishuClient", lambda: FakeClient())
+    monkeypatch.setattr(cli_module, "get_user_identity", lambda token_file=None: {"open_id": "ou_self"})
+
+    documents_file = tmp_path / "documents.json"
+    documents_file.write_text(
+        json.dumps([{"doc_id": "d1", "title": "发布流程", "summary": "审批后发布"}], ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    code = main(
+        [
+            "assistant",
+            "build-personal-brief",
+            "--documents-file",
+            str(documents_file),
+            "--push",
+            "--output-format",
+            "json",
+        ]
+    )
+
+    out = json.loads(capsys.readouterr().out)
+    assert code == 0
+    assert out["ok"] is True
+    assert calls
+    assert calls[0]["receive_id_type"] == "open_id"
+    assert calls[0]["receive_id"] == "ou_self"
+    assert out["meta"]["push"]["receive_id_type"] == "open_id"
+
+
+def test_assistant_push_explicit_chat_id_overrides_personal(monkeypatch, tmp_path, capsys):
+    calls: list[dict[str, str]] = []
+
+    class FakeClient:
+        def send_message(self, receive_id, msg_type, content, receive_id_type="chat_id"):
+            calls.append(
+                {
+                    "receive_id": receive_id,
+                    "receive_id_type": receive_id_type,
+                    "msg_type": msg_type,
+                }
+            )
+            return {"message_id": "om_test2", "chat_id": receive_id, "msg_type": msg_type}
+
+    monkeypatch.setattr(cli_module, "FeishuClient", lambda: FakeClient())
+    monkeypatch.setattr(cli_module, "get_user_identity", lambda token_file=None: {"open_id": "ou_self"})
+
+    documents_file = tmp_path / "documents.json"
+    documents_file.write_text(
+        json.dumps([{"doc_id": "d1", "title": "发布流程", "summary": "审批后发布"}], ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    code = main(
+        [
+            "assistant",
+            "build-personal-brief",
+            "--documents-file",
+            str(documents_file),
+            "--push",
+            "--receive-chat-id",
+            "oc_group_x",
+            "--output-format",
+            "json",
+        ]
+    )
+
+    out = json.loads(capsys.readouterr().out)
+    assert code == 0
+    assert out["ok"] is True
+    assert calls
+    assert calls[0]["receive_id_type"] == "chat_id"
+    assert calls[0]["receive_id"] == "oc_group_x"
+    assert out["meta"]["push"]["receive_id_type"] == "chat_id"
+
+
+def test_lingo_upsert_list_delete_cli(tmp_path, capsys):
+    code = main(
+        [
+            "--output-dir",
+            str(tmp_path),
+            "lingo",
+            "upsert",
+            "--no-remote",
+            "--keyword",
+            "北极星指标",
+            "--type",
+            "black",
+            "--value",
+            "团队核心牵引指标",
+            "--aliases",
+            "北极星,North Star",
+        ]
+    )
+    out = json.loads(capsys.readouterr().out)
+    assert code == 0
+    assert out["ok"] is True
+    assert out["entry"]["keyword"] == "北极星指标"
+
+    code = main(["--output-dir", str(tmp_path), "lingo", "list"])
+    out = json.loads(capsys.readouterr().out)
+    assert code == 0
+    assert out["ok"] is True
+    assert out["count"] == 1
+    assert out["entries"][0]["keyword"] == "北极星指标"
+
+    code = main(
+        [
+            "--output-dir",
+            str(tmp_path),
+            "lingo",
+            "delete",
+            "--no-remote",
+            "--keyword",
+            "北极星指标",
+        ]
+    )
+    out = json.loads(capsys.readouterr().out)
+    assert code == 0
+    assert out["ok"] is True
+    assert out["local"]["deleted"] is True
+
+
+def test_lingo_sync_from_file_cli(tmp_path, capsys):
+    input_file = tmp_path / "judgements.json"
+    input_file.write_text(
+        json.dumps(
+            [
+                {"keyword": "A/B实验", "type": "black", "value": "用于对照验证的实验方法"},
+                {"keyword": "你好", "type": "nothing", "value": ""},
+            ],
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    code = main(
+        [
+            "--output-dir",
+            str(tmp_path),
+            "lingo",
+            "sync-from-file",
+            "--no-remote",
+            "--input-file",
+            str(input_file),
+            "--publishable-only",
+        ]
+    )
+    out = json.loads(capsys.readouterr().out)
+    assert code == 0
+    assert out["ok"] is True
+    assert out["count"] == 1
+    assert out["entries"][0]["keyword"] == "A/B实验"
