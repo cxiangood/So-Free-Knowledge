@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from pathlib import Path
 from typing import Any
 
 from .archive import collect_messages
@@ -177,6 +178,24 @@ def build_parser() -> argparse.ArgumentParser:
     assistant = subparsers.add_parser("assistant", help="Personal assistant operations.")
     assistant_subparsers = assistant.add_subparsers(dest="assistant_command")
 
+    assistant_profile_set = assistant_subparsers.add_parser("set-profile", help="Save assistant profile + schedule config.")
+    assistant_profile_set.add_argument("--profile-file", default="", help="Optional profile json path.")
+    assistant_profile_set.add_argument("--persona", default="", help="User persona/avatar hint.")
+    assistant_profile_set.add_argument("--role", default="", help="User role/profession.")
+    assistant_profile_set.add_argument("--businesses", default="", help="Comma-separated business tracks, e.g. A增长,B交付.")
+    assistant_profile_set.add_argument("--interests", default="", help="Comma-separated interest keywords for group digest.")
+    assistant_profile_set.add_argument("--mode", choices=["scheduled", "manual", "hybrid"], default="scheduled")
+    assistant_profile_set.add_argument("--timezone", default="Asia/Shanghai")
+    assistant_profile_set.add_argument("--weekly-brief-cron", default="0 9 * * MON")
+    assistant_profile_set.add_argument("--nightly-interest-cron", default="0 21 * * *")
+    assistant_profile_set.add_argument("--weekly-enabled", action=argparse.BooleanOptionalAction, default=True)
+    assistant_profile_set.add_argument("--nightly-enabled", action=argparse.BooleanOptionalAction, default=True)
+    assistant_profile_set.set_defaults(func=cmd_assistant_set_profile)
+
+    assistant_profile_get = assistant_subparsers.add_parser("get-profile", help="Read assistant profile + schedule config.")
+    assistant_profile_get.add_argument("--profile-file", default="", help="Optional profile json path.")
+    assistant_profile_get.set_defaults(func=cmd_assistant_get_profile)
+
     assistant_build = assistant_subparsers.add_parser("build-personal-brief", help="Build personal brief from docs/access/messages/knowledge.")
     assistant_build.add_argument("--online", action="store_true", help="Collect data from Feishu APIs online in one command.")
     assistant_build.add_argument("--documents-file", default="", help="JSON file containing documents array. Required in offline mode.")
@@ -193,7 +212,20 @@ def build_parser() -> argparse.ArgumentParser:
     assistant_build.add_argument("--max-knowledge", type=int, default=30)
     assistant_build.add_argument("--max-docs", type=int, default=10, help="Maximum number of ranked documents.")
     assistant_build.add_argument("--max-related", type=int, default=5, help="Maximum number of related messages/knowledge per document.")
+    assistant_build.add_argument("--max-interest-items", type=int, default=8, help="Maximum number of interest digest messages.")
+    assistant_build.add_argument("--profile-file", default="", help="Optional profile json path.")
+    assistant_build.add_argument("--persona", default="", help="Override persona/avatar for this run.")
+    assistant_build.add_argument("--role", default="", help="Override role/profession for this run.")
+    assistant_build.add_argument("--businesses", default="", help="Override business tracks, comma-separated.")
+    assistant_build.add_argument("--interests", default="", help="Override interests, comma-separated.")
+    assistant_build.add_argument("--mode", choices=["scheduled", "manual", "hybrid"], default="", help="Override schedule mode.")
+    assistant_build.add_argument("--timezone", default="", help="Override schedule timezone.")
+    assistant_build.add_argument("--weekly-brief-cron", default="", help="Override weekly brief cron.")
+    assistant_build.add_argument("--nightly-interest-cron", default="", help="Override nightly digest cron.")
+    assistant_build.add_argument("--weekly-enabled", action=argparse.BooleanOptionalAction, default=None)
+    assistant_build.add_argument("--nightly-enabled", action=argparse.BooleanOptionalAction, default=None)
     assistant_build.add_argument("--push", action="store_true", help="Push assistant result to Feishu.")
+    assistant_build.add_argument("--push-interest-card", action=argparse.BooleanOptionalAction, default=None, help="Whether to also push interest digest card.")
     assistant_build.add_argument("--receive-chat-id", default="", help="Explicit target chat_id for push. If set, push to group chat.")
     assistant_build.add_argument("--receive-open-id", default="", help="Explicit target open_id for push. Used when --receive-chat-id is empty.")
     assistant_build.add_argument("--output-format", choices=["all", "json", "doc", "card"], default="all")
@@ -307,6 +339,86 @@ def resolve_push_target(
         return "open_id", str(resolved_target_user_id).strip()
 
     raise ValueError("Push target unresolved. Provide --receive-open-id or --receive-chat-id, or init token with open_id.")
+
+
+def assistant_profile_default_path(output_dir: str) -> Path:
+    return Path(output_dir).expanduser() / "assistant_profile.json"
+
+
+def load_assistant_profile_config(args: argparse.Namespace) -> dict[str, Any]:
+    path = Path(args.profile_file).expanduser() if str(args.profile_file or "").strip() else assistant_profile_default_path(args.output_dir)
+    if not path.exists():
+        return {}
+    try:
+        parsed = json.loads(path.read_text(encoding="utf-8-sig"))
+    except json.JSONDecodeError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def build_profile_overrides(args: argparse.Namespace) -> dict[str, Any]:
+    payload: dict[str, Any] = {}
+    if str(args.persona or "").strip():
+        payload["persona"] = str(args.persona).strip()
+    if str(args.role or "").strip():
+        payload["role"] = str(args.role).strip()
+    if str(args.businesses or "").strip():
+        payload["businesses"] = [item.strip() for item in str(args.businesses).split(",") if item.strip()]
+    if str(args.interests or "").strip():
+        payload["interests"] = [item.strip() for item in str(args.interests).split(",") if item.strip()]
+    return payload
+
+
+def build_schedule_overrides(args: argparse.Namespace) -> dict[str, Any]:
+    payload: dict[str, Any] = {}
+    if str(args.mode or "").strip():
+        payload["mode"] = str(args.mode).strip()
+    if str(args.timezone or "").strip():
+        payload["timezone"] = str(args.timezone).strip()
+    if str(args.weekly_brief_cron or "").strip():
+        payload["weekly_brief_cron"] = str(args.weekly_brief_cron).strip()
+    if str(args.nightly_interest_cron or "").strip():
+        payload["nightly_interest_cron"] = str(args.nightly_interest_cron).strip()
+    if args.weekly_enabled is not None:
+        payload["weekly_enabled"] = bool(args.weekly_enabled)
+    if args.nightly_enabled is not None:
+        payload["nightly_enabled"] = bool(args.nightly_enabled)
+    return payload
+
+
+def cmd_assistant_set_profile(args: argparse.Namespace) -> dict[str, Any]:
+    prepare_env(args)
+    path = Path(args.profile_file).expanduser() if str(args.profile_file or "").strip() else assistant_profile_default_path(args.output_dir)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "profile": build_profile_overrides(args),
+        "schedule": build_schedule_overrides(args),
+    }
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return {
+        "ok": True,
+        "profile_file": str(path),
+        "profile": payload["profile"],
+        "schedule": payload["schedule"],
+        "questionnaire_hint": [
+            "请确认当前并行业务（可多选）",
+            "请确认最近更关注的话题关键词",
+            "是否同意用最近阅读文档建议更新画像",
+        ],
+    }
+
+
+def cmd_assistant_get_profile(args: argparse.Namespace) -> dict[str, Any]:
+    prepare_env(args)
+    path = Path(args.profile_file).expanduser() if str(args.profile_file or "").strip() else assistant_profile_default_path(args.output_dir)
+    parsed = load_assistant_profile_config(args)
+    return {
+        "ok": True,
+        "profile_file": str(path),
+        "exists": path.exists(),
+        "profile": parsed.get("profile", {}) if isinstance(parsed, dict) else {},
+        "schedule": parsed.get("schedule", {}) if isinstance(parsed, dict) else {},
+    }
 
 
 def cmd_lingo_extract_contexts(args: argparse.Namespace) -> dict[str, Any]:
@@ -629,6 +741,11 @@ def cmd_assistant_build_personal_brief(args: argparse.Namespace) -> dict[str, An
     knowledge_items: list[dict[str, Any]] = []
     resolved_target_user_id = str(args.target_user_id or "").strip()
     online_meta: dict[str, Any] = {}
+    profile_config = load_assistant_profile_config(args)
+    user_profile = dict(profile_config.get("profile", {})) if isinstance(profile_config, dict) else {}
+    user_profile.update(build_profile_overrides(args))
+    schedule = dict(profile_config.get("schedule", {})) if isinstance(profile_config, dict) else {}
+    schedule.update(build_schedule_overrides(args))
 
     if args.online:
         online = collect_online_personal_inputs(
@@ -690,6 +807,9 @@ def cmd_assistant_build_personal_brief(args: argparse.Namespace) -> dict[str, An
         knowledge_items=knowledge_items,
         max_docs=args.max_docs,
         max_related=args.max_related,
+        user_profile=user_profile,
+        schedule=schedule,
+        max_interest_items=args.max_interest_items,
     )
 
     base_meta = {
@@ -706,18 +826,32 @@ def cmd_assistant_build_personal_brief(args: argparse.Namespace) -> dict[str, An
         base_meta["online"] = online_meta
     if args.push:
         receive_id_type, receive_id = resolve_push_target(args, resolved_target_user_id=resolved_target_user_id)
-        push_result = FeishuClient().send_message(
+        client = FeishuClient()
+        push_result = client.send_message(
             receive_id=receive_id,
             receive_id_type=receive_id_type,
             msg_type="interactive",
             content=report["card"],
         )
+        push_interest_card = args.push_interest_card
+        if push_interest_card is None:
+            push_interest_card = args.output_format in {"card", "all"}
+        interest_push_result: dict[str, Any] | None = None
+        if push_interest_card:
+            interest_push_result = client.send_message(
+                receive_id=receive_id,
+                receive_id_type=receive_id_type,
+                msg_type="interactive",
+                content=report["interest_card"],
+            )
         base_meta["push"] = {
             "enabled": True,
             "receive_id_type": receive_id_type,
             "receive_id": receive_id,
             "message_id": push_result.get("message_id", ""),
             "chat_id": push_result.get("chat_id", ""),
+            "interest_enabled": bool(push_interest_card),
+            "interest_message_id": (interest_push_result or {}).get("message_id", ""),
         }
     else:
         base_meta["push"] = {"enabled": False}
@@ -726,12 +860,17 @@ def cmd_assistant_build_personal_brief(args: argparse.Namespace) -> dict[str, An
         return {
             "ok": True,
             "meta": base_meta,
-            "report": {k: v for k, v in report.items() if k not in {"doc_markdown", "card"}},
+            "report": {k: v for k, v in report.items() if k not in {"doc_markdown", "card", "interest_card"}},
         }
     if args.output_format == "doc":
         return {"ok": True, "meta": base_meta, "doc_markdown": report["doc_markdown"]}
     if args.output_format == "card":
-        return {"ok": True, "meta": base_meta, "card": report["card"]}
+        return {
+            "ok": True,
+            "meta": base_meta,
+            "card": report["card"],
+            "interest_card": report["interest_card"],
+        }
     return {"ok": True, "meta": base_meta, "report": report}
 
 

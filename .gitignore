@@ -6,3 +6,5 @@ plans/
 skills-lock.json
 .agents/
 message_archive/
+**/.pytest_tmp/
+**/.pytest_cache/

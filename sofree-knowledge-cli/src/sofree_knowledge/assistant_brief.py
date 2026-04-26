@@ -26,6 +26,27 @@ URGENCY_KEYWORDS = (
     "p1",
 )
 
+TODO_KEYWORDS = (
+    "todo",
+    "to do",
+    "待办",
+    "待跟进",
+    "跟进",
+    "action item",
+    "行动项",
+    "需要",
+    "请在",
+    "请于",
+)
+
+DOC_TYPE_PATTERNS = (
+    ("minutes", ("/minutes/", "会议纪要", "纪要", "minutes")),
+    ("sheet", ("/sheet/", "/sheets/", "表格", "sheet", "excel")),
+    ("base", ("/base/", "多维表格", "bitable", "base")),
+    ("wiki", ("/wiki/", "知识库", "wiki")),
+    ("doc", ("/docx/", "/docs/", "文档", "doc")),
+)
+
 
 def build_personal_brief(
     documents: list[dict[str, Any]],
@@ -35,16 +56,22 @@ def build_personal_brief(
     target_user_id: str = "",
     max_docs: int = 10,
     max_related: int = 5,
+    user_profile: dict[str, Any] | None = None,
+    schedule: dict[str, Any] | None = None,
+    max_interest_items: int = 8,
 ) -> dict[str, Any]:
     docs = [_normalize_doc(item) for item in documents]
     records = [item for item in (access_records or []) if isinstance(item, dict)]
     msgs = [_normalize_message(item) for item in (messages or []) if isinstance(item, dict)]
     knowledge = [_normalize_knowledge(item) for item in (knowledge_items or []) if isinstance(item, dict)]
+    profile = _normalize_profile(user_profile or {})
+    normalized_schedule = _normalize_schedule(schedule or {})
 
     doc_stats = _build_doc_stats(records, target_user_id=target_user_id)
 
     ranked_docs: list[dict[str, Any]] = []
     for doc in docs:
+        doc_type = _infer_doc_type(doc)
         title_keywords = _extract_keywords(" ".join([doc["title"], doc["summary"]]))
         related_messages = _rank_related_messages(doc, title_keywords, msgs, max_related=max_related)
         related_knowledge = _rank_related_knowledge(title_keywords, knowledge, max_related=max_related)
@@ -56,16 +83,22 @@ def build_personal_brief(
             related_messages=related_messages,
             related_knowledge=related_knowledge,
         )
+        business = _infer_business(doc, profile["business_tracks"])
+        todo_items = _extract_todo_items(doc, related_messages)
         ranked_docs.append(
             {
                 "doc_id": doc["doc_id"],
                 "title": doc["title"],
                 "url": doc["url"],
                 "summary": doc["summary"],
+                "doc_type": doc_type,
+                "business": business,
                 "recommend_score": recommend_score,
                 "urgency_score": urgency_score,
+                "urgency_stars": _urgency_stars(urgency_score),
                 "priority": _priority_label(urgency_score, recommend_score),
                 "reasons": _build_reasons(doc, doc_stats.get(doc["doc_id"], {}), related_messages),
+                "todo_items": todo_items,
                 "related_messages": related_messages,
                 "related_knowledge": related_knowledge,
             }
@@ -77,20 +110,34 @@ def build_personal_brief(
     )
     ranked_docs = ranked_docs[:max_docs]
 
+    grouped_documents = _group_documents_by_business(ranked_docs)
+    interest_digest = _build_interest_digest(msgs, profile["interests"], max_items=max_interest_items)
+
     summary = {
         "doc_count": len(ranked_docs),
         "critical_count": sum(1 for item in ranked_docs if item["priority"] == "critical"),
         "high_count": sum(1 for item in ranked_docs if item["priority"] == "high"),
         "normal_count": sum(1 for item in ranked_docs if item["priority"] == "normal"),
+        "todo_count": sum(len(item.get("todo_items", [])) for item in ranked_docs),
+        "business_count": len(grouped_documents),
+        "interest_hit_count": len(interest_digest.get("items", [])),
     }
 
-    doc_markdown = _to_markdown(ranked_docs)
-    card = _to_card(ranked_docs)
+    doc_markdown = _to_markdown(ranked_docs, grouped_documents=grouped_documents, profile=profile)
+    card = _to_card(ranked_docs, profile=profile)
+    interest_card = _to_interest_card(interest_digest, profile=profile)
+    runtime_plan = _build_runtime_plan(normalized_schedule)
     return {
         "summary": summary,
         "documents": ranked_docs,
+        "grouped_documents": grouped_documents,
+        "profile": profile,
+        "schedule": normalized_schedule,
+        "runtime_plan": runtime_plan,
+        "interest_digest": interest_digest,
         "doc_markdown": doc_markdown,
         "card": card,
+        "interest_card": interest_card,
     }
 
 
@@ -124,6 +171,71 @@ def _normalize_knowledge(item: dict[str, Any]) -> dict[str, str]:
     }
 
 
+def _normalize_profile(item: dict[str, Any]) -> dict[str, Any]:
+    businesses_raw = item.get("businesses") or item.get("business_tracks") or []
+    business_tracks: list[dict[str, Any]] = []
+    if isinstance(businesses_raw, list):
+        for idx, entry in enumerate(businesses_raw, start=1):
+            if isinstance(entry, str):
+                name = entry.strip()
+                if not name:
+                    continue
+                business_tracks.append({"id": f"biz_{idx}", "name": name, "keywords": list(_extract_keywords(name))})
+                continue
+            if isinstance(entry, dict):
+                name = str(entry.get("name") or entry.get("business") or "").strip()
+                if not name:
+                    continue
+                keywords = entry.get("keywords", [])
+                if isinstance(keywords, str):
+                    keywords = [x.strip() for x in keywords.split(",") if x.strip()]
+                if not isinstance(keywords, list):
+                    keywords = []
+                seed = list(_extract_keywords(" ".join([name, " ".join(str(k) for k in keywords)])))
+                business_tracks.append(
+                    {
+                        "id": str(entry.get("id") or f"biz_{idx}"),
+                        "name": name,
+                        "keywords": seed,
+                    }
+                )
+
+    interests_raw = item.get("interests") or []
+    interests: list[str] = []
+    if isinstance(interests_raw, str):
+        interests = [value.strip() for value in interests_raw.split(",") if value.strip()]
+    elif isinstance(interests_raw, list):
+        interests = [str(value).strip() for value in interests_raw if str(value).strip()]
+
+    return {
+        "persona": str(item.get("persona") or item.get("avatar") or "").strip(),
+        "role": str(item.get("role") or item.get("profession") or "").strip(),
+        "business_tracks": business_tracks,
+        "interests": interests,
+        "current_focus": [track["name"] for track in business_tracks],
+        "require_user_confirmation": bool(item.get("require_user_confirmation", True)),
+        "update_hint": "根据最新阅读文档候选更新画像时，应先向用户确认。",
+    }
+
+
+def _normalize_schedule(item: dict[str, Any]) -> dict[str, Any]:
+    mode = str(item.get("mode") or "scheduled").strip().lower()
+    if mode not in {"scheduled", "manual", "hybrid"}:
+        mode = "scheduled"
+    timezone_name = str(item.get("timezone") or "Asia/Shanghai").strip() or "Asia/Shanghai"
+    weekly_enabled = bool(item.get("weekly_enabled", mode in {"scheduled", "hybrid"}))
+    nightly_enabled = bool(item.get("nightly_enabled", mode in {"scheduled", "hybrid"}))
+    return {
+        "mode": mode,
+        "timezone": timezone_name,
+        "weekly_brief_cron": str(item.get("weekly_brief_cron") or "0 9 * * MON"),
+        "nightly_interest_cron": str(item.get("nightly_interest_cron") or "0 21 * * *"),
+        "weekly_enabled": weekly_enabled,
+        "nightly_enabled": nightly_enabled,
+        "manual_supported": True,
+    }
+
+
 def _build_doc_stats(records: list[dict[str, Any]], target_user_id: str) -> dict[str, dict[str, int]]:
     stats: dict[str, dict[str, int]] = defaultdict(lambda: {"views": 0, "edits": 0, "comments": 0})
     normalized_target = str(target_user_id or "").strip()
@@ -150,7 +262,6 @@ def _extract_keywords(text: str) -> set[str]:
     normalized = str(text or "").lower()
     tokens = re.findall(r"[a-z0-9_]{2,}|[\u4e00-\u9fff]{2,}", normalized)
     result: set[str] = {token for token in tokens if token.strip()}
-    # Add Chinese 2-char grams to improve partial semantic matching.
     for token in tokens:
         if re.fullmatch(r"[\u4e00-\u9fff]{2,}", token):
             for idx in range(0, len(token) - 1):
@@ -256,6 +367,18 @@ def _priority_label(urgency_score: int, recommend_score: int) -> str:
     return "normal"
 
 
+def _urgency_stars(urgency_score: int) -> int:
+    if urgency_score >= 85:
+        return 5
+    if urgency_score >= 70:
+        return 4
+    if urgency_score >= 50:
+        return 3
+    if urgency_score >= 30:
+        return 2
+    return 1
+
+
 def _build_reasons(doc: dict[str, str], stats: dict[str, int], related_messages: list[dict[str, Any]]) -> list[str]:
     reasons: list[str] = []
     if int(stats.get("edits", 0)) > 0:
@@ -267,6 +390,136 @@ def _build_reasons(doc: dict[str, str], stats: dict[str, int], related_messages:
     if not reasons:
         reasons.append("基础推荐：与近期语义上下文有关联")
     return reasons
+
+
+def _infer_doc_type(doc: dict[str, str]) -> str:
+    text = " ".join([doc.get("url", ""), doc.get("title", ""), doc.get("summary", "")]).lower()
+    for doc_type, patterns in DOC_TYPE_PATTERNS:
+        if any(pattern in text for pattern in patterns):
+            return doc_type
+    return "file"
+
+
+def _infer_business(doc: dict[str, str], business_tracks: list[dict[str, Any]]) -> str:
+    if not business_tracks:
+        return "General"
+    doc_keywords = _extract_keywords(" ".join([doc.get("title", ""), doc.get("summary", ""), doc.get("url", "")]))
+    best_name = "General"
+    best_score = 0
+    for track in business_tracks:
+        track_keywords = {str(item).lower() for item in track.get("keywords", []) if str(item).strip()}
+        overlap = len(doc_keywords & track_keywords)
+        if overlap > best_score:
+            best_score = overlap
+            best_name = str(track.get("name") or "General")
+    return best_name
+
+
+def _extract_todo_items(doc: dict[str, Any], related_messages: list[dict[str, Any]]) -> list[str]:
+    source_texts = [str(doc.get("summary", ""))]
+    source_texts.extend(str(item.get("summary", "")) for item in related_messages)
+    todos: list[str] = []
+    for text in source_texts:
+        if not text:
+            continue
+        lowered = text.lower()
+        if any(keyword in lowered for keyword in TODO_KEYWORDS):
+            todos.append(_trim(text, 80))
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for todo in todos:
+        if todo not in seen:
+            seen.add(todo)
+            deduped.append(todo)
+    return deduped[:3]
+
+
+def _group_documents_by_business(documents: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    buckets: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for item in documents:
+        business = str(item.get("business") or "General")
+        buckets[business].append(item)
+    grouped: list[dict[str, Any]] = []
+    for business, docs in buckets.items():
+        docs.sort(
+            key=lambda item: (
+                int(item.get("urgency_stars", 1)),
+                int(item.get("urgency_score", 0)),
+                int(item.get("recommend_score", 0)),
+            ),
+            reverse=True,
+        )
+        grouped.append(
+            {
+                "business": business,
+                "documents": docs,
+                "top_star": int(docs[0].get("urgency_stars", 1)) if docs else 1,
+            }
+        )
+    grouped.sort(key=lambda item: (int(item.get("top_star", 1)), item.get("business", "")), reverse=True)
+    return grouped
+
+
+def _build_interest_digest(messages: list[dict[str, str]], interests: list[str], max_items: int) -> dict[str, Any]:
+    interest_keywords = set()
+    for item in interests:
+        interest_keywords |= _extract_keywords(item)
+    if not interest_keywords:
+        interest_keywords = {"需求", "上线", "风险", "客户", "复盘"}
+
+    items: list[dict[str, Any]] = []
+    for message in messages:
+        text = message.get("text", "")
+        if not text:
+            continue
+        message_keywords = _extract_keywords(text)
+        overlap = len(interest_keywords & message_keywords)
+        if overlap <= 0:
+            continue
+        urgency_hit = any(keyword in text.lower() for keyword in URGENCY_KEYWORDS)
+        score = overlap * 20 + (30 if urgency_hit else 0)
+        items.append(
+            {
+                "message_id": message.get("message_id", ""),
+                "chat_id": message.get("chat_id", ""),
+                "summary": _trim(text, 120),
+                "score": score,
+                "create_time": message.get("create_time", ""),
+            }
+        )
+    items.sort(key=lambda item: (int(item.get("score", 0)), str(item.get("create_time", ""))), reverse=True)
+    return {
+        "interests": interests,
+        "items": items[:max_items],
+    }
+
+
+def _build_runtime_plan(schedule: dict[str, Any]) -> dict[str, Any]:
+    cron_jobs: list[dict[str, Any]] = []
+    cron_jobs.append(
+        {
+            "job_name": "assistant_weekly_brief",
+            "enabled": bool(schedule.get("weekly_enabled", True)),
+            "cron": str(schedule.get("weekly_brief_cron", "0 9 * * MON")),
+            "handler": "assistant build-personal-brief --online --output-format all",
+        }
+    )
+    cron_jobs.append(
+        {
+            "job_name": "assistant_nightly_interest_digest",
+            "enabled": bool(schedule.get("nightly_enabled", True)),
+            "cron": str(schedule.get("nightly_interest_cron", "0 21 * * *")),
+            "handler": "assistant build-personal-brief --online --output-format card",
+        }
+    )
+    return {
+        "cron_jobs": cron_jobs,
+        "manual_run": {
+            "enabled": bool(schedule.get("manual_supported", True)),
+            "command": "assistant build-personal-brief --online --output-format all",
+        },
+        "auth_requirement": "需要使用用户 OAuth 凭据，只读取用户有权限的数据。",
+    }
 
 
 def _is_recent(raw: str) -> bool:
@@ -296,18 +549,49 @@ def _trim(text: str, max_len: int) -> str:
     return value[: max_len - 1] + "…"
 
 
-def _to_markdown(documents: list[dict[str, Any]]) -> str:
-    lines = ["# 个人助理聚合简报", "", "## 文档优先级"]
+def _to_markdown(
+    documents: list[dict[str, Any]],
+    grouped_documents: list[dict[str, Any]],
+    profile: dict[str, Any],
+) -> str:
+    lines = ["# 个人助理聚合简报", ""]
+    role = str(profile.get("role") or "").strip()
+    persona = str(profile.get("persona") or "").strip()
+    if role or persona:
+        lines.append(f"> 画像：{role or '未设置角色'} / {persona or '未设置形象'}")
+        lines.append("")
+
+    lines.append("## 业务分类")
+    if not grouped_documents:
+        lines.append("- 暂无业务分类数据")
+    for group in grouped_documents:
+        business = str(group.get("business") or "General")
+        lines.append(f"### {business}")
+        for item in group.get("documents", [])[:5]:
+            lines.append(
+                f"- {'★' * int(item['urgency_stars'])}{'☆' * (5 - int(item['urgency_stars']))} "
+                f"[{item['doc_type']}] {item['title']}"
+            )
+            if item.get("url"):
+                lines.append(f"  - 链接: {item['url']}")
+            lines.append(f"  - 描述: {item['summary'] or '无'}")
+            if item["todo_items"]:
+                lines.append(f"  - 待办: {item['todo_items'][0]}")
+    lines.append("")
+    lines.append("## 文档优先级")
     if not documents:
         lines.append("- 暂无可推荐文档")
         return "\n".join(lines)
     for index, item in enumerate(documents, start=1):
         lines.append(
-            f"{index}. [{item['priority'].upper()}] {item['title']} "
+            f"{index}. {'★' * int(item['urgency_stars'])}{'☆' * (5 - int(item['urgency_stars']))} "
+            f"[{item['priority'].upper()}] {item['title']} "
             f"(紧急:{item['urgency_score']} 推荐:{item['recommend_score']})"
         )
         for reason in item["reasons"][:2]:
             lines.append(f"   - {reason}")
+        if item["todo_items"]:
+            lines.append(f"   - 待办: {item['todo_items'][0]}")
         if item["related_messages"]:
             lines.append(f"   - 相关消息: {item['related_messages'][0]['summary']}")
         if item["related_knowledge"]:
@@ -315,20 +599,44 @@ def _to_markdown(documents: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
-def _to_card(documents: list[dict[str, Any]]) -> dict[str, Any]:
+def _to_card(documents: list[dict[str, Any]], profile: dict[str, Any]) -> dict[str, Any]:
     content_lines: list[str] = []
     for item in documents[:5]:
         content_lines.append(
-            f"- **{item['priority'].upper()}** {item['title']} "
+            f"- {'★' * int(item['urgency_stars'])}{'☆' * (5 - int(item['urgency_stars']))} "
+            f"**{item['priority'].upper()}** [{item['business']}] {item['title']} "
             f"(紧急:{item['urgency_score']} 推荐:{item['recommend_score']})"
         )
     if not content_lines:
         content_lines = ["- 暂无可推荐文档"]
+    role = str(profile.get("role") or "").strip()
+    persona = str(profile.get("persona") or "").strip()
+    subtitle = f"{role} / {persona}".strip(" /")
     return {
         "config": {"wide_screen_mode": True},
         "header": {
             "template": "turquoise",
             "title": {"tag": "plain_text", "content": "个人助理聚合建议"},
+            "subtitle": {"tag": "plain_text", "content": subtitle or "业务聚合"},
         },
         "elements": [{"tag": "markdown", "content": "\n".join(content_lines)}],
+    }
+
+
+def _to_interest_card(interest_digest: dict[str, Any], profile: dict[str, Any]) -> dict[str, Any]:
+    lines: list[str] = []
+    for item in interest_digest.get("items", [])[:5]:
+        lines.append(f"- {item.get('summary', '')}")
+    if not lines:
+        lines.append("- 暂无命中兴趣的群聊内容")
+    interests = profile.get("interests", [])
+    interests_text = "、".join(interests[:4]) if interests else "未设置兴趣词"
+    return {
+        "config": {"wide_screen_mode": True},
+        "header": {
+            "template": "blue",
+            "title": {"tag": "plain_text", "content": "群聊兴趣消息汇总"},
+            "subtitle": {"tag": "plain_text", "content": f"兴趣词: {interests_text}"},
+        },
+        "elements": [{"tag": "markdown", "content": "\n".join(lines)}],
     }

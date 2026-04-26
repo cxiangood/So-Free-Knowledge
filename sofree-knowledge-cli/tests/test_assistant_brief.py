@@ -34,7 +34,26 @@ def test_build_personal_brief_ranks_docs_with_urgency_and_recommend():
     assert report["documents"][0]["related_knowledge"]
 
 
-def test_build_personal_brief_outputs_doc_and_card():
-    report = build_personal_brief(documents=[{"doc_id": "d1", "title": "测试文档", "summary": "摘要"}])
+def test_build_personal_brief_outputs_doc_card_interest_and_schedule():
+    report = build_personal_brief(
+        documents=[{"doc_id": "d1", "title": "测试文档", "summary": "待办：今晚完成"}],
+        messages=[{"message_id": "m1", "chat_id": "oc_x", "content": "客户需求今晚截止"}],
+        user_profile={
+            "persona": "产品经理",
+            "role": "PM",
+            "businesses": ["A增长", "B交付"],
+            "interests": ["客户", "需求"],
+        },
+        schedule={
+            "mode": "hybrid",
+            "weekly_brief_cron": "0 10 * * MON",
+            "nightly_interest_cron": "0 21 * * *",
+        },
+    )
+
     assert report["doc_markdown"].startswith("# 个人助理聚合简报")
     assert report["card"]["header"]["title"]["content"] == "个人助理聚合建议"
+    assert report["interest_card"]["header"]["title"]["content"] == "群聊兴趣消息汇总"
+    assert report["documents"][0]["urgency_stars"] >= 1
+    assert report["schedule"]["mode"] == "hybrid"
+    assert report["runtime_plan"]["cron_jobs"][0]["job_name"] == "assistant_weekly_brief"
