@@ -253,6 +253,9 @@ def test_assistant_push_defaults_to_personal_open_id(monkeypatch, tmp_path, caps
     assert calls[0]["receive_id_type"] == "open_id"
     assert calls[0]["receive_id"] == "ou_self"
     assert out["meta"]["push"]["receive_id_type"] == "open_id"
+    assert len(calls) == 2
+    assert out["meta"]["push"]["summary_enabled"] is True
+    assert out["meta"]["push"]["interest_enabled"] is True
 
 
 def test_assistant_push_explicit_chat_id_overrides_personal(monkeypatch, tmp_path, capsys):
@@ -334,6 +337,43 @@ def test_assistant_push_card_also_pushes_interest_card(monkeypatch, tmp_path, ca
     assert code == 0
     assert out["ok"] is True
     assert len(calls) == 2
+    assert out["meta"]["push"]["interest_enabled"] is True
+
+
+def test_assistant_push_both_cards_requested_keeps_single_card(monkeypatch, tmp_path, capsys):
+    calls: list[dict[str, str]] = []
+
+    class FakeClient:
+        def send_message(self, receive_id, msg_type, content, receive_id_type="chat_id"):
+            calls.append({"receive_id": receive_id, "receive_id_type": receive_id_type, "msg_type": msg_type})
+            return {"message_id": f"om_{len(calls)}", "chat_id": receive_id, "msg_type": msg_type}
+
+    monkeypatch.setattr(cli_module, "FeishuClient", lambda: FakeClient())
+    monkeypatch.setattr(cli_module, "get_user_identity", lambda token_file=None: {"open_id": "ou_self"})
+
+    documents_file = tmp_path / "documents.json"
+    documents_file.write_text(
+        json.dumps([{"doc_id": "d1", "title": "发布流程", "summary": "审批后发布"}], ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    code = main(
+        [
+            "assistant",
+            "build-personal-brief",
+            "--documents-file",
+            str(documents_file),
+            "--push",
+            "--push-summary-card",
+            "--push-interest-card",
+        ]
+    )
+
+    out = json.loads(capsys.readouterr().out)
+    assert code == 0
+    assert out["ok"] is True
+    assert len(calls) == 2
+    assert out["meta"]["push"]["summary_enabled"] is True
     assert out["meta"]["push"]["interest_enabled"] is True
 
 

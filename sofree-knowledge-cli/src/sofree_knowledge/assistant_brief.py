@@ -73,6 +73,8 @@ INTEREST_NOISE_PATTERNS = (
     "我没办法直接帮你",
     "可以和我说说",
     "我是有什么问题",
+    '"json_card"',
+    "{\\\"json_card\\\"",
 )
 
 
@@ -183,10 +185,18 @@ def _normalize_message(item: dict[str, Any]) -> dict[str, str]:
     text = item.get("text")
     if text is None:
         text = item.get("content", "")
+    summary_text = (
+        item.get("openclaw_summary")
+        or item.get("paraphrase")
+        or item.get("summary_text")
+        or item.get("summary")
+        or ""
+    )
     return {
         "message_id": str(item.get("message_id") or item.get("id") or ""),
         "chat_id": str(item.get("chat_id") or ""),
         "text": str(text or ""),
+        "summary_text": str(summary_text or ""),
         "create_time": str(item.get("create_time") or item.get("timestamp") or ""),
     }
 
@@ -496,10 +506,12 @@ def _build_interest_digest(messages: list[dict[str, str]], interests: list[str],
     items: list[dict[str, Any]] = []
     dedupe_summary: set[str] = set()
     for message in messages:
-        text = message.get("text", "")
-        if not text:
+        raw_text = message.get("text", "")
+        summary_text = message.get("summary_text", "")
+        base_text = summary_text or raw_text
+        if not base_text:
             continue
-        normalized_text = _normalize_interest_text(text)
+        normalized_text = _normalize_interest_text(base_text)
         if _is_noise_interest_text(normalized_text):
             continue
         hit_terms = [term for term in interest_terms if term in normalized_text.lower()]
@@ -509,7 +521,10 @@ def _build_interest_digest(messages: list[dict[str, str]], interests: list[str],
         urgency_hit = any(keyword in normalized_text.lower() for keyword in URGENCY_KEYWORDS)
         if len(hit_terms) < 2 and signal_hits <= 0 and not urgency_hit:
             continue
-        summary = _trim(normalized_text, 120)
+        rewritten = _rewrite_interest_summary(normalized_text, hit_terms=hit_terms)
+        if not rewritten:
+            continue
+        summary = _trim(rewritten, 120)
         if summary in dedupe_summary:
             continue
         dedupe_summary.add(summary)
@@ -520,6 +535,10 @@ def _build_interest_digest(messages: list[dict[str, str]], interests: list[str],
                 "chat_id": message.get("chat_id", ""),
                 "summary": summary,
                 "hit_terms": hit_terms[:5],
+                "message_url": _build_lark_message_url(
+                    chat_id=str(message.get("chat_id", "")),
+                    message_id=str(message.get("message_id", "")),
+                ),
                 "score": score,
                 "create_time": message.get("create_time", ""),
             }
@@ -539,11 +558,54 @@ def _is_noise_interest_text(text: str) -> bool:
     lowered = text.lower()
     if len(lowered) < 6:
         return True
+    if _looks_like_bot_prompt(lowered):
+        return True
     if "\ncommand:" in lowered:
         return True
     if lowered.startswith("command:"):
         return True
+    if "要求如下" in lowered and "1." in lowered and "2." in lowered:
+        return True
     return any(pattern in lowered for pattern in INTEREST_NOISE_PATTERNS)
+
+
+def _looks_like_bot_prompt(lowered: str) -> bool:
+    if lowered.startswith("@sofree") and ("请生成" in lowered or "要求如下" in lowered):
+        return True
+    if lowered.startswith("@_user_") and ("可以从几个维度讨论" in lowered or "口味偏好" in lowered):
+        return True
+    if lowered.startswith("@") and "1." in lowered and "2." in lowered and "3." in lowered and len(lowered) > 80:
+        return True
+    return False
+
+
+def _rewrite_interest_summary(text: str, hit_terms: list[str]) -> str:
+    value = str(text or "").strip()
+    if not value:
+        return ""
+    value = re.sub(r"@\S+", "", value)
+    value = re.sub(r"\{.*?json_card.*?\}", "", value, flags=re.IGNORECASE)
+    value = re.sub(r"\s+", " ", value).strip()
+    if not value:
+        return ""
+    if "要求如下" in value:
+        value = value.split("要求如下", 1)[0].strip("：:，, ")
+    segments = [seg.strip() for seg in re.split(r"[。！？!?\n；;]", value) if seg.strip()]
+    if not segments:
+        return ""
+    preferred = ""
+    for seg in segments:
+        lowered = seg.lower()
+        if any(term in lowered for term in hit_terms):
+            preferred = seg
+            break
+    if not preferred:
+        preferred = segments[0]
+    preferred = re.sub(r"^\d+\.\s*", "", preferred)
+    preferred = re.sub(r"^(请|帮我|生成|安排)", "", preferred).strip()
+    if not preferred:
+        return ""
+    return preferred
 
 
 def _build_runtime_plan(schedule: dict[str, Any]) -> dict[str, Any]:
@@ -572,6 +634,16 @@ def _build_runtime_plan(schedule: dict[str, Any]) -> dict[str, Any]:
         },
         "auth_requirement": "需要使用用户 OAuth 凭据，只读取用户有权限的数据。",
     }
+
+
+def _build_lark_message_url(chat_id: str, message_id: str) -> str:
+    normalized_chat_id = str(chat_id or "").strip()
+    normalized_message_id = str(message_id or "").strip()
+    if not normalized_chat_id:
+        return ""
+    if normalized_message_id:
+        return f"https://applink.feishu.cn/client/chat/{normalized_chat_id}?openMessageId={normalized_message_id}"
+    return f"https://applink.feishu.cn/client/chat/{normalized_chat_id}"
 
 
 def _is_recent(raw: str) -> bool:
@@ -654,9 +726,14 @@ def _to_markdown(
 def _to_card(documents: list[dict[str, Any]], profile: dict[str, Any]) -> dict[str, Any]:
     content_lines: list[str] = []
     for item in documents[:5]:
+        title = (
+            f"<a href='{item['url']}'>{item['title']}</a>"
+            if item.get("url")
+            else item["title"]
+        )
         content_lines.append(
             f"- {'★' * int(item['urgency_stars'])}{'☆' * (5 - int(item['urgency_stars']))} "
-            f"**{item['priority'].upper()}** [{item['business']}] {item['title']} "
+            f"**{item['priority'].upper()}** [{item['business']}] {title} "
             f"(紧急:{item['urgency_score']} 推荐:{item['recommend_score']})"
         )
     if not content_lines:
@@ -678,7 +755,16 @@ def _to_card(documents: list[dict[str, Any]], profile: dict[str, Any]) -> dict[s
 def _to_interest_card(interest_digest: dict[str, Any], profile: dict[str, Any]) -> dict[str, Any]:
     lines: list[str] = []
     for item in interest_digest.get("items", [])[:5]:
-        lines.append(f"- {item.get('summary', '')}")
+        summary = str(item.get("summary", "") or "").strip()
+        message_url = str(item.get("message_url", "") or "").strip()
+        hit_terms = item.get("hit_terms", [])
+        hit_label = ""
+        if isinstance(hit_terms, list) and hit_terms:
+            hit_label = f"（命中: {'+'.join(str(term) for term in hit_terms[:3])}）"
+        if message_url:
+            lines.append(f"- <a href='{message_url}'>{summary}</a>{hit_label}")
+        else:
+            lines.append(f"- {summary}{hit_label}")
     if not lines:
         lines.append("- 暂无命中兴趣的群聊内容")
     interests = profile.get("interests", [])

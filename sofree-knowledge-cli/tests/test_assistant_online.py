@@ -81,6 +81,22 @@ def test_collect_online_personal_inputs_filters_noise_messages(monkeypatch):
                         "sender": {"sender_id": {"open_id": "ou_target"}},
                         "body": {"content": '{"text":"客户需求变更，今晚上线风险较高"}'},
                     },
+                    {
+                        "message_id": "n3",
+                        "chat_id": chat_id,
+                        "msg_type": "text",
+                        "create_time": "1710000002",
+                        "sender": {"sender_id": {"open_id": "ou_target"}},
+                        "body": {"content": '{"text":"{\\"json_card\\":\\"...\\",\\"meta\\":{}}"}'},
+                    },
+                    {
+                        "message_id": "n4",
+                        "chat_id": chat_id,
+                        "msg_type": "text",
+                        "create_time": "1710000003",
+                        "sender": {"sender_id": {"open_id": "ou_target"}},
+                        "body": {"content": '{"text":"@SoFree 请生成一份午饭计划，要求如下：1. 2. 3."}'},
+                    },
                 ],
                 "has_more": False,
                 "page_token": "",
@@ -99,6 +115,8 @@ def test_collect_online_personal_inputs_filters_noise_messages(monkeypatch):
     message_ids = [item.get("message_id") for item in out["messages"]]
     assert "n1" not in message_ids
     assert "n2" in message_ids
+    assert "n3" not in message_ids
+    assert "n4" not in message_ids
 
 
 def test_collect_online_personal_inputs_applies_recent_days(monkeypatch):

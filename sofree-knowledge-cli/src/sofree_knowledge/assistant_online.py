@@ -22,6 +22,8 @@ _MESSAGE_NOISE_PATTERNS = (
     "output_format:",
     "我没办法直接帮你",
     "可以和我说说具体情况",
+    '"json_card"',
+    "{\\\"json_card\\\"",
 )
 
 
@@ -288,11 +290,23 @@ def _is_noise_message_text(text: str) -> bool:
     lowered = str(text or "").lower().strip()
     if not lowered:
         return True
+    if _looks_like_bot_prompt(lowered):
+        return True
     if lowered.startswith("command:"):
         return True
     if lowered.startswith("[plan_command]"):
         return True
     return any(pattern in lowered for pattern in _MESSAGE_NOISE_PATTERNS)
+
+
+def _looks_like_bot_prompt(lowered: str) -> bool:
+    if lowered.startswith("@sofree") and ("请生成" in lowered or "要求如下" in lowered):
+        return True
+    if lowered.startswith("@_user_") and ("可以从几个维度讨论" in lowered or "口味偏好" in lowered):
+        return True
+    if lowered.startswith("@") and "1." in lowered and "2." in lowered and "3." in lowered and len(lowered) > 80:
+        return True
+    return False
 
 
 def _is_within_recent_days(raw: str, recent_days: int) -> bool:

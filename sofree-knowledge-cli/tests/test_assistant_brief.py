@@ -72,3 +72,47 @@ def test_interest_digest_filters_noise_messages():
     items = report["interest_digest"]["items"]
     assert len(items) == 1
     assert items[0]["message_id"] == "m3"
+
+
+def test_interest_digest_uses_rewritten_summary_instead_of_raw_prompt():
+    report = build_personal_brief(
+        documents=[{"doc_id": "d1", "title": "发布计划", "summary": "今晚发布"}],
+        messages=[
+            {
+                "message_id": "m9",
+                "chat_id": "oc_x",
+                "content": "@SoFree 请生成一份午饭计划，要求如下：1. 包含3-5个选项 2. 给做法 3. 给营养亮点",
+                "openclaw_summary": "午饭计划需求：需要3-5个健康菜品并附做法与营养亮点",
+            }
+        ],
+        user_profile={"interests": ["需求", "客户"]},
+    )
+    items = report["interest_digest"]["items"]
+    assert len(items) == 1
+    assert "要求如下" not in items[0]["summary"]
+    assert "午饭计划需求" in items[0]["summary"]
+
+
+def test_summary_card_contains_hyperlink_when_url_available():
+    report = build_personal_brief(
+        documents=[
+            {
+                "doc_id": "d1",
+                "title": "Release Plan",
+                "summary": "Plan summary",
+                "url": "https://foo.feishu.cn/docx/abc123",
+            }
+        ]
+    )
+    content = report["card"]["elements"][0]["content"]
+    assert "<a href='https://foo.feishu.cn/docx/abc123'>Release Plan</a>" in content
+
+
+def test_interest_card_contains_message_hyperlink():
+    report = build_personal_brief(
+        documents=[{"doc_id": "d1", "title": "Release Plan", "summary": "Plan summary"}],
+        messages=[{"message_id": "om_1", "chat_id": "oc_test", "content": "客户需求今晚截止，有上线风险"}],
+        user_profile={"interests": ["需求", "上线", "风险", "客户"]},
+    )
+    content = report["interest_card"]["elements"][0]["content"]
+    assert "<a href='https://applink.feishu.cn/client/chat/oc_test?openMessageId=om_1'>" in content

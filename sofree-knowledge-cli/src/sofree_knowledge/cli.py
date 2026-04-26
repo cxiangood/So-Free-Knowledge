@@ -226,8 +226,8 @@ def build_parser() -> argparse.ArgumentParser:
     assistant_build.add_argument("--weekly-enabled", action=argparse.BooleanOptionalAction, default=None)
     assistant_build.add_argument("--nightly-enabled", action=argparse.BooleanOptionalAction, default=None)
     assistant_build.add_argument("--push", action="store_true", help="Push assistant result to Feishu.")
-    assistant_build.add_argument("--push-interest-card", action=argparse.BooleanOptionalAction, default=None, help="Whether to also push interest digest card.")
-    assistant_build.add_argument("--push-summary-card", action=argparse.BooleanOptionalAction, default=False, help="Whether to also push summary card.")
+    assistant_build.add_argument("--push-interest-card", action=argparse.BooleanOptionalAction, default=True, help="Whether to push interest digest card.")
+    assistant_build.add_argument("--push-summary-card", action=argparse.BooleanOptionalAction, default=True, help="Whether to push summary card.")
     assistant_build.add_argument("--receive-chat-id", default="", help="Explicit target chat_id for push. If set, push to group chat.")
     assistant_build.add_argument("--receive-open-id", default="", help="Explicit target open_id for push. Used when --receive-chat-id is empty.")
     assistant_build.add_argument("--output-format", choices=["all", "json", "doc", "card"], default="all")
@@ -831,24 +831,19 @@ def cmd_assistant_build_personal_brief(args: argparse.Namespace) -> dict[str, An
     if args.push:
         receive_id_type, receive_id = resolve_push_target(args, resolved_target_user_id=resolved_target_user_id)
         client = FeishuClient()
-        doc_push_result = client.send_message(
-            receive_id=receive_id,
-            receive_id_type=receive_id_type,
-            msg_type="text",
-            content={"text": report["doc_markdown"]},
-        )
-        push_interest_card = args.push_interest_card
-        if push_interest_card is None:
-            push_interest_card = args.output_format in {"card", "all"}
+        push_summary_card = bool(args.push_summary_card)
+        push_interest_card = bool(args.push_interest_card)
+        if not push_summary_card and not push_interest_card:
+            push_interest_card = True
         summary_push_result: dict[str, Any] | None = None
-        if args.push_summary_card:
+        interest_push_result: dict[str, Any] | None = None
+        if push_summary_card:
             summary_push_result = client.send_message(
                 receive_id=receive_id,
                 receive_id_type=receive_id_type,
                 msg_type="interactive",
                 content=report["card"],
             )
-        interest_push_result: dict[str, Any] | None = None
         if push_interest_card:
             interest_push_result = client.send_message(
                 receive_id=receive_id,
@@ -860,9 +855,8 @@ def cmd_assistant_build_personal_brief(args: argparse.Namespace) -> dict[str, An
             "enabled": True,
             "receive_id_type": receive_id_type,
             "receive_id": receive_id,
-            "doc_message_id": doc_push_result.get("message_id", ""),
-            "chat_id": doc_push_result.get("chat_id", ""),
-            "summary_enabled": bool(args.push_summary_card),
+            "chat_id": (summary_push_result or interest_push_result or {}).get("chat_id", ""),
+            "summary_enabled": bool(push_summary_card),
             "summary_message_id": (summary_push_result or {}).get("message_id", ""),
             "interest_enabled": bool(push_interest_card),
             "interest_message_id": (interest_push_result or {}).get("message_id", ""),
