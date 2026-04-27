@@ -36,3 +36,9 @@ python -m local_pipeline route --messages-file ... --enable-llm true
 python -m local_pipeline simulate --state-dir outputs/local_pipeline/state --task-updates-file task_updates.jsonl
 python -m local_pipeline report --run-dir outputs/local_pipeline/<run_id>
 ```
+
+监听飞书消息（OpenAPI WebSocket）：
+
+```bash
+python -m local_pipeline listen-messages --env-file .env --compact true --print-events true
+```

@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 
 from .io_utils import read_json
+from .listener_service import run_listener_service
 from .pipeline import PipelineConfig, run_pipeline
 from .report import render_markdown_report
 from .stores import LocalStateStore
@@ -105,6 +106,12 @@ def cmd_report(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_listen_messages(args: argparse.Namespace) -> int:
+    payload = run_listener_service(args)
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="local-pipeline", description="Local closed-loop simulation pipeline")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -152,12 +159,23 @@ def build_parser() -> argparse.ArgumentParser:
     report_parser = sub.add_parser("report", help="Render markdown report from a run directory")
     report_parser.add_argument("--run-dir", required=True)
     report_parser.set_defaults(func=cmd_report)
+
+    listen_parser = sub.add_parser("listen-messages", help="Listen to Feishu message events via OpenAPI websocket")
+    listen_parser.add_argument("--env-file", default="")
+    listen_parser.add_argument("--event-types", default="im.message.receive_v1")
+    listen_parser.add_argument("--compact", default="true")
+    listen_parser.add_argument("--print-events", default="true")
+    listen_parser.set_defaults(func=cmd_listen_messages)
     return parser
 
 
 def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
+    if hasattr(args, "compact"):
+        args.compact = _parse_bool(str(args.compact))
+    if hasattr(args, "print_events"):
+        args.print_events = _parse_bool(str(args.print_events))
     return int(args.func(args))
 
 
