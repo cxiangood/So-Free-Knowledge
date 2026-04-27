@@ -34,6 +34,7 @@ from .lingo_context import (
 )
 from .lingo_store import LingoStore
 from .policy import KnowledgePolicyStore, VALID_SCOPES
+from . import wikisheet as wikisheet_module
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -232,6 +233,67 @@ def build_parser() -> argparse.ArgumentParser:
     assistant_build.add_argument("--receive-open-id", default="", help="Explicit target open_id for push. Used when --receive-chat-id is empty.")
     assistant_build.add_argument("--output-format", choices=["all", "json", "doc", "card"], default="all")
     assistant_build.set_defaults(func=cmd_assistant_build_personal_brief)
+
+    # Wiki sheet commands
+    wikisheet = subparsers.add_parser("wikisheet", help="Wiki sheet operations.")
+    wikisheet_subparsers = wikisheet.add_subparsers(dest="wikisheet_command")
+
+    ws_create = wikisheet_subparsers.add_parser("create-sheet", help="Create a sheet node in Wiki.")
+    ws_create.add_argument("--title", required=True, help="Sheet title.")
+    ws_create.add_argument("--space-id", default="", help="Wiki space id. Supports literal 'my_library'.")
+    ws_create.add_argument("--parent-node-token", default="", help="Create under this parent wiki node token.")
+    ws_create.add_argument(
+        "--identity",
+        choices=["user", "bot", "auto"],
+        default="auto",
+        help="Token identity for API calls (default: auto, prefer user token).",
+    )
+    ws_create.set_defaults(func=wikisheet_module.cmd_create_sheet)
+
+    ws_append = wikisheet_subparsers.add_parser("append-data", help="Append rows to a sheet.")
+    ws_append.add_argument("--spreadsheet-token", required=True, help="Spreadsheet token.")
+    ws_append.add_argument("--range", required=True, help="Target range, e.g. <sheetId>!A1 or <sheetId>!A1:D10.")
+    ws_append.add_argument("--values", required=True, help="2D JSON array.")
+    ws_append.add_argument(
+        "--identity",
+        choices=["user", "bot", "auto"],
+        default="auto",
+        help="Token identity for API calls (default: auto, prefer user token).",
+    )
+    ws_append.set_defaults(func=wikisheet_module.cmd_append_data)
+
+    ws_update = wikisheet_subparsers.add_parser("update-data", help="Overwrite values in a range.")
+    ws_update.add_argument("--spreadsheet-token", required=True, help="Spreadsheet token.")
+    ws_update.add_argument("--range", required=True, help="Target range, e.g. <sheetId>!A1:D10.")
+    ws_update.add_argument("--values", required=True, help="2D JSON array.")
+    ws_update.add_argument(
+        "--identity",
+        choices=["user", "bot", "auto"],
+        default="auto",
+        help="Token identity for API calls (default: auto, prefer user token).",
+    )
+    ws_update.set_defaults(func=wikisheet_module.cmd_update_data)
+
+    ws_delete_data = wikisheet_subparsers.add_parser("delete-data", help="Delete data in a range (clear values).")
+    ws_delete_data.add_argument("--spreadsheet-token", required=True, help="Spreadsheet token.")
+    ws_delete_data.add_argument("--range", required=True, help="Target range, e.g. <sheetId>!A1:D10.")
+    ws_delete_data.add_argument(
+        "--identity",
+        choices=["user", "bot", "auto"],
+        default="auto",
+        help="Token identity for API calls (default: auto, prefer user token).",
+    )
+    ws_delete_data.set_defaults(func=wikisheet_module.cmd_delete_data)
+
+    ws_delete_sheet = wikisheet_subparsers.add_parser("delete-sheet", help="Delete the spreadsheet file.")
+    ws_delete_sheet.add_argument("--spreadsheet-token", required=True, help="Spreadsheet token.")
+    ws_delete_sheet.add_argument(
+        "--identity",
+        choices=["user", "bot", "auto"],
+        default="auto",
+        help="Token identity for API calls (default: auto, prefer user token).",
+    )
+    ws_delete_sheet.set_defaults(func=wikisheet_module.cmd_delete_sheet)
 
     return parser
 
