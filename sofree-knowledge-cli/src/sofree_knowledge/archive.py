@@ -4,6 +4,7 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from .feishu_client import FeishuClient
 
@@ -145,9 +146,11 @@ def normalize_chat_message(item: dict[str, Any], fallback_chat_id: str = "") -> 
     sender = item.get("sender", {})
     if not isinstance(sender, dict):
         sender = {}
+    message_id = str(item.get("message_id", ""))
+    chat_id = str(item.get("chat_id") or fallback_chat_id)
     return {
-        "message_id": str(item.get("message_id", "")),
-        "chat_id": str(item.get("chat_id") or fallback_chat_id),
+        "message_id": message_id,
+        "chat_id": chat_id,
         "thread_id": str(item.get("thread_id", "")),
         "root_id": str(item.get("root_id", "")),
         "parent_id": str(item.get("parent_id", "")),
@@ -160,8 +163,22 @@ def normalize_chat_message(item: dict[str, Any], fallback_chat_id: str = "") -> 
         "content": extract_message_text(raw_content),
         "raw_content": raw_content,
         "mentions": item.get("mentions", []) if isinstance(item.get("mentions", []), list) else [],
+        "message_url": build_message_url(chat_id=chat_id, message_id=message_id),
         "raw": item,
     }
+
+
+def build_message_url(chat_id: str, message_id: str) -> str:
+    normalized_chat_id = str(chat_id or "").strip()
+    normalized_message_id = str(message_id or "").strip()
+    if not normalized_chat_id or not normalized_message_id:
+        return ""
+    encoded_chat_id = quote(normalized_chat_id, safe="")
+    encoded_message_id = quote(normalized_message_id, safe="")
+    return (
+        "https://applink.feishu.cn/client/chat/open?"
+        f"chatId={encoded_chat_id}&openChatId={encoded_chat_id}&openMessageId={encoded_message_id}"
+    )
 
 
 def extract_message_text(raw_content: str) -> str:

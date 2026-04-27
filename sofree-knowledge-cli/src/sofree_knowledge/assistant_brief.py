@@ -264,6 +264,16 @@ def _extract_message_sender_name(item: dict[str, Any]) -> str:
             value = str(sender.get(key) or "").strip()
             if value:
                 return value
+        sender_id = sender.get("sender_id")
+        if isinstance(sender_id, dict):
+            for key in ("open_id", "user_id", "union_id"):
+                value = str(sender_id.get(key) or "").strip()
+                if value:
+                    return value
+        for key in ("id", "open_id", "user_id"):
+            value = str(sender.get(key) or "").strip()
+            if value:
+                return value
     return ""
 
 
@@ -648,7 +658,6 @@ def _normalize_interest_text(text: str) -> str:
 
 
 def _resolve_message_url(message: dict[str, Any]) -> str:
-    # Only trust explicit deep-link URL from upstream enrichment.
     for key in ("message_url", "open_message_url", "deep_link", "link"):
         value = str(message.get(key) or "").strip()
         if value.startswith("http://") or value.startswith("https://"):
@@ -812,6 +821,9 @@ def _strip_interest_artifacts(text: str) -> str:
     value = re.sub(r"[（(]\s*命中\s*[:：][^)）]*[)）]", "", value, flags=re.IGNORECASE)
     # Remove generated refs like: [chat:xxx | msg:yyy]
     value = re.sub(r"\[\s*chat:[^\]]*msg:[^\]]*\]", "", value, flags=re.IGNORECASE)
+    # Remove isolated chat/msg tags if they appear alone.
+    value = re.sub(r"\bchat:[A-Za-z0-9_]+\b", "", value, flags=re.IGNORECASE)
+    value = re.sub(r"\bmsg:[A-Za-z0-9_]+\b", "", value, flags=re.IGNORECASE)
     return value.strip()
 
 
@@ -967,7 +979,7 @@ def _to_card(documents: list[dict[str, Any]], profile: dict[str, Any]) -> dict[s
 def _to_interest_card(interest_digest: dict[str, Any], profile: dict[str, Any]) -> dict[str, Any]:
     lines: list[str] = []
     for item in interest_digest.get("items", [])[:5]:
-        summary = str(item.get("summary", "") or "").strip()
+        summary = _strip_interest_artifacts(str(item.get("summary", "") or "").strip())
         sender_name = str(item.get("sender_name", "") or "").strip()
         from_label = f"（From：{sender_name}）" if sender_name else ""
         message_url = str(item.get("message_url", "") or "").strip()

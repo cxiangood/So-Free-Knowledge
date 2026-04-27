@@ -155,7 +155,7 @@ def test_collect_online_personal_inputs_builds_message_url_when_user_chat_visibl
     assert "openMessageId=m1" in message_url
 
 
-def test_collect_online_personal_inputs_does_not_build_message_url_without_user_token(monkeypatch):
+def test_collect_online_personal_inputs_builds_message_url_without_user_token(monkeypatch):
     monkeypatch.setattr("sofree_knowledge.assistant_online.get_user_identity", lambda token_file=None: {"open_id": "ou_target"})
     out = collect_online_personal_inputs(
         client=FakeClient(),
@@ -167,4 +167,6 @@ def test_collect_online_personal_inputs_does_not_build_message_url_without_user_
         recent_days=3650,
     )
     assert out["messages"]
-    assert str(out["messages"][0].get("message_url") or "") == ""
+    message_url = str(out["messages"][0].get("message_url") or "")
+    assert message_url.startswith("https://applink.feishu.cn/client/chat/open?")
+    assert "openMessageId=m1" in message_url
