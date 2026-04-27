@@ -137,6 +137,21 @@ def test_interest_digest_blocks_openclaw_garbage_message():
     assert report["interest_digest"]["items"] == []
 
 
+def test_interest_digest_blocks_negative_context_without_openclaw_flags():
+    report = build_personal_brief(
+        documents=[{"doc_id": "d1", "title": "Release", "summary": "Plan summary"}],
+        messages=[
+            {
+                "message_id": "om_x100b518c",
+                "chat_id": "oc_f482e00e55461a4d343f21334c9a96d7",
+                "content": "若继续发布此类违规内容，将无法为你提供后续服务（命中: 发布） [chat:oc_f482e00e55461a4d343f21334c9a96d7 | msg:om_x100b518c]",
+            }
+        ],
+        user_profile={"interests": ["发布", "上线"]},
+    )
+    assert report["interest_digest"]["items"] == []
+
+
 def test_interest_card_uses_chat_open_applink_with_message_id():
     report = build_personal_brief(
         documents=[{"doc_id": "d1", "title": "Release Plan", "summary": "Plan summary"}],

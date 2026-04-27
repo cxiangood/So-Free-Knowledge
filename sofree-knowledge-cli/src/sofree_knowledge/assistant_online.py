@@ -4,6 +4,7 @@ import re
 from collections import Counter
 from datetime import datetime, timezone
 from typing import Any
+from urllib.parse import quote
 from urllib.parse import urlparse
 
 from .archive import list_chat_messages, list_visible_chats, split_chat_ids
@@ -45,11 +46,13 @@ def collect_online_personal_inputs(
         resolved_target = str(identity.get("open_id") or identity.get("user_id") or "").strip()
 
     chats_by_id: dict[str, dict[str, Any]] = {}
+    user_visible_chat_ids: set[str] = set()
     if include_visible_chats:
         for chat in list_visible_chats(client, max_items=max_chats):
             chat_id = str(chat.get("chat_id") or "").strip()
             if chat_id:
                 chats_by_id[chat_id] = chat
+                user_visible_chat_ids.add(chat_id)
 
     for chat_id in split_chat_ids(chat_ids):
         chats_by_id.setdefault(chat_id, {"chat_id": chat_id, "name": "", "chat_mode": "unknown"})
@@ -81,6 +84,11 @@ def collect_online_personal_inputs(
                     "text": text,
                     "create_time": msg.get("create_time", ""),
                     "sender": msg.get("sender", {}),
+                    "message_url": _resolve_online_message_url(
+                        message=msg,
+                        user_visible_chat_ids=user_visible_chat_ids,
+                        has_user_token=bool(getattr(client, "user_access_token", None)),
+                    ),
                 }
             )
 
@@ -332,3 +340,28 @@ def _is_within_recent_days(raw: str, recent_days: int) -> bool:
         except ValueError:
             return True
     return (now - dt).total_seconds() <= days * 24 * 3600
+
+
+def _resolve_online_message_url(
+    message: dict[str, Any],
+    user_visible_chat_ids: set[str],
+    has_user_token: bool,
+) -> str:
+    for key in ("message_url", "open_message_url", "deep_link", "link"):
+        value = str(message.get(key) or "").strip()
+        if value.startswith("http://") or value.startswith("https://"):
+            return value
+    chat_id = str(message.get("chat_id") or "").strip()
+    message_id = str(message.get("message_id") or "").strip()
+    if not chat_id or not message_id:
+        return ""
+    if not has_user_token:
+        return ""
+    if user_visible_chat_ids and chat_id not in user_visible_chat_ids:
+        return ""
+    encoded_chat_id = quote(chat_id, safe="")
+    encoded_message_id = quote(message_id, safe="")
+    return (
+        "https://applink.feishu.cn/client/chat/open?"
+        f"chatId={encoded_chat_id}&openChatId={encoded_chat_id}&openMessageId={encoded_message_id}"
+    )

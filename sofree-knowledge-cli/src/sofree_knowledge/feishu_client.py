@@ -32,12 +32,23 @@ class FeishuClient:
         params: dict[str, Any] = {"user_id_type": "open_id", "page_size": min(max(page_size, 1), 100)}
         if page_token:
             params["page_token"] = page_token
-        data = self.request(
-            "GET",
-            "/open-apis/im/v1/chats",
-            access_token=self.get_tenant_access_token(),
-            params=params,
-        )
+        if self.user_access_token:
+            try:
+                data = self.request("GET", "/open-apis/im/v1/chats", params=params)
+            except FeishuAPIError:
+                data = self.request(
+                    "GET",
+                    "/open-apis/im/v1/chats",
+                    access_token=self.get_tenant_access_token(),
+                    params=params,
+                )
+        else:
+            data = self.request(
+                "GET",
+                "/open-apis/im/v1/chats",
+                access_token=self.get_tenant_access_token(),
+                params=params,
+            )
         body = data.get("data", data)
         return {
             "items": body.get("items", []),

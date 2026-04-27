@@ -62,6 +62,15 @@ INTEREST_SIGNAL_KEYWORDS = (
     "待办",
 )
 
+INTEREST_NEGATIVE_CONTEXT_PATTERNS = (
+    "若继续发布此类违规内容",
+    "无法为你提供后续服务",
+    "违规内容",
+    "处罚提醒",
+    "系统处罚",
+    "内容审核",
+)
+
 OPENCLAW_POSITIVE_LABEL_HINTS = (
     "interest",
     "relevant",
@@ -569,6 +578,8 @@ def _build_interest_digest(messages: list[dict[str, Any]], interests: list[str],
         if not base_text:
             continue
         normalized_text = _normalize_interest_text(base_text)
+        if _contains_interest_negative_context(normalized_text):
+            continue
         if _is_noise_interest_text(normalized_text):
             continue
         mention_signal = _mention_signal_text(raw_text or base_text)
@@ -619,10 +630,7 @@ def _build_interest_digest(messages: list[dict[str, Any]], interests: list[str],
                 "summary": summary,
                 "hit_terms": hit_terms[:5],
                 "openclaw_importance": openclaw_importance if openclaw_importance is not None else 0.0,
-                "message_url": _build_lark_message_url(
-                    chat_id=str(message.get("chat_id", "")),
-                    message_id=str(message.get("message_id", "")),
-                ),
+                "message_url": _resolve_message_url(message),
                 "score": score,
                 "create_time": message.get("create_time", ""),
                 "openclaw_screen_reason": openclaw_screen["reason"],
@@ -637,6 +645,20 @@ def _build_interest_digest(messages: list[dict[str, Any]], interests: list[str],
 
 def _normalize_interest_text(text: str) -> str:
     return re.sub(r"\s+", " ", str(text or "").strip())
+
+
+def _resolve_message_url(message: dict[str, Any]) -> str:
+    # Only trust explicit deep-link URL from upstream enrichment.
+    for key in ("message_url", "open_message_url", "deep_link", "link"):
+        value = str(message.get(key) or "").strip()
+        if value.startswith("http://") or value.startswith("https://"):
+            return value
+    return ""
+
+
+def _contains_interest_negative_context(text: str) -> bool:
+    lowered = str(text or "").lower()
+    return any(pattern in lowered for pattern in INTEREST_NEGATIVE_CONTEXT_PATTERNS)
 
 
 def _mention_signal_text(text: str) -> str:
@@ -759,6 +781,7 @@ def _rewrite_interest_summary(text: str, hit_terms: list[str]) -> str:
     value = str(text or "").strip()
     if not value:
         return ""
+    value = _strip_interest_artifacts(value)
     value = re.sub(r"\{.*?json_card.*?\}", "", value, flags=re.IGNORECASE)
     value = re.sub(r"\s+", " ", value).strip()
     if not value:
@@ -781,6 +804,15 @@ def _rewrite_interest_summary(text: str, hit_terms: list[str]) -> str:
     if not preferred:
         return ""
     return preferred
+
+
+def _strip_interest_artifacts(text: str) -> str:
+    value = str(text or "")
+    # Remove generated hit tags like: （命中: 上线） / (命中:上线)
+    value = re.sub(r"[（(]\s*命中\s*[:：][^)）]*[)）]", "", value, flags=re.IGNORECASE)
+    # Remove generated refs like: [chat:xxx | msg:yyy]
+    value = re.sub(r"\[\s*chat:[^\]]*msg:[^\]]*\]", "", value, flags=re.IGNORECASE)
+    return value.strip()
 
 
 def _build_runtime_plan(schedule: dict[str, Any]) -> dict[str, Any]:

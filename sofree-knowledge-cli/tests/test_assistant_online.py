@@ -133,3 +133,38 @@ def test_collect_online_personal_inputs_applies_recent_days(monkeypatch):
     assert out["meta"]["recent_days"] == 7
     assert out["messages"] == []
     assert out["documents"] == []
+
+
+def test_collect_online_personal_inputs_builds_message_url_when_user_chat_visible(monkeypatch):
+    class UserTokenClient(FakeClient):
+        user_access_token = "u-token"
+
+    monkeypatch.setattr("sofree_knowledge.assistant_online.get_user_identity", lambda token_file=None: {"open_id": "ou_target"})
+    out = collect_online_personal_inputs(
+        client=UserTokenClient(),
+        target_user_id="",
+        include_visible_chats=True,
+        max_chats=5,
+        max_messages_per_chat=20,
+        max_drive_docs=10,
+        recent_days=3650,
+    )
+    assert out["messages"]
+    message_url = str(out["messages"][0].get("message_url") or "")
+    assert message_url.startswith("https://applink.feishu.cn/client/chat/open?")
+    assert "openMessageId=m1" in message_url
+
+
+def test_collect_online_personal_inputs_does_not_build_message_url_without_user_token(monkeypatch):
+    monkeypatch.setattr("sofree_knowledge.assistant_online.get_user_identity", lambda token_file=None: {"open_id": "ou_target"})
+    out = collect_online_personal_inputs(
+        client=FakeClient(),
+        target_user_id="",
+        include_visible_chats=True,
+        max_chats=5,
+        max_messages_per_chat=20,
+        max_drive_docs=10,
+        recent_days=3650,
+    )
+    assert out["messages"]
+    assert str(out["messages"][0].get("message_url") or "") == ""
