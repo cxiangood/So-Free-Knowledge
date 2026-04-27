@@ -108,7 +108,7 @@ def test_summary_card_contains_hyperlink_when_url_available():
     assert "[Release Plan](https://foo.feishu.cn/docx/abc123)" in content
 
 
-def test_interest_card_contains_message_hyperlink():
+def test_interest_card_contains_message_hyperlink_without_hit_or_ids():
     report = build_personal_brief(
         documents=[{"doc_id": "d1", "title": "Release Plan", "summary": "Plan summary"}],
         messages=[{"message_id": "om_1", "chat_id": "oc_test", "content": "客户需求今晚截止，有上线风险"}],
@@ -116,11 +116,12 @@ def test_interest_card_contains_message_hyperlink():
     )
     content = report["interest_card"]["elements"][0]["content"]
     assert "客户需求今晚截止，有上线风险" in content
-    assert "chat:oc_test" in content
-    assert "msg:om_1" in content
+    assert "命中:" not in content
+    assert "msg:" not in content
+    assert "chat:" not in content
 
 
-def test_interest_digest_blocks_moderation_text_even_with_hit_term():
+def test_interest_digest_blocks_openclaw_garbage_message():
     report = build_personal_brief(
         documents=[{"doc_id": "d1", "title": "Release", "summary": "Plan summary"}],
         messages=[
@@ -128,6 +129,7 @@ def test_interest_digest_blocks_moderation_text_even_with_hit_term():
                 "message_id": "om_x1",
                 "chat_id": "oc_test",
                 "content": "若继续发布此类违规内容，将无法为你提供后续服务（命中: 发布）",
+                "openclaw_is_garbage": True,
             }
         ],
         user_profile={"interests": ["发布", "需求"]},
@@ -154,3 +156,70 @@ def test_interest_card_uses_chat_open_applink_with_message_id():
     assert "openMessageId=om_123" in items[0]["message_url"]
     content = report["interest_card"]["elements"][0]["content"]
     assert "openMessageId=om_123" in content
+
+
+def test_interest_card_displays_from_sender_name():
+    report = build_personal_brief(
+        documents=[{"doc_id": "d1", "title": "Release Plan", "summary": "Plan summary"}],
+        messages=[
+            {
+                "message_id": "om_9",
+                "chat_id": "oc_chat",
+                "content": "Need review before release today",
+                "sender_name": "Alice",
+            }
+        ],
+        user_profile={"interests": ["review", "release"]},
+    )
+    content = report["interest_card"]["elements"][0]["content"]
+    assert "From：Alice" in content
+
+
+def test_interest_card_keeps_user_mentions_in_summary():
+    report = build_personal_brief(
+        documents=[{"doc_id": "d1", "title": "Release Plan", "summary": "Plan summary"}],
+        messages=[
+            {
+                "message_id": "om_m1",
+                "chat_id": "oc_chat",
+                "content": "@Alice 请今天内确认发布回滚方案",
+            }
+        ],
+        user_profile={"interests": ["发布", "回滚"]},
+    )
+    content = report["interest_card"]["elements"][0]["content"]
+    assert "@Alice" in content
+
+
+def test_interest_digest_accepts_at_user_without_interest_keyword_hit():
+    report = build_personal_brief(
+        documents=[{"doc_id": "d1", "title": "Any", "summary": "Any"}],
+        messages=[
+            {
+                "message_id": "om_at_user",
+                "chat_id": "oc_chat",
+                "content": "@Bob please confirm this today",
+            }
+        ],
+        user_profile={"interests": ["release", "risk"]},
+    )
+    items = report["interest_digest"]["items"]
+    assert len(items) == 1
+    assert items[0]["message_id"] == "om_at_user"
+
+
+def test_interest_digest_accepts_at_all_without_interest_keyword_hit():
+    report = build_personal_brief(
+        documents=[{"doc_id": "d1", "title": "Any", "summary": "Any"}],
+        messages=[
+            {
+                "message_id": "om_at_all",
+                "chat_id": "oc_chat",
+                "content": "@all please check update",
+            }
+        ],
+        user_profile={"interests": ["release", "risk"]},
+    )
+    items = report["interest_digest"]["items"]
+    assert len(items) == 1
+    assert items[0]["message_id"] == "om_at_all"

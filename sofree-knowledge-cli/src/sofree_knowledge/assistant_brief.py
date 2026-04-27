@@ -62,19 +62,6 @@ INTEREST_SIGNAL_KEYWORDS = (
     "待办",
 )
 
-INTEREST_NEGATIVE_CONTEXT_PATTERNS = (
-    "违规内容",
-    "无法为你提供后续服务",
-    "系统提示",
-    "系统通知",
-    "命中:",
-    "处罚",
-    "封禁",
-    "警告",
-    "敏感词",
-    "审核",
-)
-
 OPENCLAW_POSITIVE_LABEL_HINTS = (
     "interest",
     "relevant",
@@ -86,17 +73,17 @@ OPENCLAW_POSITIVE_LABEL_HINTS = (
     "排期",
 )
 
-OPENCLAW_NEGATIVE_LABEL_HINTS = (
-    "violation",
-    "moderation",
+OPENCLAW_GARBAGE_LABEL_HINTS = (
     "spam",
     "abuse",
-    "违规",
-    "违规内容",
-    "风控",
-    "敏感",
+    "garbage",
+    "noise",
+    "irrelevant",
+    "chitchat",
+    "smalltalk",
     "系统通知",
-    "系统提示",
+    "自动提醒",
+    "机器人",
     "广告",
 )
 
@@ -115,6 +102,8 @@ INTEREST_NOISE_PATTERNS = (
     '"json_card"',
     "{\\\"json_card\\\"",
 )
+
+AT_ALL_KEYWORDS = ("@所有人", "@all", "@everyone")
 
 
 def build_personal_brief(
@@ -234,12 +223,18 @@ def _normalize_message(item: dict[str, Any]) -> dict[str, Any]:
     return {
         "message_id": str(item.get("message_id") or item.get("id") or ""),
         "chat_id": str(item.get("chat_id") or ""),
+        "sender_name": _extract_message_sender_name(item),
         "text": str(text or ""),
         "summary_text": str(summary_text or ""),
         "create_time": str(item.get("create_time") or item.get("timestamp") or ""),
         "openclaw_interest_relevant": item.get("openclaw_interest_relevant", item.get("interest_relevant")),
         "openclaw_interest_score": item.get("openclaw_interest_score", item.get("interest_score")),
-        "openclaw_violation": item.get("openclaw_violation", item.get("violation")),
+        "openclaw_is_garbage": item.get("openclaw_is_garbage", item.get("is_garbage")),
+        "openclaw_include_in_digest": item.get("openclaw_include_in_digest", item.get("include_in_digest")),
+        "openclaw_importance": item.get(
+            "openclaw_importance",
+            item.get("importance", item.get("importance_score")),
+        ),
         "openclaw_labels": (
             item.get("openclaw_labels")
             or item.get("openclaw_tags")
@@ -248,6 +243,19 @@ def _normalize_message(item: dict[str, Any]) -> dict[str, Any]:
             or []
         ),
     }
+
+
+def _extract_message_sender_name(item: dict[str, Any]) -> str:
+    direct_name = str(item.get("sender_name") or item.get("sender_display_name") or item.get("user_name") or "").strip()
+    if direct_name:
+        return direct_name
+    sender = item.get("sender")
+    if isinstance(sender, dict):
+        for key in ("name", "display_name", "sender_name", "user_name", "nickname"):
+            value = str(sender.get(key) or "").strip()
+            if value:
+                return value
+    return ""
 
 
 def _normalize_knowledge(item: dict[str, Any]) -> dict[str, str]:
@@ -563,20 +571,29 @@ def _build_interest_digest(messages: list[dict[str, Any]], interests: list[str],
         normalized_text = _normalize_interest_text(base_text)
         if _is_noise_interest_text(normalized_text):
             continue
+        mention_signal = _mention_signal_text(raw_text or base_text)
         hit_terms = [term for term in interest_terms if term in normalized_text.lower()]
+        if mention_signal:
+            hit_terms.append(mention_signal)
         if not hit_terms:
             continue
         signal_hits = sum(1 for keyword in INTEREST_SIGNAL_KEYWORDS if keyword in normalized_text.lower())
         urgency_hit = any(keyword in normalized_text.lower() for keyword in URGENCY_KEYWORDS)
         openclaw_screen = _openclaw_interest_screen(
             message=message,
-            normalized_text=normalized_text,
             signal_hits=signal_hits,
             urgency_hit=urgency_hit,
         )
         if not openclaw_screen["accepted"]:
             continue
-        if len(hit_terms) < 2 and signal_hits <= 0 and not urgency_hit:
+        openclaw_importance = _coerce_float(message.get("openclaw_importance"))
+        if (
+            mention_signal == ""
+            and len(hit_terms) < 2
+            and signal_hits <= 0
+            and not urgency_hit
+            and (openclaw_importance or 0.0) < 0.5
+        ):
             continue
         rewritten = _rewrite_interest_summary(normalized_text, hit_terms=hit_terms)
         if not rewritten:
@@ -585,13 +602,23 @@ def _build_interest_digest(messages: list[dict[str, Any]], interests: list[str],
         if summary in dedupe_summary:
             continue
         dedupe_summary.add(summary)
-        score = len(hit_terms) * 30 + signal_hits * 8 + (20 if urgency_hit else 0)
+        score = len(hit_terms) * 24 + signal_hits * 8 + (20 if urgency_hit else 0)
+        if mention_signal == "@all":
+            score += 36
+        elif mention_signal == "@mention":
+            score += 20
+        if openclaw_importance is not None:
+            score += int(openclaw_importance * 100)
+        if openclaw_screen["reason"].startswith("accepted_by_openclaw_"):
+            score += 12
         items.append(
             {
                 "message_id": message.get("message_id", ""),
                 "chat_id": message.get("chat_id", ""),
+                "sender_name": message.get("sender_name", ""),
                 "summary": summary,
                 "hit_terms": hit_terms[:5],
+                "openclaw_importance": openclaw_importance if openclaw_importance is not None else 0.0,
                 "message_url": _build_lark_message_url(
                     chat_id=str(message.get("chat_id", "")),
                     message_id=str(message.get("message_id", "")),
@@ -612,47 +639,62 @@ def _normalize_interest_text(text: str) -> str:
     return re.sub(r"\s+", " ", str(text or "").strip())
 
 
+def _mention_signal_text(text: str) -> str:
+    value = str(text or "").strip()
+    lowered = value.lower()
+    if any(token in lowered for token in AT_ALL_KEYWORDS):
+        return "@all"
+    if re.search(r"@\S+", value):
+        return "@mention"
+    return ""
+
+
 def _openclaw_interest_screen(
     message: dict[str, Any],
-    normalized_text: str,
     signal_hits: int,
     urgency_hit: bool,
 ) -> dict[str, Any]:
-    if _contains_interest_negative_context(normalized_text):
-        return {"accepted": False, "reason": "blocked_by_negative_context"}
+    explicit_include = _coerce_bool(message.get("openclaw_include_in_digest"))
+    if explicit_include is False:
+        return {"accepted": False, "reason": "blocked_by_openclaw_include_false"}
+    if explicit_include is True:
+        return {"accepted": True, "reason": "accepted_by_openclaw_include_true"}
 
-    explicit_violation = _coerce_bool(message.get("openclaw_violation"))
-    if explicit_violation is True:
-        return {"accepted": False, "reason": "blocked_by_openclaw_violation"}
+    explicit_garbage = _coerce_bool(message.get("openclaw_is_garbage"))
+    if explicit_garbage is True:
+        return {"accepted": False, "reason": "blocked_by_openclaw_is_garbage"}
 
     labels = _collect_openclaw_labels(message.get("openclaw_labels"))
-    if any(hint in label for label in labels for hint in OPENCLAW_NEGATIVE_LABEL_HINTS):
-        return {"accepted": False, "reason": "blocked_by_openclaw_negative_label"}
+    if any(hint in label for label in labels for hint in OPENCLAW_GARBAGE_LABEL_HINTS):
+        return {"accepted": False, "reason": "blocked_by_openclaw_garbage_label"}
 
     explicit_relevant = _coerce_bool(message.get("openclaw_interest_relevant"))
     if explicit_relevant is False:
         return {"accepted": False, "reason": "blocked_by_openclaw_relevant_false"}
-    if explicit_relevant is True:
-        return {"accepted": True, "reason": "accepted_by_openclaw_relevant_true"}
 
     score = _coerce_float(message.get("openclaw_interest_score"))
+    importance = _coerce_float(message.get("openclaw_importance"))
+    if importance is not None:
+        if importance >= 0.45 and explicit_garbage is not True and explicit_relevant is not False:
+            return {"accepted": True, "reason": "accepted_by_openclaw_importance"}
+        if importance < 0.2:
+            return {"accepted": False, "reason": "blocked_by_openclaw_importance"}
+
     if score is not None:
-        if score >= 0.55:
+        if score >= 0.55 and explicit_garbage is not True:
             return {"accepted": True, "reason": "accepted_by_openclaw_score"}
         return {"accepted": False, "reason": "blocked_by_openclaw_score"}
 
     if any(hint in label for label in labels for hint in OPENCLAW_POSITIVE_LABEL_HINTS):
         return {"accepted": True, "reason": "accepted_by_openclaw_positive_label"}
 
+    if explicit_relevant is True:
+        return {"accepted": True, "reason": "accepted_by_openclaw_relevant_true"}
+
     # Fallback rule path when OpenClaw metadata is absent.
     if signal_hits > 0 or urgency_hit:
         return {"accepted": True, "reason": "accepted_by_rule_fallback"}
     return {"accepted": False, "reason": "blocked_by_rule_fallback"}
-
-
-def _contains_interest_negative_context(text: str) -> bool:
-    lowered = str(text or "").lower()
-    return any(pattern in lowered for pattern in INTEREST_NEGATIVE_CONTEXT_PATTERNS)
 
 
 def _collect_openclaw_labels(value: Any) -> list[str]:
@@ -717,7 +759,6 @@ def _rewrite_interest_summary(text: str, hit_terms: list[str]) -> str:
     value = str(text or "").strip()
     if not value:
         return ""
-    value = re.sub(r"@\S+", "", value)
     value = re.sub(r"\{.*?json_card.*?\}", "", value, flags=re.IGNORECASE)
     value = re.sub(r"\s+", " ", value).strip()
     if not value:
@@ -895,23 +936,13 @@ def _to_interest_card(interest_digest: dict[str, Any], profile: dict[str, Any]) 
     lines: list[str] = []
     for item in interest_digest.get("items", [])[:5]:
         summary = str(item.get("summary", "") or "").strip()
-        chat_id = str(item.get("chat_id", "") or "").strip()
-        message_id = str(item.get("message_id", "") or "").strip()
-        hit_terms = item.get("hit_terms", [])
-        hit_label = ""
-        if isinstance(hit_terms, list) and hit_terms:
-            hit_label = f"（命中: {'+'.join(str(term) for term in hit_terms[:3])}）"
-        ref_tokens: list[str] = []
-        if chat_id:
-            ref_tokens.append(f"chat:{chat_id}")
-        if message_id:
-            ref_tokens.append(f"msg:{message_id[:12]}")
-        ref_label = f" [{' | '.join(ref_tokens)}]" if ref_tokens else ""
+        sender_name = str(item.get("sender_name", "") or "").strip()
+        from_label = f"（From：{sender_name}）" if sender_name else ""
         message_url = str(item.get("message_url", "") or "").strip()
         if message_url:
-            lines.append(f"- {summary}{hit_label}{ref_label} [原消息]({message_url})")
+            lines.append(f"- {summary}{from_label} [原消息]({message_url})")
         else:
-            lines.append(f"- {summary}{hit_label}{ref_label}")
+            lines.append(f"- {summary}{from_label}")
     if not lines:
         lines.append("- 暂无命中兴趣的群聊内容")
     interests = profile.get("interests", [])

@@ -10,6 +10,7 @@ from .confused_detector import (
 )
 from .assistant_brief import build_personal_brief
 from .assistant_online import collect_online_personal_inputs
+from .interest_filter import build_interest_filter_prompt, parse_interest_filter_judgements
 from .lingo_context import (
     build_lingo_judge_prompt,
     extract_keyword_contexts,
@@ -26,7 +27,9 @@ __all__ = [
     "detect_confused_candidates",
     "extract_keyword_contexts",
     "format_inline_explanation",
+    "build_interest_filter_prompt",
     "LingoStore",
+    "parse_interest_filter_judgements",
     "parse_confused_judgement",
     "parse_lingo_judgements",
     "publishable_lingo_judgements",
