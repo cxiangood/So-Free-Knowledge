@@ -754,17 +754,19 @@ def _to_interest_card(interest_digest: dict[str, Any], profile: dict[str, Any]) 
     lines: list[str] = []
     for item in interest_digest.get("items", [])[:5]:
         summary = str(item.get("summary", "") or "").strip()
-        message_url = str(item.get("message_url", "") or "").strip()
+        chat_id = str(item.get("chat_id", "") or "").strip()
         message_id = str(item.get("message_id", "") or "").strip()
         hit_terms = item.get("hit_terms", [])
         hit_label = ""
         if isinstance(hit_terms, list) and hit_terms:
             hit_label = f"（命中: {'+'.join(str(term) for term in hit_terms[:3])}）"
-        id_label = f" [msg:{message_id[:12]}]" if message_id else ""
-        if message_url:
-            lines.append(f"- [{_safe_markdown_link_text(summary)}]({message_url}){hit_label}{id_label}")
-        else:
-            lines.append(f"- {summary}{hit_label}{id_label}")
+        ref_tokens: list[str] = []
+        if chat_id:
+            ref_tokens.append(f"chat:{chat_id}")
+        if message_id:
+            ref_tokens.append(f"msg:{message_id[:12]}")
+        ref_label = f" [{' | '.join(ref_tokens)}]" if ref_tokens else ""
+        lines.append(f"- {summary}{hit_label}{ref_label}")
     if not lines:
         lines.append("- 暂无命中兴趣的群聊内容")
     interests = profile.get("interests", [])

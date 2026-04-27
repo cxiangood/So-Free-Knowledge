@@ -870,6 +870,8 @@ def cmd_assistant_build_personal_brief(args: argparse.Namespace) -> dict[str, An
             "chat_id": (summary_push_result or interest_push_result or {}).get("chat_id", ""),
             "doc_push_enabled": False,
             "doc_push_skipped": True,
+            "docs_status": "disabled",
+            "docs": [],
             "summary_enabled": bool(push_summary_card),
             "summary_message_id": (summary_push_result or {}).get("message_id", ""),
             "interest_enabled": bool(push_interest_card),
@@ -877,13 +879,21 @@ def cmd_assistant_build_personal_brief(args: argparse.Namespace) -> dict[str, An
             "errors": push_errors,
         }
     else:
-        base_meta["push"] = {"enabled": False, "doc_push_enabled": False, "doc_push_skipped": True}
+        base_meta["push"] = {
+            "enabled": False,
+            "doc_push_enabled": False,
+            "doc_push_skipped": True,
+            "docs_status": "disabled",
+            "docs": [],
+        }
 
     if args.output_format == "json":
+        filtered = {k: v for k, v in report.items() if k not in {"doc_markdown", "card", "interest_card"}}
+        filtered["docs"] = filtered.get("documents", [])
         return {
             "ok": True,
             "meta": base_meta,
-            "report": {k: v for k, v in report.items() if k not in {"doc_markdown", "card", "interest_card"}},
+            "report": filtered,
         }
     if args.output_format == "doc":
         return {
@@ -905,7 +915,10 @@ def cmd_assistant_build_personal_brief(args: argparse.Namespace) -> dict[str, An
     return {
         "ok": True,
         "meta": base_meta,
-        "report": {k: v for k, v in report.items() if k != "doc_markdown"},
+        "report": {
+            **{k: v for k, v in report.items() if k != "doc_markdown"},
+            "docs": report.get("documents", []),
+        },
     }
 
 

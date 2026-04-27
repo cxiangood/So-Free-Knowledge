@@ -115,4 +115,6 @@ def test_interest_card_contains_message_hyperlink():
         user_profile={"interests": ["需求", "上线", "风险", "客户"]},
     )
     content = report["interest_card"]["elements"][0]["content"]
-    assert "[客户需求今晚截止，有上线风险](https://applink.feishu.cn/client/chat/oc_test)" in content
+    assert "客户需求今晚截止，有上线风险" in content
+    assert "chat:oc_test" in content
+    assert "msg:om_1" in content
