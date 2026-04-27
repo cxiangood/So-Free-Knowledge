@@ -11,6 +11,7 @@ Local closed-loop simulation modules (no CLI entrypoints in this package):
 - `feedback_loop`: secondary inspiration generation
 - `openapi_message_listener`: Feishu OpenAPI WebSocket listener
 - `message_event_bus`: in-process pub/sub bus
+- `chat_message_store`: per-chat message ring-buffer persistence
 
 ## Python API
 
@@ -41,8 +42,9 @@ service = ListenerService(
         event_types="im.message.receive_v1",
         compact=True,
         print_events=True,
+        chat_history_path="outputs/local_pipeline/state/chat_message_store.json",
+        chat_history_limit=100,
     )
 )
 service.start()
 ```
-

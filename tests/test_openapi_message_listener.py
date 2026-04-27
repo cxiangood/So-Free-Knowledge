@@ -20,12 +20,15 @@ from local_pipeline.openapi_message_listener import (
 @dataclass
 class _SenderId:
     open_id: str
+    union_id: str = ""
+    user_id: str = ""
 
 
 @dataclass
 class _Sender:
     sender_type: str
     sender_id: _SenderId
+    tenant_key: str = ""
 
 
 @dataclass
@@ -35,7 +38,13 @@ class _Message:
     chat_type: str
     message_type: str
     content: str
+    root_id: str = ""
+    parent_id: str = ""
     create_time: str = ""
+    update_time: str = ""
+    thread_id: str = ""
+    mentions: list[dict[str, object]] | None = None
+    user_agent: str = ""
 
 
 @dataclass
@@ -67,8 +76,26 @@ def _build_data(chat_type: str = "p2p", sender_type: str = "user") -> _Data:
                 chat_type=chat_type,
                 message_type="text",
                 content=json.dumps({"text": "hello"}, ensure_ascii=False),
+                root_id="om-root",
+                parent_id="om-parent",
+                update_time="1773491924410",
+                thread_id="omt-1",
+                mentions=[
+                    {
+                        "key": "@_user_1",
+                        "id": {"open_id": "ou-1", "union_id": "on-1", "user_id": "u-1"},
+                        "mentioned_type": "user",
+                        "name": "Tom",
+                        "tenant_key": "tk-1",
+                    }
+                ],
+                user_agent="ua-test",
             ),
-            sender=_Sender(sender_type=sender_type, sender_id=_SenderId(open_id="ou-1")),
+            sender=_Sender(
+                sender_type=sender_type,
+                sender_id=_SenderId(open_id="ou-1", union_id="on-1", user_id="u-1"),
+                tenant_key="tk-1",
+            ),
         ),
     )
 
@@ -82,8 +109,19 @@ def test_parse_message_event() -> None:
     assert event.chat_type == "p2p"
     assert event.message_type == "text"
     assert event.content_text == "hello"
+    assert event.content_raw == '{"text": "hello"}'
+    assert event.root_id == "om-root"
+    assert event.parent_id == "om-parent"
+    assert event.update_time == "1773491924410"
+    assert event.thread_id == "omt-1"
     assert event.sender_open_id == "ou-1"
+    assert event.sender_union_id == "on-1"
+    assert event.sender_user_id == "u-1"
     assert event.sender_type == "user"
+    assert event.tenant_key == "tk-1"
+    assert event.mentions[0]["name"] == "Tom"
+    assert event.raw["event"]["message"]["chat_id"] == "oc-1"
+    assert event.raw["event"]["sender"]["sender_id"]["open_id"] == "ou-1"
 
 
 def test_filter_non_user_message() -> None:
