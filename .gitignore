@@ -11,3 +11,6 @@ message_archive/
 token_classify/outputs/
 .claude/
 outputs/
+PLAN.md
+PLAN_detail.md
+local-pipeline.py
