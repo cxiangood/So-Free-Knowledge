@@ -233,6 +233,13 @@ def _normalize_message(item: dict[str, Any]) -> dict[str, Any]:
         "message_id": str(item.get("message_id") or item.get("id") or ""),
         "chat_id": str(item.get("chat_id") or ""),
         "sender_name": _extract_message_sender_name(item),
+        "message_url": str(
+            item.get("message_url")
+            or item.get("open_message_url")
+            or item.get("deep_link")
+            or item.get("link")
+            or ""
+        ),
         "text": str(text or ""),
         "summary_text": str(summary_text or ""),
         "create_time": str(item.get("create_time") or item.get("timestamp") or ""),
@@ -585,6 +592,8 @@ def _build_interest_digest(messages: list[dict[str, Any]], interests: list[str],
         raw_text = message.get("text", "")
         summary_text = message.get("summary_text", "")
         base_text = summary_text or raw_text
+        if summary_text and _looks_like_structured_interest_artifact(summary_text):
+            base_text = raw_text
         if not base_text:
             continue
         normalized_text = _normalize_interest_text(base_text)
@@ -824,7 +833,18 @@ def _strip_interest_artifacts(text: str) -> str:
     # Remove isolated chat/msg tags if they appear alone.
     value = re.sub(r"\bchat:[A-Za-z0-9_]+\b", "", value, flags=re.IGNORECASE)
     value = re.sub(r"\bmsg:[A-Za-z0-9_]+\b", "", value, flags=re.IGNORECASE)
+    # Strong fallback: if marker tail appears, keep only left-side meaningful sentence.
+    value = re.sub(r"\s*\[\s*chat:.*$", "", value, flags=re.IGNORECASE)
     return value.strip()
+
+
+def _looks_like_structured_interest_artifact(text: str) -> bool:
+    lowered = str(text or "").lower()
+    if "命中:" in lowered:
+        return True
+    if "chat:" in lowered and "msg:" in lowered:
+        return True
+    return False
 
 
 def _build_runtime_plan(schedule: dict[str, Any]) -> dict[str, Any]:

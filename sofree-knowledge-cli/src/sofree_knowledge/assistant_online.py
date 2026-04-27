@@ -78,6 +78,7 @@ def collect_online_personal_inputs(
                 {
                     "message_id": msg.get("message_id", ""),
                     "chat_id": msg.get("chat_id", chat_id),
+                    "sender_name": _extract_sender_name(msg.get("sender", {})),
                     "content": text,
                     "text": text,
                     "create_time": msg.get("create_time", ""),
@@ -355,3 +356,23 @@ def _resolve_online_message_url(
         "https://applink.feishu.cn/client/chat/open?"
         f"chatId={encoded_chat_id}&openChatId={encoded_chat_id}&openMessageId={encoded_message_id}"
     )
+
+
+def _extract_sender_name(sender: Any) -> str:
+    if not isinstance(sender, dict):
+        return ""
+    for key in ("name", "display_name", "sender_name", "user_name", "nickname"):
+        value = str(sender.get(key) or "").strip()
+        if value:
+            return value
+    sender_id = sender.get("sender_id")
+    if isinstance(sender_id, dict):
+        for key in ("open_id", "user_id", "union_id"):
+            value = str(sender_id.get(key) or "").strip()
+            if value:
+                return value
+    for key in ("id", "open_id", "user_id"):
+        value = str(sender.get(key) or "").strip()
+        if value:
+            return value
+    return ""
