@@ -118,3 +118,39 @@ def test_interest_card_contains_message_hyperlink():
     assert "客户需求今晚截止，有上线风险" in content
     assert "chat:oc_test" in content
     assert "msg:om_1" in content
+
+
+def test_interest_digest_blocks_moderation_text_even_with_hit_term():
+    report = build_personal_brief(
+        documents=[{"doc_id": "d1", "title": "Release", "summary": "Plan summary"}],
+        messages=[
+            {
+                "message_id": "om_x1",
+                "chat_id": "oc_test",
+                "content": "若继续发布此类违规内容，将无法为你提供后续服务（命中: 发布）",
+            }
+        ],
+        user_profile={"interests": ["发布", "需求"]},
+    )
+    assert report["interest_digest"]["items"] == []
+
+
+def test_interest_card_uses_chat_open_applink_with_message_id():
+    report = build_personal_brief(
+        documents=[{"doc_id": "d1", "title": "Release Plan", "summary": "Plan summary"}],
+        messages=[
+            {
+                "message_id": "om_123",
+                "chat_id": "oc_chat",
+                "content": "客户需求今天截止，发布风险较高",
+            }
+        ],
+        user_profile={"interests": ["客户", "需求", "发布"]},
+    )
+    items = report["interest_digest"]["items"]
+    assert len(items) == 1
+    assert items[0]["message_url"].startswith("https://applink.feishu.cn/client/chat/open?")
+    assert "openChatId=oc_chat" in items[0]["message_url"]
+    assert "openMessageId=om_123" in items[0]["message_url"]
+    content = report["interest_card"]["elements"][0]["content"]
+    assert "openMessageId=om_123" in content

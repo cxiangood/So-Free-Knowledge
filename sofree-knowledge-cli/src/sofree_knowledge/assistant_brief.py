@@ -6,6 +6,7 @@ import re
 from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Any
+from urllib.parse import quote
 
 
 URGENCY_KEYWORDS = (
@@ -59,6 +60,44 @@ INTEREST_SIGNAL_KEYWORDS = (
     "故障",
     "截止",
     "待办",
+)
+
+INTEREST_NEGATIVE_CONTEXT_PATTERNS = (
+    "违规内容",
+    "无法为你提供后续服务",
+    "系统提示",
+    "系统通知",
+    "命中:",
+    "处罚",
+    "封禁",
+    "警告",
+    "敏感词",
+    "审核",
+)
+
+OPENCLAW_POSITIVE_LABEL_HINTS = (
+    "interest",
+    "relevant",
+    "需求",
+    "客户",
+    "风险",
+    "上线",
+    "交付",
+    "排期",
+)
+
+OPENCLAW_NEGATIVE_LABEL_HINTS = (
+    "violation",
+    "moderation",
+    "spam",
+    "abuse",
+    "违规",
+    "违规内容",
+    "风控",
+    "敏感",
+    "系统通知",
+    "系统提示",
+    "广告",
 )
 
 INTEREST_NOISE_PATTERNS = (
@@ -181,7 +220,7 @@ def _normalize_doc(item: dict[str, Any]) -> dict[str, str]:
     }
 
 
-def _normalize_message(item: dict[str, Any]) -> dict[str, str]:
+def _normalize_message(item: dict[str, Any]) -> dict[str, Any]:
     text = item.get("text")
     if text is None:
         text = item.get("content", "")
@@ -198,6 +237,16 @@ def _normalize_message(item: dict[str, Any]) -> dict[str, str]:
         "text": str(text or ""),
         "summary_text": str(summary_text or ""),
         "create_time": str(item.get("create_time") or item.get("timestamp") or ""),
+        "openclaw_interest_relevant": item.get("openclaw_interest_relevant", item.get("interest_relevant")),
+        "openclaw_interest_score": item.get("openclaw_interest_score", item.get("interest_score")),
+        "openclaw_violation": item.get("openclaw_violation", item.get("violation")),
+        "openclaw_labels": (
+            item.get("openclaw_labels")
+            or item.get("openclaw_tags")
+            or item.get("labels")
+            or item.get("tags")
+            or []
+        ),
     }
 
 
@@ -498,7 +547,7 @@ def _group_documents_by_business(documents: list[dict[str, Any]]) -> list[dict[s
     return grouped
 
 
-def _build_interest_digest(messages: list[dict[str, str]], interests: list[str], max_items: int) -> dict[str, Any]:
+def _build_interest_digest(messages: list[dict[str, Any]], interests: list[str], max_items: int) -> dict[str, Any]:
     interest_terms = [item.strip().lower() for item in interests if item and item.strip()]
     if not interest_terms:
         interest_terms = ["需求", "上线", "风险", "客户", "复盘"]
@@ -519,6 +568,14 @@ def _build_interest_digest(messages: list[dict[str, str]], interests: list[str],
             continue
         signal_hits = sum(1 for keyword in INTEREST_SIGNAL_KEYWORDS if keyword in normalized_text.lower())
         urgency_hit = any(keyword in normalized_text.lower() for keyword in URGENCY_KEYWORDS)
+        openclaw_screen = _openclaw_interest_screen(
+            message=message,
+            normalized_text=normalized_text,
+            signal_hits=signal_hits,
+            urgency_hit=urgency_hit,
+        )
+        if not openclaw_screen["accepted"]:
+            continue
         if len(hit_terms) < 2 and signal_hits <= 0 and not urgency_hit:
             continue
         rewritten = _rewrite_interest_summary(normalized_text, hit_terms=hit_terms)
@@ -541,6 +598,7 @@ def _build_interest_digest(messages: list[dict[str, str]], interests: list[str],
                 ),
                 "score": score,
                 "create_time": message.get("create_time", ""),
+                "openclaw_screen_reason": openclaw_screen["reason"],
             }
         )
     items.sort(key=lambda item: (int(item.get("score", 0)), str(item.get("create_time", ""))), reverse=True)
@@ -552,6 +610,82 @@ def _build_interest_digest(messages: list[dict[str, str]], interests: list[str],
 
 def _normalize_interest_text(text: str) -> str:
     return re.sub(r"\s+", " ", str(text or "").strip())
+
+
+def _openclaw_interest_screen(
+    message: dict[str, Any],
+    normalized_text: str,
+    signal_hits: int,
+    urgency_hit: bool,
+) -> dict[str, Any]:
+    if _contains_interest_negative_context(normalized_text):
+        return {"accepted": False, "reason": "blocked_by_negative_context"}
+
+    explicit_violation = _coerce_bool(message.get("openclaw_violation"))
+    if explicit_violation is True:
+        return {"accepted": False, "reason": "blocked_by_openclaw_violation"}
+
+    labels = _collect_openclaw_labels(message.get("openclaw_labels"))
+    if any(hint in label for label in labels for hint in OPENCLAW_NEGATIVE_LABEL_HINTS):
+        return {"accepted": False, "reason": "blocked_by_openclaw_negative_label"}
+
+    explicit_relevant = _coerce_bool(message.get("openclaw_interest_relevant"))
+    if explicit_relevant is False:
+        return {"accepted": False, "reason": "blocked_by_openclaw_relevant_false"}
+    if explicit_relevant is True:
+        return {"accepted": True, "reason": "accepted_by_openclaw_relevant_true"}
+
+    score = _coerce_float(message.get("openclaw_interest_score"))
+    if score is not None:
+        if score >= 0.55:
+            return {"accepted": True, "reason": "accepted_by_openclaw_score"}
+        return {"accepted": False, "reason": "blocked_by_openclaw_score"}
+
+    if any(hint in label for label in labels for hint in OPENCLAW_POSITIVE_LABEL_HINTS):
+        return {"accepted": True, "reason": "accepted_by_openclaw_positive_label"}
+
+    # Fallback rule path when OpenClaw metadata is absent.
+    if signal_hits > 0 or urgency_hit:
+        return {"accepted": True, "reason": "accepted_by_rule_fallback"}
+    return {"accepted": False, "reason": "blocked_by_rule_fallback"}
+
+
+def _contains_interest_negative_context(text: str) -> bool:
+    lowered = str(text or "").lower()
+    return any(pattern in lowered for pattern in INTEREST_NEGATIVE_CONTEXT_PATTERNS)
+
+
+def _collect_openclaw_labels(value: Any) -> list[str]:
+    if isinstance(value, str):
+        return [token.strip().lower() for token in re.split(r"[,，|/ ]+", value) if token.strip()]
+    if isinstance(value, list):
+        return [str(token).strip().lower() for token in value if str(token).strip()]
+    return []
+
+
+def _coerce_bool(value: Any) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"1", "true", "yes", "y", "on"}:
+            return True
+        if lowered in {"0", "false", "no", "n", "off"}:
+            return False
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return None
+
+
+def _coerce_float(value: Any) -> float | None:
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value.strip())
+        except ValueError:
+            return None
+    return None
 
 
 def _is_noise_interest_text(text: str) -> bool:
@@ -638,10 +772,17 @@ def _build_runtime_plan(schedule: dict[str, Any]) -> dict[str, Any]:
 
 def _build_lark_message_url(chat_id: str, message_id: str) -> str:
     normalized_chat_id = str(chat_id or "").strip()
-    if not normalized_chat_id:
+    normalized_message_id = str(message_id or "").strip()
+    if not normalized_chat_id and not normalized_message_id:
         return ""
-    # Keep chat-level deep link only. openMessageId often falls back to browser and may not resolve.
-    return f"https://applink.feishu.cn/client/chat/{normalized_chat_id}"
+    query_parts: list[str] = []
+    if normalized_chat_id:
+        encoded_chat_id = quote(normalized_chat_id, safe="")
+        query_parts.append(f"chatId={encoded_chat_id}")
+        query_parts.append(f"openChatId={encoded_chat_id}")
+    if normalized_message_id:
+        query_parts.append(f"openMessageId={quote(normalized_message_id, safe='')}")
+    return "https://applink.feishu.cn/client/chat/open?" + "&".join(query_parts)
 
 
 def _is_recent(raw: str) -> bool:
@@ -766,7 +907,11 @@ def _to_interest_card(interest_digest: dict[str, Any], profile: dict[str, Any]) 
         if message_id:
             ref_tokens.append(f"msg:{message_id[:12]}")
         ref_label = f" [{' | '.join(ref_tokens)}]" if ref_tokens else ""
-        lines.append(f"- {summary}{hit_label}{ref_label}")
+        message_url = str(item.get("message_url", "") or "").strip()
+        if message_url:
+            lines.append(f"- {summary}{hit_label}{ref_label} [原消息]({message_url})")
+        else:
+            lines.append(f"- {summary}{hit_label}{ref_label}")
     if not lines:
         lines.append("- 暂无命中兴趣的群聊内容")
     interests = profile.get("interests", [])
