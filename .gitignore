@@ -10,3 +10,4 @@ message_archive/
 **/.pytest_cache/
 token_classify/outputs/
 .claude/
+outputs/

@@ -197,7 +197,7 @@ def test_archive_reproducible_flow() -> None:
     assert input_path.exists(), f"input not found: {input_path}"
 
     records = load_records(input_path)
-    plain_messages = extract_plain_messages(records, include_types={"text", "post"})[:1]
+    plain_messages = extract_plain_messages(records, include_types={"text", "post"})[:5]
     plain_text = "\n".join(plain_messages)
 
     config = {
@@ -211,7 +211,7 @@ def test_archive_reproducible_flow() -> None:
     filtered_tokens = result.get("semantic_filter_details", {}).get("filtered_tokens", [])
     classification_results = result.get("classification_results", {})
 
-    out_dir = Path("token_classify/outputs")
+    out_dir = Path("outputs")
     out_dir.mkdir(parents=True, exist_ok=True)
     prefix = "20260425T132724Z"
     output_paths = {
