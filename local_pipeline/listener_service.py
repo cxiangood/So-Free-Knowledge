@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Any
 
 import lark_oapi as lark
 
@@ -51,22 +50,3 @@ class ListenerService:
         for value in values:
             if value != "im.message.receive_v1":
                 LOGGER.warning("unsupported event type ignored: %s", value)
-
-
-def run_listener_service(args: Any) -> dict[str, Any]:
-    config = ListenerServiceConfig(
-        env_file=str(getattr(args, "env_file", "") or ""),
-        event_types=str(getattr(args, "event_types", "im.message.receive_v1") or "im.message.receive_v1"),
-        compact=bool(getattr(args, "compact", True)),
-        print_events=bool(getattr(args, "print_events", True)),
-    )
-    service = ListenerService(config)
-    service.start()
-    return {
-        "ok": True,
-        "mode": "listen-messages",
-        "event_types": config.event_types,
-        "compact": config.compact,
-        "print_events": config.print_events,
-    }
-

@@ -1,44 +1,48 @@
 # local_pipeline
 
-本地闭环模拟流水线（不连接飞书）：
+Local closed-loop simulation modules (no CLI entrypoints in this package):
 
-- `ingest`：消息接入与标准化
-- `signal_detector`：弱信号检测与规则评分
-- `semantic_lifter`：模板升维 + 可选 LLM 润色
-- `router`：路由到 `knowledge/task/observe`
-- `stores`：JSON 状态持久化
-- `simulator`：本地推送事件模拟
-- `feedback_loop`：反馈驱动二次灵感
+- `ingest`: normalize chat messages
+- `signal_detector`: weak-signal detection and scoring
+- `semantic_lifter`: structured lifting with optional LLM refinement
+- `router`: route to `knowledge/task/observe`
+- `stores`: JSON persistence
+- `simulator`: local push-event simulation
+- `feedback_loop`: secondary inspiration generation
+- `openapi_message_listener`: Feishu OpenAPI WebSocket listener
+- `message_event_bus`: in-process pub/sub bus
 
-## CLI
+## Python API
 
-```bash
-python -m local_pipeline run --messages-file message_archive/20260427T043305Z/messages.jsonl --enable-llm false
+Run pipeline:
+
+```python
+from local_pipeline.pipeline import PipelineConfig, run_pipeline
+
+result = run_pipeline(
+    messages_file="message_archive/20260427T043305Z/messages.jsonl",
+    config=PipelineConfig(
+        task_push_enabled=True,
+        task_push_chat_id="oc_xxx",
+        env_file=".env",
+    ),
+)
+print(result)
 ```
 
-启用 task 路由即时飞书卡片推送（OpenAPI）：
+Start listener service:
 
-```bash
-python -m local_pipeline run --messages-file message_archive/20260427T043305Z/messages.jsonl --task-push-enabled true
+```python
+from local_pipeline.listener_service import ListenerService, ListenerServiceConfig
+
+service = ListenerService(
+    ListenerServiceConfig(
+        env_file=".env",
+        event_types="im.message.receive_v1",
+        compact=True,
+        print_events=True,
+    )
+)
+service.start()
 ```
 
-若发送失败，会写入待重试队列：
-
-```text
-outputs/local_pipeline/state/pending_task_push.jsonl
-```
-
-等价子命令：
-
-```bash
-python -m local_pipeline score --messages-file ...
-python -m local_pipeline route --messages-file ... --enable-llm true
-python -m local_pipeline simulate --state-dir outputs/local_pipeline/state --task-updates-file task_updates.jsonl
-python -m local_pipeline report --run-dir outputs/local_pipeline/<run_id>
-```
-
-监听飞书消息（OpenAPI WebSocket）：
-
-```bash
-python -m local_pipeline listen-messages --env-file .env --compact true --print-events true
-```
