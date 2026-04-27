@@ -148,6 +148,7 @@ def extract_plain_messages(
     records: List[Dict[str, Any]],
     include_types: Optional[set[str]] = None,
 ) -> List[str]:
+    print("正在提取纯聊天内容列表...")
     include_types = include_types or {"text", "post"}
     global_mention_map = build_global_mention_map(records)
     messages: List[str] = []
@@ -166,6 +167,7 @@ def extract_messages_with_metadata(
     records: List[Dict[str, Any]],
     include_types: Optional[set[str]] = None,
 ) -> List[Dict[str, Any]]:
+    print("正在提取带元数据的聊天内容列表...")
     include_types = include_types or {"text", "post"}
     global_mention_map = build_global_mention_map(records)
     items: List[Dict[str, Any]] = []

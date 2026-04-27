@@ -5,8 +5,6 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-from llm.client import LLMClient, LLMConfig
-
 from .shared_types import InspirationCandidate, LiftedCard, PlainMessage
 
 ACTION_HINTS = ("需要", "建议", "请", "麻烦", "安排", "修复", "优化", "跟进", "完成", "截止")
@@ -86,7 +84,7 @@ def _extract_json(text: str) -> dict[str, Any] | None:
     return payload if isinstance(payload, dict) else None
 
 
-def _llm_refine_card(client: LLMClient, card: LiftedCard) -> LiftedCard | None:
+def _llm_refine_card(client: Any, card: LiftedCard) -> LiftedCard | None:
     system_prompt = (
         "你是办公协同知识整理助手。请将输入卡片优化为简洁结构化 JSON。"
         "仅输出 JSON，字段: title,summary,problem,suggestion,target_audience,tags,confidence,suggested_target。"
@@ -155,6 +153,8 @@ def lift_candidates(
     if not enable_llm or not cards:
         return LiftResult(cards=cards, warnings=warnings)
 
+    from llm.client import LLMClient, LLMConfig
+
     config = LLMConfig.from_env()
     missing = config.missing_fields()
     if missing:
@@ -171,4 +171,3 @@ def lift_candidates(
         cards[idx] = refined
 
     return LiftResult(cards=cards, warnings=warnings)
-

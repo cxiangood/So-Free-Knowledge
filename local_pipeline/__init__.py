@@ -17,7 +17,24 @@ def __getattr__(name: str):
         from .openapi_message_listener import MessageEvent, OpenAPIMessageListener
 
         return {"MessageEvent": MessageEvent, "OpenAPIMessageListener": OpenAPIMessageListener}[name]
+    if name in {"RealtimeProcessor", "RealtimeProcessorConfig", "RealtimeProcessResult"}:
+        from .realtime_processor import RealtimeProcessResult, RealtimeProcessor, RealtimeProcessorConfig
+
+        return {
+            "RealtimeProcessor": RealtimeProcessor,
+            "RealtimeProcessorConfig": RealtimeProcessorConfig,
+            "RealtimeProcessResult": RealtimeProcessResult,
+        }[name]
     raise AttributeError(name)
 
 
-__all__ = ["run_pipeline", "ChatMessageStore", "MessageEventBus", "MessageEvent", "OpenAPIMessageListener"]
+__all__ = [
+    "run_pipeline",
+    "ChatMessageStore",
+    "MessageEventBus",
+    "MessageEvent",
+    "OpenAPIMessageListener",
+    "RealtimeProcessor",
+    "RealtimeProcessorConfig",
+    "RealtimeProcessResult",
+]

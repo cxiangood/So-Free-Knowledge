@@ -12,6 +12,7 @@ Local closed-loop simulation modules (no CLI entrypoints in this package):
 - `openapi_message_listener`: Feishu OpenAPI WebSocket listener
 - `message_event_bus`: in-process pub/sub bus
 - `chat_message_store`: per-chat message ring-buffer persistence
+- `realtime_processor`: message-driven realtime weak-signal closed loop
 
 ## Python API
 
@@ -40,11 +41,21 @@ service = ListenerService(
     ListenerServiceConfig(
         env_file=".env",
         event_types="im.message.receive_v1",
-        compact=True,
+        compact=False,
         print_events=True,
+        output_dir="outputs/local_pipeline",
+        state_dir="outputs/local_pipeline/state",
         chat_history_path="outputs/local_pipeline/state/chat_message_store.json",
         chat_history_limit=100,
+        context_window_size=20,
+        enable_llm=False,
+        task_push_enabled=True,
+        task_push_chat_id="oc_xxx",
+        step_trace_enabled=True,  # print each step after completion
     )
 )
 service.start()
 ```
+
+Listener default behavior is now:
+`message received -> cache by chat_id -> weak-signal detect -> semantic lift -> route -> local store -> task push`.
