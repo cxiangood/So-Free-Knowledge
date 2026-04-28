@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import logging
 import os
 from collections import defaultdict
@@ -10,6 +9,7 @@ from pathlib import Path
 from threading import RLock
 from typing import Any
 
+from ..msg.parse import parse_message_event, should_accept_message_event
 from ..msg.types import MessageEvent
 
 try:
@@ -87,121 +87,6 @@ def _safe_text(value: Any) -> str:
     return str(value or "").strip()
 
 
-def _get_field(node: Any, key: str, default: Any = None) -> Any:
-    if isinstance(node, dict):
-        return node.get(key, default)
-    return getattr(node, key, default)
-
-
-def _sender_id_dict(sender_id: Any) -> dict[str, str]:
-    return {
-        "union_id": _safe_text(_get_field(sender_id, "union_id", "")),
-        "user_id": _safe_text(_get_field(sender_id, "user_id", "")),
-        "open_id": _safe_text(_get_field(sender_id, "open_id", "")),
-    }
-
-
-def _mentions_list(value: Any) -> list[dict[str, Any]]:
-    if not isinstance(value, list):
-        return []
-    rows: list[dict[str, Any]] = []
-    for item in value:
-        if not isinstance(item, dict):
-            continue
-        mention_id = _sender_id_dict(item.get("id", {}))
-        rows.append(
-            {
-                "key": _safe_text(item.get("key", "")),
-                "id": mention_id,
-                "mentioned_type": _safe_text(item.get("mentioned_type", "")),
-                "name": _safe_text(item.get("name", "")),
-                "tenant_key": _safe_text(item.get("tenant_key", "")),
-            }
-        )
-    return rows
-
-
-def _parse_content_text(raw_content: Any) -> str:
-    content = _safe_text(raw_content)
-    if not content:
-        return ""
-    try:
-        payload = json.loads(content)
-    except json.JSONDecodeError:
-        return content
-    if isinstance(payload, dict) and isinstance(payload.get("text"), str):
-        return _safe_text(payload.get("text"))
-    return content
-
-
-def parse_message_event(data: Any) -> MessageEvent | None:
-    header = _get_field(data, "header", None)
-    event = _get_field(data, "event", None)
-    if event is None:
-        return None
-    message = _get_field(event, "message", None)
-    sender = _get_field(event, "sender", None)
-    if message is None or sender is None:
-        return None
-
-    event_type = _safe_text(_get_field(header, "event_type", "")) or SUPPORTED_EVENT_TYPE
-    if event_type and event_type != SUPPORTED_EVENT_TYPE:
-        return None
-    sender_id = _get_field(sender, "sender_id", None)
-    raw = {
-        "event": {
-            "sender": {
-                "sender_id": _sender_id_dict(sender_id),
-                "sender_type": _safe_text(_get_field(sender, "sender_type", "")),
-                "tenant_key": _safe_text(_get_field(sender, "tenant_key", "")),
-            },
-            "message": {
-                "message_id": _safe_text(_get_field(message, "message_id", "")),
-                "root_id": _safe_text(_get_field(message, "root_id", "")),
-                "parent_id": _safe_text(_get_field(message, "parent_id", "")),
-                "create_time": _safe_text(_get_field(message, "create_time", "")),
-                "update_time": _safe_text(_get_field(message, "update_time", "")),
-                "chat_id": _safe_text(_get_field(message, "chat_id", "")),
-                "thread_id": _safe_text(_get_field(message, "thread_id", "")),
-                "chat_type": _safe_text(_get_field(message, "chat_type", "")),
-                "message_type": _safe_text(_get_field(message, "message_type", "")),
-                "content": _safe_text(_get_field(message, "content", "")),
-                "mentions": _mentions_list(_get_field(message, "mentions", [])),
-                "user_agent": _safe_text(_get_field(message, "user_agent", "")),
-            },
-        }
-    }
-    return MessageEvent(
-        event_type=event_type,
-        event_id=_safe_text(_get_field(header, "event_id", "")),
-        create_time=_safe_text(_get_field(header, "create_time", "")) or raw["event"]["message"]["create_time"],
-        message_id=raw["event"]["message"]["message_id"],
-        chat_id=raw["event"]["message"]["chat_id"],
-        chat_type=raw["event"]["message"]["chat_type"],
-        message_type=raw["event"]["message"]["message_type"],
-        content_text=_parse_content_text(raw["event"]["message"]["content"]),
-        content_raw=raw["event"]["message"]["content"],
-        root_id=raw["event"]["message"]["root_id"],
-        parent_id=raw["event"]["message"]["parent_id"],
-        update_time=raw["event"]["message"]["update_time"],
-        thread_id=raw["event"]["message"]["thread_id"],
-        sender_open_id=raw["event"]["sender"]["sender_id"]["open_id"],
-        sender_union_id=raw["event"]["sender"]["sender_id"]["union_id"],
-        sender_user_id=raw["event"]["sender"]["sender_id"]["user_id"],
-        sender_type=raw["event"]["sender"]["sender_type"],
-        tenant_key=raw["event"]["sender"]["tenant_key"],
-        mentions=raw["event"]["message"]["mentions"],
-        user_agent=raw["event"]["message"]["user_agent"],
-        raw=raw,
-    )
-
-
-def should_accept_message_event(event: MessageEvent) -> bool:
-    if event.sender_type != "user":
-        return False
-    return event.chat_type in {"p2p", "group"}
-
-
 def dispatch_message_event(bus: MessageEventBus, event: MessageEvent) -> None:
     bus.publish(TOPIC_MESSAGE_RECEIVED, event)
     if event.chat_type == "p2p":
@@ -264,7 +149,7 @@ class OpenAPIMessageListener:
         self._client.start()
 
     def _handle_message_receive(self, data: Any) -> None:
-        event = parse_message_event(data)
+        event = parse_message_event(data, supported_event_type=SUPPORTED_EVENT_TYPE)
         if event is None:
             return
         if not should_accept_message_event(event):
