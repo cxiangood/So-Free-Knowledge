@@ -1,30 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
 from typing import Any, Literal
+
+from .utils import now_utc_iso
 
 
 RouteTarget = Literal["knowledge", "task", "observe"]
-
-
-def now_utc_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
-@dataclass(slots=True)
-class PlainMessage:
-    message_id: str
-    chat_id: str
-    send_time: str
-    sender: str
-    mentions: list[str]
-    content: str
-    msg_type: str = "text"
-    features: dict[str, Any] = field(default_factory=dict)
-
-    def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
 
 
 @dataclass(slots=True)
@@ -87,3 +69,6 @@ class PushEvent:
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+__all__ = ["RouteTarget", "InspirationCandidate", "LiftedCard", "RouteDecision", "PushEvent"]

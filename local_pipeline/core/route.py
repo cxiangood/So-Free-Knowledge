@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from .shared_types import LiftedCard, RouteDecision
+from ..shared.models import LiftedCard, RouteDecision
 
 
 def route_cards(
@@ -14,7 +14,6 @@ def route_cards(
         "knowledge_threshold": knowledge_threshold,
         "task_threshold": task_threshold,
     }
-
     for card in cards:
         reason_codes: list[str] = []
         target = "observe"
@@ -32,7 +31,6 @@ def route_cards(
             reason_codes.extend(["rule-knowledge", "novel-tag"])
         else:
             reason_codes.append("fallback-observe")
-
         decisions.append(
             RouteDecision(
                 card_id=card.card_id,
@@ -43,3 +41,4 @@ def route_cards(
         )
     return decisions
 
+__all__ = ["route_cards"]

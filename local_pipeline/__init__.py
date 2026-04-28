@@ -1,40 +1,17 @@
 from __future__ import annotations
 
-def __getattr__(name: str):
-    if name == "run_pipeline":
-        from .pipeline import run_pipeline as _run_pipeline
-
-        return _run_pipeline
-    if name == "ChatMessageStore":
-        from .chat_message_store import ChatMessageStore as _store
-
-        return _store
-    if name == "MessageEventBus":
-        from .message_event_bus import MessageEventBus as _bus
-
-        return _bus
-    if name in {"MessageEvent", "OpenAPIMessageListener"}:
-        from .openapi_message_listener import MessageEvent, OpenAPIMessageListener
-
-        return {"MessageEvent": MessageEvent, "OpenAPIMessageListener": OpenAPIMessageListener}[name]
-    if name in {"RealtimeProcessor", "RealtimeProcessorConfig", "RealtimeProcessResult"}:
-        from .realtime_processor import RealtimeProcessResult, RealtimeProcessor, RealtimeProcessorConfig
-
-        return {
-            "RealtimeProcessor": RealtimeProcessor,
-            "RealtimeProcessorConfig": RealtimeProcessorConfig,
-            "RealtimeProcessResult": RealtimeProcessResult,
-        }[name]
-    raise AttributeError(name)
-
+from .flow.engine import Engine, EngineConfig, EngineResult
+from .flow.offline import DEFAULT_MESSAGES_FILE, OfflineConfig, run as run_offline
+from .flow.online import OnlineConfig, start as start_online
 
 __all__ = [
-    "run_pipeline",
-    "ChatMessageStore",
-    "MessageEventBus",
-    "MessageEvent",
-    "OpenAPIMessageListener",
-    "RealtimeProcessor",
-    "RealtimeProcessorConfig",
-    "RealtimeProcessResult",
+    "Engine",
+    "EngineConfig",
+    "EngineResult",
+    "OnlineConfig",
+    "start_online",
+    "OfflineConfig",
+    "run_offline",
+    "DEFAULT_MESSAGES_FILE",
 ]
+

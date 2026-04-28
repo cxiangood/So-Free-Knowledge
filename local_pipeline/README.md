@@ -2,43 +2,40 @@
 
 Local closed-loop simulation modules (no CLI entrypoints in this package):
 
-- `ingest`: normalize chat messages
-- `signal_detector`: weak-signal detection and scoring
-- `semantic_lifter`: structured lifting with optional LLM refinement
-- `router`: route to `knowledge/task/observe`
-- `stores`: JSON persistence
-- `simulator`: local push-event simulation
-- `feedback_loop`: secondary inspiration generation
-- `openapi_message_listener`: Feishu OpenAPI WebSocket listener
-- `message_event_bus`: in-process pub/sub bus
-- `chat_message_store`: per-chat message ring-buffer persistence
-- `realtime_processor`: message-driven realtime weak-signal closed loop
+- `comm`: listen/send/feishu communication layer
+- `core`: detect/lift/route/kb/obs/task main business logic
+- `msg`: message types/cache/parse layer
+- `flow`: unified engine + online/offline orchestration
+- `store`: state/io/report layer
+- `shared`: shared models/utils
+
+Root legacy scripts have been removed. Implementation now lives only in the layered folders above.
 
 ## Python API
 
-Run pipeline:
+Offline mode (fixed archive input by default):
 
 ```python
-from local_pipeline.pipeline import PipelineConfig, run_pipeline
+from local_pipeline.flow.offline import OfflineConfig, run
 
-result = run_pipeline(
-    messages_file="message_archive/20260427T043305Z/messages.jsonl",
-    config=PipelineConfig(
+result = run(
+    OfflineConfig(
+        messages_file="message_archive/20260427T043305Z/messages.jsonl",
         task_push_enabled=True,
         task_push_chat_id="oc_xxx",
         env_file=".env",
-    ),
+    )
 )
 print(result)
 ```
 
-Start listener service:
+Online mode:
 
 ```python
-from local_pipeline.listener_service import ListenerService, ListenerServiceConfig
+from local_pipeline.flow.online import OnlineConfig, start
 
-service = ListenerService(
-    ListenerServiceConfig(
+start(
+    OnlineConfig(
         env_file=".env",
         event_types="im.message.receive_v1",
         compact=False,
@@ -54,8 +51,6 @@ service = ListenerService(
         step_trace_enabled=True,  # print each step after completion
     )
 )
-service.start()
 ```
 
-Listener default behavior is now:
-`message received -> cache by chat_id -> weak-signal detect -> semantic lift -> route -> local store -> task push`.
+Unified downstream flow (online/offline): `cache -> detect -> lift -> route -> knowledge/observe/task -> task push`.

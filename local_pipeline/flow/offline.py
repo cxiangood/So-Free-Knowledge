@@ -1,0 +1,90 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+from ..msg.parse import load_plain_messages_from_archive, plain_message_to_event
+from .engine import Engine, EngineConfig
+
+
+DEFAULT_MESSAGES_FILE = Path("message_archive/20260427T043305Z/messages.jsonl")
+
+
+@dataclass(slots=True)
+class OfflineConfig:
+    messages_file: str | Path = DEFAULT_MESSAGES_FILE
+    output_dir: str | Path = "outputs/local_pipeline"
+    state_dir: str | Path = "outputs/local_pipeline/state"
+    chat_history_path: str | Path = "outputs/local_pipeline/state/chat_message_store.json"
+    chat_history_limit: int = 100
+    context_window_size: int = 20
+    enable_llm: bool = False
+    candidate_threshold: float = 0.45
+    knowledge_threshold: float = 0.60
+    task_threshold: float = 0.50
+    task_push_enabled: bool = False
+    task_push_chat_id: str = ""
+    env_file: str = ""
+    step_trace_enabled: bool = True
+
+
+def run(config: OfflineConfig | None = None) -> dict[str, Any]:
+    cfg = config or OfflineConfig()
+    engine = Engine(
+        EngineConfig(
+            output_dir=cfg.output_dir,
+            state_dir=cfg.state_dir,
+            chat_history_path=cfg.chat_history_path,
+            chat_history_limit=cfg.chat_history_limit,
+            context_window_size=cfg.context_window_size,
+            enable_llm=cfg.enable_llm,
+            candidate_threshold=cfg.candidate_threshold,
+            knowledge_threshold=cfg.knowledge_threshold,
+            task_threshold=cfg.task_threshold,
+            task_push_enabled=cfg.task_push_enabled,
+            task_push_chat_id=cfg.task_push_chat_id,
+            env_file=cfg.env_file,
+            step_trace_enabled=cfg.step_trace_enabled,
+        )
+    )
+
+    messages = load_plain_messages_from_archive(cfg.messages_file)
+    total = 0
+    candidate_total = 0
+    push_attempted = 0
+    push_sent = 0
+    push_failed = 0
+    route_counts: dict[str, int] = {}
+    warnings: list[str] = []
+    errors: list[str] = []
+
+    for msg in messages:
+        evt = plain_message_to_event(msg)
+        result = engine.run(evt, context={"mode": "offline"})
+        total += 1
+        candidate_total += int(result.candidate_count)
+        push_attempted += int(result.task_push_attempted)
+        push_sent += int(result.task_push_sent)
+        push_failed += int(result.task_push_failed)
+        for key, value in result.routed_counts.items():
+            route_counts[key] = route_counts.get(key, 0) + int(value)
+        warnings.extend(result.warnings)
+        errors.extend(result.errors)
+
+    return {
+        "ok": True,
+        "mode": "offline",
+        "messages_file": str(cfg.messages_file),
+        "message_count": total,
+        "candidate_count": candidate_total,
+        "route_counts": route_counts,
+        "task_push_attempted": push_attempted,
+        "task_push_sent": push_sent,
+        "task_push_failed": push_failed,
+        "warnings": warnings,
+        "errors": errors,
+    }
+
+
+__all__ = ["DEFAULT_MESSAGES_FILE", "OfflineConfig", "run"]

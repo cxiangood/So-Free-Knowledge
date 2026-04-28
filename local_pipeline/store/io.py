@@ -46,10 +46,12 @@ def read_json_or_jsonl(path: Path) -> list[dict[str, Any]]:
             if isinstance(obj, dict):
                 rows.append(obj)
         return rows
-
     data = read_json(path, default=[])
     if isinstance(data, list):
         return [item for item in data if isinstance(item, dict)]
     if isinstance(data, dict):
         return [data]
     return []
+
+
+__all__ = ["write_json", "write_jsonl", "append_jsonl", "read_json", "read_json_or_jsonl"]

@@ -4,7 +4,7 @@ from pathlib import Path
 from threading import RLock
 from typing import Any
 
-from .io_utils import read_json, write_json
+from ..store.io import read_json, write_json
 
 
 class ChatMessageStore:
@@ -17,7 +17,6 @@ class ChatMessageStore:
         chat_id = str(getattr(event, "chat_id", "") or "").strip()
         if not chat_id:
             return None
-
         payload_fn = getattr(event, "to_dict", None)
         if not callable(payload_fn):
             return None
@@ -27,7 +26,6 @@ class ChatMessageStore:
         event_payload = message_payload.get("event")
         if not isinstance(event_payload, dict):
             return None
-
         with self._lock:
             payload = self._load_payload()
             rows = payload.setdefault(chat_id, [])
@@ -64,3 +62,5 @@ class ChatMessageStore:
             ]
             output[chat_id] = rows
         return output
+
+__all__ = ["ChatMessageStore"]

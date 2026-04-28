@@ -23,7 +23,6 @@ def build_run_metrics(
     pending = int(feedback_summary.get("pending_count", 0))
     blocked = int(feedback_summary.get("blocked_count", 0))
     completion = float(done) / float(max(1, done + pending + blocked))
-
     return {
         "run_id": run_id,
         "message_count": message_count,
@@ -78,3 +77,4 @@ def render_markdown_report(metrics: dict[str, Any]) -> str:
     ]
     return "\n".join(lines).strip() + "\n"
 
+__all__ = ["build_run_metrics", "render_markdown_report"]

@@ -1,21 +1,18 @@
 from __future__ import annotations
 
 import hashlib
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .io_utils import read_json, read_json_or_jsonl, write_json
-from .shared_types import LiftedCard, now_utc_iso
+from ..shared.models import LiftedCard
+from ..shared.utils import now_utc_iso
+from .io import read_json, read_json_or_jsonl, write_json
 
 
 def _now_dt() -> datetime:
     return datetime.now(timezone.utc)
-
-
-def _to_iso(value: datetime) -> str:
-    return value.astimezone(timezone.utc).isoformat()
 
 
 @dataclass(slots=True)
@@ -30,14 +27,6 @@ class FeedbackSummary:
         return asdict(self)
 
 
-@dataclass(slots=True)
-class PersistOutcome:
-    decision_card_id: str
-    target_pool: str
-    stored_id: str
-    escalated: bool = False
-
-
 class LocalStateStore:
     def __init__(self, state_dir: str | Path) -> None:
         self.root = Path(state_dir)
@@ -46,7 +35,6 @@ class LocalStateStore:
         self.task_path = self.root / "task_store.json"
         self.observe_path = self.root / "observe_store.json"
         self.metrics_path = self.root / "run_metrics.json"
-
         self._ensure_defaults()
 
     def _ensure_defaults(self) -> None:
@@ -112,11 +100,7 @@ class LocalStateStore:
         items = self._load_items(self.observe_path)
         topic = card.title.strip().lower()
         observe_id = "obs-" + hashlib.md5(topic.encode("utf-8")).hexdigest()[:12]
-        matched = None
-        for item in items:
-            if str(item.get("observe_id", "")) == observe_id:
-                matched = item
-                break
+        matched = next((item for item in items if str(item.get("observe_id", "")) == observe_id), None)
         if matched is None:
             matched = {
                 "observe_id": observe_id,
@@ -127,7 +111,6 @@ class LocalStateStore:
                 "evidence": [],
             }
             items.append(matched)
-
         matched["hit_count"] = int(matched.get("hit_count", 0)) + 1
         matched["last_seen_at"] = now_utc_iso()
         evidence = matched.get("evidence", [])
@@ -170,11 +153,9 @@ class LocalStateStore:
         path = Path(updates_file)
         if not path.exists():
             return summary
-
         updates = read_json_or_jsonl(path)
         tasks = self._load_items(self.task_path)
         by_id = {str(item.get("task_id", "")): item for item in tasks}
-
         for update in updates:
             task_id = str(update.get("task_id", "")).strip()
             if not task_id or task_id not in by_id:
@@ -192,7 +173,6 @@ class LocalStateStore:
             history.append({"status": status, "comment": comment, "updated_at": task["updated_at"]})
             task["history"] = history[-50:]
             summary.updated_count += 1
-
         self._save_items(self.task_path, list(by_id.values()))
         self._fill_feedback_stats(summary)
         return summary
@@ -243,3 +223,4 @@ def _priority_from_confidence(confidence: float) -> str:
         return "medium"
     return "low"
 
+__all__ = ["FeedbackSummary", "LocalStateStore"]
