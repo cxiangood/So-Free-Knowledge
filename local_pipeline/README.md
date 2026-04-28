@@ -105,3 +105,7 @@ Key runtime flags in `OnlineConfig` / `OfflineConfig`:
 - `rag_min_score=0.35`
 - `rag_embed_model="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"`
 - `observe_auto_reply_enabled=True`
+
+## Path Cases
+
+- Full message-path cases and trigger examples: [PATH_CASES.md](./PATH_CASES.md)
