@@ -53,6 +53,23 @@ class TaskPushAttempt:
         }
 
 
+@dataclass(slots=True)
+class TextPushResult:
+    chat_id: str
+    status: str
+    message_id: str = ""
+    error: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "chat_id": self.chat_id,
+            "status": self.status,
+            "message_id": self.message_id,
+            "error": self.error,
+            "created_at": now_utc_iso(),
+        }
+
+
 def _load_feishu_client_class():
     try:
         from sofree_knowledge.feishu_client import FeishuClient
@@ -170,4 +187,42 @@ def queue_failed_pushes(state_dir: str | Path, attempts: list[TaskPushAttempt]) 
     return len(rows)
 
 
-__all__ = ["TaskPushConfig", "TaskPushAttempt", "build_task_card_payload", "push_task_card", "queue_failed_pushes"]
+def push_text_message(*, chat_id: str, text: str, env_file: str = "") -> TextPushResult:
+    target = str(chat_id or "").strip()
+    if not target:
+        return TextPushResult(chat_id="", status="failed", error="chat_id is required")
+    body = str(text or "").strip()
+    if not body:
+        return TextPushResult(chat_id=target, status="failed", error="text body is empty")
+    load_env_file(env_file)
+    app_id, app_secret = resolve_sender_credentials()
+    if not app_id or not app_secret:
+        return TextPushResult(
+            chat_id=target,
+            status="failed",
+            error="missing credentials: CARD_SENDER_APP_ID/CARD_SENDER_APP_SECRET or FEISHU_APP_ID/FEISHU_APP_SECRET",
+        )
+    FeishuClient = _load_feishu_client_class()
+    try:
+        with _temporary_feishu_credentials(app_id, app_secret):
+            client = FeishuClient()
+            sent = client.send_message(
+                receive_id=target,
+                receive_id_type="chat_id",
+                msg_type="text",
+                content={"text": body},
+            )
+    except Exception as exc:
+        return TextPushResult(chat_id=target, status="failed", error=str(exc))
+    return TextPushResult(chat_id=target, status="sent", message_id=str(sent.get("message_id", "")))
+
+
+__all__ = [
+    "TaskPushConfig",
+    "TaskPushAttempt",
+    "TextPushResult",
+    "build_task_card_payload",
+    "push_task_card",
+    "push_text_message",
+    "queue_failed_pushes",
+]

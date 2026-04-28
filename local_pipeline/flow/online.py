@@ -23,6 +23,11 @@ class OnlineConfig:
     knowledge_threshold: float = 0.60
     task_threshold: float = 0.50
     step_trace_enabled: bool = True
+    rag_enabled: bool = True
+    rag_top_k: int = 5
+    rag_min_score: float = 0.35
+    rag_embed_model: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+    observe_auto_reply_enabled: bool = True
 
 
 def start(config: OnlineConfig | None = None) -> None:
@@ -43,6 +48,11 @@ def start(config: OnlineConfig | None = None) -> None:
             task_push_chat_id=cfg.task_push_chat_id,
             env_file=cfg.env_file,
             step_trace_enabled=cfg.step_trace_enabled,
+            rag_enabled=cfg.rag_enabled,
+            rag_top_k=cfg.rag_top_k,
+            rag_min_score=cfg.rag_min_score,
+            rag_embed_model=cfg.rag_embed_model,
+            observe_auto_reply_enabled=cfg.observe_auto_reply_enabled,
         )
     )
     bus.subscribe(TOPIC_MESSAGE_RECEIVED, lambda evt: engine.run(evt, context={"mode": "online"}))

@@ -1,5 +1,5 @@
 from .listen import MessageEvent, OpenAPIMessageListener, parse_message_event
-from .send import TaskPushAttempt, TaskPushConfig, push_task_card
+from .send import TaskPushAttempt, TaskPushConfig, TextPushResult, push_task_card, push_text_message
 
 __all__ = [
     "MessageEvent",
@@ -7,6 +7,8 @@ __all__ = [
     "parse_message_event",
     "TaskPushConfig",
     "TaskPushAttempt",
+    "TextPushResult",
     "push_task_card",
+    "push_text_message",
 ]
 

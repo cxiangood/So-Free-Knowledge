@@ -21,9 +21,24 @@ from local_pipeline.flow.offline import OfflineConfig, run
 result = run(
     OfflineConfig(
         messages_file="message_archive/20260427T043305Z/messages.jsonl",
+        output_dir="outputs/local_pipeline",
+        state_dir="outputs/local_pipeline/state",
+        chat_history_path="outputs/local_pipeline/state/chat_message_store.json",
+        chat_history_limit=100,
+        context_window_size=20,
+        enable_llm=False,
+        candidate_threshold=0.45,
+        knowledge_threshold=0.60,
+        task_threshold=0.50,
         task_push_enabled=True,
         task_push_chat_id="oc_xxx",
         env_file=".env",
+        step_trace_enabled=True,  # print message path
+        rag_enabled=True,
+        rag_top_k=5,
+        rag_min_score=0.35,
+        rag_embed_model="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+        observe_auto_reply_enabled=True,
     )
 )
 print(result)
@@ -39,16 +54,23 @@ start(
         env_file=".env",
         event_types="im.message.receive_v1",
         compact=False,
-        print_events=True,
         output_dir="outputs/local_pipeline",
         state_dir="outputs/local_pipeline/state",
         chat_history_path="outputs/local_pipeline/state/chat_message_store.json",
         chat_history_limit=100,
         context_window_size=20,
         enable_llm=False,
+        candidate_threshold=0.45,
+        knowledge_threshold=0.60,
+        task_threshold=0.50,
         task_push_enabled=True,
         task_push_chat_id="oc_xxx",
-        step_trace_enabled=True,  # print each step after completion
+        step_trace_enabled=True,  # print message path
+        rag_enabled=True,
+        rag_top_k=5,
+        rag_min_score=0.35,
+        rag_embed_model="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+        observe_auto_reply_enabled=True,
     )
 )
 ```
@@ -65,3 +87,21 @@ Message payload format inside `local_pipeline` is:
 ```
 
 No outer `event` wrapper is used for internal message serialization or chat history storage.
+
+## Phase-2 RAG
+
+- Knowledge route now writes to local vector store: `outputs/local_pipeline/state/vector_kb/`
+  - `index.faiss`
+  - `meta.json`
+- Task route uses RAG retrieval to enrich task card content before push/store.
+- Observe route supports rule-based question detection:
+  - question + retrievable knowledge => auto reply to source `chat_id` (`text` message)
+  - otherwise => fallback to `observe_store`.
+
+Key runtime flags in `OnlineConfig` / `OfflineConfig`:
+
+- `rag_enabled=True`
+- `rag_top_k=5`
+- `rag_min_score=0.35`
+- `rag_embed_model="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"`
+- `observe_auto_reply_enabled=True`

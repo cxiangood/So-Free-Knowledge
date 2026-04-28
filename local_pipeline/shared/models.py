@@ -71,4 +71,42 @@ class PushEvent:
         return asdict(self)
 
 
-__all__ = ["RouteTarget", "InspirationCandidate", "LiftedCard", "RouteDecision", "PushEvent"]
+@dataclass(slots=True)
+class RagHit:
+    knowledge_id: str
+    card_id: str
+    score: float
+    text: str
+    title: str = ""
+    summary: str = ""
+    evidence: list[str] = field(default_factory=list)
+    tags: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(slots=True)
+class ObserveReplyEvent:
+    message_id: str
+    chat_id: str
+    query: str
+    status: str
+    answer: str = ""
+    error: str = ""
+    hit_count: int = 0
+    created_at: str = field(default_factory=now_utc_iso)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+__all__ = [
+    "RouteTarget",
+    "InspirationCandidate",
+    "LiftedCard",
+    "RouteDecision",
+    "PushEvent",
+    "RagHit",
+    "ObserveReplyEvent",
+]

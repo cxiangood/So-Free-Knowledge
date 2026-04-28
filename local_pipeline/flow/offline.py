@@ -27,6 +27,11 @@ class OfflineConfig:
     task_push_chat_id: str = ""
     env_file: str = ""
     step_trace_enabled: bool = True
+    rag_enabled: bool = True
+    rag_top_k: int = 5
+    rag_min_score: float = 0.35
+    rag_embed_model: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+    observe_auto_reply_enabled: bool = True
 
 
 def run(config: OfflineConfig | None = None) -> dict[str, Any]:
@@ -46,6 +51,11 @@ def run(config: OfflineConfig | None = None) -> dict[str, Any]:
             task_push_chat_id=cfg.task_push_chat_id,
             env_file=cfg.env_file,
             step_trace_enabled=cfg.step_trace_enabled,
+            rag_enabled=cfg.rag_enabled,
+            rag_top_k=cfg.rag_top_k,
+            rag_min_score=cfg.rag_min_score,
+            rag_embed_model=cfg.rag_embed_model,
+            observe_auto_reply_enabled=cfg.observe_auto_reply_enabled,
         )
     )
 
@@ -58,6 +68,10 @@ def run(config: OfflineConfig | None = None) -> dict[str, Any]:
     route_counts: dict[str, int] = {}
     warnings: list[str] = []
     errors: list[str] = []
+    rag_retrieval_count = 0
+    observe_question_count = 0
+    observe_answered_count = 0
+    observe_fallback_count = 0
 
     for msg in messages:
         evt = plain_message_to_event(msg)
@@ -71,6 +85,10 @@ def run(config: OfflineConfig | None = None) -> dict[str, Any]:
             route_counts[key] = route_counts.get(key, 0) + int(value)
         warnings.extend(result.warnings)
         errors.extend(result.errors)
+        rag_retrieval_count += int(result.rag_retrieval_count)
+        observe_question_count += int(result.observe_question_count)
+        observe_answered_count += int(result.observe_answered_count)
+        observe_fallback_count += int(result.observe_fallback_count)
 
     return {
         "ok": True,
@@ -82,6 +100,10 @@ def run(config: OfflineConfig | None = None) -> dict[str, Any]:
         "task_push_attempted": push_attempted,
         "task_push_sent": push_sent,
         "task_push_failed": push_failed,
+        "rag_retrieval_count": rag_retrieval_count,
+        "observe_question_count": observe_question_count,
+        "observe_answered_count": observe_answered_count,
+        "observe_fallback_count": observe_fallback_count,
         "warnings": warnings,
         "errors": errors,
     }

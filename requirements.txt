@@ -8,3 +8,6 @@ wordcloud==1.9.6
 torch>=2.0.0
 transformers>=4.40.0
 python-dotenv>=1.0.0
+numpy>=1.26.0
+faiss-cpu>=1.8.0
+sentence-transformers>=3.0.0

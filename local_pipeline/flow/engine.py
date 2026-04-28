@@ -5,15 +5,19 @@ from pathlib import Path
 from typing import Any
 
 from ..msg.types import MessageEvent
-from ..comm.send import TaskPushAttempt, TaskPushConfig, queue_failed_pushes
+from ..comm.send import TaskPushAttempt, TaskPushConfig, push_text_message, queue_failed_pushes
 from ..core.detect import detect_candidates
+from ..core.observe_qa import is_question_by_rule, try_answer_with_rag
 from ..core.kb import save_knowledge
 from ..core.lift import lift_candidates
 from ..core.obs import save_observe
 from ..core.route import route_cards
-from ..core.task import save_task
+from ..core.task import enhance_task_card_with_rag, save_task
 from ..msg.cache import ChatMessageStore
 from ..msg.parse import event_row_to_plain_message
+from ..rag.index import VectorKnowledgeStore
+from ..rag.retriever import retrieve
+from ..shared.models import ObserveReplyEvent
 from ..shared.utils import now_utc_iso
 from ..store.io import append_jsonl, read_json, write_json
 from ..store.state import LocalStateStore
@@ -35,6 +39,11 @@ class EngineConfig:
     task_push_chat_id: str = ""
     env_file: str = ""
     step_trace_enabled: bool = True
+    rag_enabled: bool = True
+    rag_top_k: int = 5
+    rag_min_score: float = 0.35
+    rag_embed_model: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+    observe_auto_reply_enabled: bool = True
 
 
 @dataclass(slots=True)
@@ -49,6 +58,10 @@ class EngineResult:
     errors: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     skipped: bool = False
+    rag_retrieval_count: int = 0
+    observe_question_count: int = 0
+    observe_answered_count: int = 0
+    observe_fallback_count: int = 0
     created_at: str = field(default_factory=now_utc_iso)
 
     def to_dict(self) -> dict[str, Any]:
@@ -63,6 +76,10 @@ class EngineResult:
             "errors": self.errors,
             "warnings": self.warnings,
             "skipped": self.skipped,
+            "rag_retrieval_count": self.rag_retrieval_count,
+            "observe_question_count": self.observe_question_count,
+            "observe_answered_count": self.observe_answered_count,
+            "observe_fallback_count": self.observe_fallback_count,
             "created_at": self.created_at,
         }
 
@@ -99,6 +116,13 @@ class Engine:
         self.state_store = LocalStateStore(config.state_dir)
         self.runtime_state = RuntimeState(Path(config.state_dir) / "listener_runtime_state.json")
         self.events_path = Path(config.state_dir) / "realtime_events.jsonl"
+        self.observe_reply_events_path = Path(config.state_dir) / "observe_reply_events.jsonl"
+        self.vector_store: VectorKnowledgeStore | None = None
+        if self.config.rag_enabled:
+            try:
+                self.vector_store = VectorKnowledgeStore(Path(config.state_dir) / "vector_kb", embed_model=self.config.rag_embed_model)
+            except Exception:
+                self.vector_store = None
 
     def run(self, message: MessageEvent, context: dict[str, Any] | None = None, config: dict[str, Any] | None = None) -> EngineResult:
         del context
@@ -163,11 +187,29 @@ class Engine:
                 if decision.target_pool == "knowledge":
                     if self.config.step_trace_enabled:
                         trace_node(message_id=message.message_id, node_name="knowledge_store")
-                    decision.stored_id = save_knowledge(self.state_store, card)
+                    decision.stored_id = save_knowledge(self.state_store, card, vector_store=self.vector_store)
                 elif decision.target_pool == "task":
+                    task_card = card
+                    if self.config.rag_enabled:
+                        if self.config.step_trace_enabled:
+                            trace_node(message_id=message.message_id, node_name="rag_retrieve_task")
+                        query = f"{card.summary} {card.problem} {card.suggestion}".strip()
+                        try:
+                            hits = retrieve(
+                                self.vector_store,
+                                query=query,
+                                top_k=self.config.rag_top_k,
+                                min_score=self.config.rag_min_score,
+                            )
+                        except Exception as exc:
+                            hits = []
+                            result.warnings.append(f"task rag retrieval failed: {exc}")
+                        if hits:
+                            result.rag_retrieval_count += 1
+                            task_card = enhance_task_card_with_rag(card, hits)
                     if self.config.step_trace_enabled:
                         trace_node(message_id=message.message_id, node_name="task_store")
-                    task_result = save_task(store=self.state_store, card=card, run_id=self._build_run_id(message), push_config=push_cfg)
+                    task_result = save_task(store=self.state_store, card=task_card, run_id=self._build_run_id(message), push_config=push_cfg)
                     decision.stored_id = task_result.task_id
                     result.task_push_attempted += 1
                     if task_result.push_attempt is not None:
@@ -181,9 +223,56 @@ class Engine:
                             result.errors.append(task_result.push_attempt.error)
                             failed_attempts.append(task_result.push_attempt)
                 else:
-                    if self.config.step_trace_enabled:
-                        trace_node(message_id=message.message_id, node_name="observe_store")
-                    decision.stored_id = save_observe(self.state_store, card)
+                    answered_this_decision = False
+                    should_question = is_question_by_rule(summary=card.summary, problem=card.problem, content=message.content_text)
+                    if should_question:
+                        result.observe_question_count += 1
+                    if should_question and self.config.observe_auto_reply_enabled and self.config.rag_enabled:
+                        if self.config.step_trace_enabled:
+                            trace_node(message_id=message.message_id, node_name="rag_retrieve_observe")
+                        observe_query = f"{card.summary} {card.problem} {message.content_text}".strip()
+                        try:
+                            hits = retrieve(
+                                self.vector_store,
+                                query=observe_query,
+                                top_k=self.config.rag_top_k,
+                                min_score=self.config.rag_min_score,
+                            )
+                        except Exception as exc:
+                            hits = []
+                            result.warnings.append(f"observe rag retrieval failed: {exc}")
+                        if hits:
+                            result.rag_retrieval_count += 1
+                        answer_result = try_answer_with_rag(observe_query, hits)
+                        if answer_result.can_answer:
+                            if self.config.step_trace_enabled:
+                                trace_node(message_id=message.message_id, node_name="observe_reply")
+                            sent = push_text_message(chat_id=message.chat_id, text=answer_result.answer, env_file=self.config.env_file)
+                            self._append_observe_reply_event(
+                                ObserveReplyEvent(
+                                    message_id=message.message_id,
+                                    chat_id=message.chat_id,
+                                    query=observe_query,
+                                    status=sent.status,
+                                    answer=answer_result.answer,
+                                    error=sent.error,
+                                    hit_count=len(answer_result.hits or []),
+                                )
+                            )
+                            if sent.status == "sent":
+                                result.observe_answered_count += 1
+                                answered_this_decision = True
+                            else:
+                                result.errors.append(sent.error)
+                                trace_status = "failed"
+                        else:
+                            result.observe_fallback_count += 1
+                    if (not answered_this_decision) or (not should_question):
+                        if should_question and not answered_this_decision:
+                            result.observe_fallback_count += 1
+                        if self.config.step_trace_enabled:
+                            trace_node(message_id=message.message_id, node_name="observe_store")
+                        decision.stored_id = save_observe(self.state_store, card)
             if failed_attempts:
                 queue_failed_pushes(self.config.state_dir, failed_attempts)
 
@@ -198,6 +287,9 @@ class Engine:
 
     def _append_result(self, result: EngineResult) -> None:
         append_jsonl(self.events_path, [result.to_dict()])
+
+    def _append_observe_reply_event(self, event: ObserveReplyEvent) -> None:
+        append_jsonl(self.observe_reply_events_path, [event.to_dict()])
 
     @staticmethod
     def _build_run_id(message: MessageEvent) -> str:

@@ -1,0 +1,141 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from threading import RLock
+from typing import Any
+
+import numpy as np
+
+from ..shared.models import RagHit
+from .embed import Embedder
+
+
+class VectorKnowledgeStore:
+    def __init__(self, root_dir: str | Path, *, embed_model: str) -> None:
+        self.root = Path(root_dir)
+        self.root.mkdir(parents=True, exist_ok=True)
+        self.index_path = self.root / "index.faiss"
+        self.meta_path = self.root / "meta.json"
+        self.embedder = Embedder(model_name=embed_model, normalize=True)
+        self._lock = RLock()
+        self._faiss = None
+
+    def upsert_knowledge(
+        self,
+        *,
+        knowledge_id: str,
+        card_id: str,
+        title: str,
+        summary: str,
+        evidence: list[str],
+        tags: list[str],
+    ) -> bool:
+        text = self._build_text(title=title, summary=summary, evidence=evidence, tags=tags)
+        if not text.strip():
+            return False
+        with self._lock:
+            meta = self._load_meta()
+            if any(str(item.get("knowledge_id", "")) == knowledge_id for item in meta):
+                return True
+            vec = self.embedder.encode([text])
+            if vec.size == 0:
+                return False
+            index = self._load_or_create_index(vec.shape[1])
+            index.add(vec)
+            meta.append(
+                {
+                    "knowledge_id": knowledge_id,
+                    "card_id": card_id,
+                    "title": title,
+                    "summary": summary,
+                    "evidence": evidence,
+                    "tags": tags,
+                    "text": text,
+                }
+            )
+            self._save_index(index)
+            self._save_meta(meta)
+        return True
+
+    def search(self, *, query: str, top_k: int, min_score: float = 0.2) -> list[RagHit]:
+        text = str(query or "").strip()
+        if not text:
+            return []
+        with self._lock:
+            meta = self._load_meta()
+            if not meta or not self.index_path.exists():
+                return []
+            index = self._load_index()
+            if index is None:
+                return []
+            q = self.embedder.encode([text])
+            if q.size == 0:
+                return []
+            k = max(1, min(int(top_k or 1), len(meta)))
+            scores, ids = index.search(q, k)
+            hits: list[RagHit] = []
+            for score, idx in zip(scores[0].tolist(), ids[0].tolist()):
+                if idx < 0 or idx >= len(meta):
+                    continue
+                score_val = float(score)
+                if score_val < float(min_score):
+                    continue
+                row = meta[idx]
+                hits.append(
+                    RagHit(
+                        knowledge_id=str(row.get("knowledge_id", "")),
+                        card_id=str(row.get("card_id", "")),
+                        score=score_val,
+                        text=str(row.get("text", "")),
+                        title=str(row.get("title", "")),
+                        summary=str(row.get("summary", "")),
+                        evidence=[str(item) for item in row.get("evidence", []) if str(item).strip()] if isinstance(row.get("evidence"), list) else [],
+                        tags=[str(item) for item in row.get("tags", []) if str(item).strip()] if isinstance(row.get("tags"), list) else [],
+                    )
+                )
+            return hits
+
+    def _load_or_create_index(self, dim: int):
+        index = self._load_index()
+        if index is not None:
+            return index
+        import faiss
+
+        return faiss.IndexFlatIP(dim)
+
+    def _load_index(self):
+        if self._faiss is not None:
+            return self._faiss
+        if not self.index_path.exists():
+            return None
+        import faiss
+
+        self._faiss = faiss.read_index(str(self.index_path))
+        return self._faiss
+
+    def _save_index(self, index) -> None:
+        import faiss
+
+        faiss.write_index(index, str(self.index_path))
+        self._faiss = index
+
+    def _load_meta(self) -> list[dict[str, Any]]:
+        if not self.meta_path.exists():
+            return []
+        try:
+            payload = json.loads(self.meta_path.read_text(encoding="utf-8"))
+        except Exception:
+            return []
+        if not isinstance(payload, list):
+            return []
+        return [item for item in payload if isinstance(item, dict)]
+
+    def _save_meta(self, rows: list[dict[str, Any]]) -> None:
+        self.meta_path.write_text(json.dumps(rows, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    @staticmethod
+    def _build_text(*, title: str, summary: str, evidence: list[str], tags: list[str]) -> str:
+        ev = " ".join(str(item).strip() for item in evidence[:3] if str(item).strip())
+        tg = " ".join(f"#{str(item).strip()}" for item in tags[:8] if str(item).strip())
+        return f"title: {title}\nsummary: {summary}\nevidence: {ev}\ntags: {tg}".strip()

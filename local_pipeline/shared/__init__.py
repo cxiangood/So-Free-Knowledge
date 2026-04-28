@@ -1,4 +1,12 @@
-from .models import InspirationCandidate, LiftedCard, PushEvent, RouteDecision, RouteTarget
+from .models import (
+    InspirationCandidate,
+    LiftedCard,
+    ObserveReplyEvent,
+    PushEvent,
+    RagHit,
+    RouteDecision,
+    RouteTarget,
+)
 from .utils import now_utc_iso
 
 __all__ = [
@@ -7,5 +15,7 @@ __all__ = [
     "LiftedCard",
     "RouteDecision",
     "PushEvent",
+    "RagHit",
+    "ObserveReplyEvent",
     "now_utc_iso",
 ]
