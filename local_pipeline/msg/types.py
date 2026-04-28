@@ -44,34 +44,32 @@ class MessageEvent:
     raw: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
-        if isinstance(self.raw, dict) and isinstance(self.raw.get("event"), dict):
-            return {"event": self.raw["event"]}
+        if isinstance(self.raw, dict) and isinstance(self.raw.get("message"), dict):
+            return self.raw
         return {
-            "event": {
-                "sender": {
-                    "sender_id": {
-                        "union_id": self.sender_union_id,
-                        "user_id": self.sender_user_id,
-                        "open_id": self.sender_open_id,
-                    },
-                    "sender_type": self.sender_type,
-                    "tenant_key": self.tenant_key,
+            "sender": {
+                "sender_id": {
+                    "union_id": self.sender_union_id,
+                    "user_id": self.sender_user_id,
+                    "open_id": self.sender_open_id,
                 },
-                "message": {
-                    "message_id": self.message_id,
-                    "root_id": self.root_id,
-                    "parent_id": self.parent_id,
-                    "create_time": self.create_time,
-                    "update_time": self.update_time,
-                    "chat_id": self.chat_id,
-                    "thread_id": self.thread_id,
-                    "chat_type": self.chat_type,
-                    "message_type": self.message_type,
-                    "content": self.content_raw,
-                    "mentions": self.mentions,
-                    "user_agent": self.user_agent,
-                },
-            }
+                "sender_type": self.sender_type,
+                "tenant_key": self.tenant_key,
+            },
+            "message": {
+                "message_id": self.message_id,
+                "root_id": self.root_id,
+                "parent_id": self.parent_id,
+                "create_time": self.create_time,
+                "update_time": self.update_time,
+                "chat_id": self.chat_id,
+                "thread_id": self.thread_id,
+                "chat_type": self.chat_type,
+                "message_type": self.message_type,
+                "content": self.content_raw,
+                "mentions": self.mentions,
+                "user_agent": self.user_agent,
+            },
         }
 
 

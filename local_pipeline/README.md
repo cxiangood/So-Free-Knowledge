@@ -54,3 +54,14 @@ start(
 ```
 
 Unified downstream flow (online/offline): `cache -> detect -> lift -> route -> knowledge/observe/task -> task push`.
+
+Message payload format inside `local_pipeline` is:
+
+```json
+{
+  "sender": { "...": "..." },
+  "message": { "...": "..." }
+}
+```
+
+No outer `event` wrapper is used for internal message serialization or chat history storage.

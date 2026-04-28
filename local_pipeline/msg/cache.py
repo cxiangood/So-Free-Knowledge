@@ -23,17 +23,16 @@ class ChatMessageStore:
         message_payload = payload_fn()
         if not isinstance(message_payload, dict):
             return None
-        event_payload = message_payload.get("event")
-        if not isinstance(event_payload, dict):
+        if not isinstance(message_payload.get("message"), dict):
             return None
         with self._lock:
             payload = self._load_payload()
             rows = payload.setdefault(chat_id, [])
-            rows.append({"event": event_payload})
+            rows.append(message_payload)
             if len(rows) > self.max_messages_per_chat:
                 payload[chat_id] = rows[-self.max_messages_per_chat :]
             write_json(self.path, payload)
-        return {"event": event_payload}
+        return message_payload
 
     def get_chat_messages(self, chat_id: str) -> list[dict[str, Any]]:
         normalized = str(chat_id or "").strip()
@@ -57,8 +56,7 @@ class ChatMessageStore:
                 item
                 for item in value
                 if isinstance(item, dict)
-                and isinstance(item.get("event"), dict)
-                and isinstance(item.get("event", {}).get("message"), dict)
+                and isinstance(item.get("message"), dict)
             ]
             output[chat_id] = rows
         return output
