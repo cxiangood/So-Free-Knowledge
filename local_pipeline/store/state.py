@@ -109,6 +109,15 @@ class LocalStateStore:
                 "last_seen_at": "",
                 "escalation_state": "tracking",
                 "evidence": [],
+                "ferment_score": 0.0,
+                "logic1_count": 0,
+                "logic2_count": 0,
+                "logic3_count": 0,
+                "last_logic": "",
+                "last_trigger_at": "",
+                "pop_status": "tracking",
+                "pop_count": 0,
+                "last_popped_at": "",
             }
             items.append(matched)
         matched["hit_count"] = int(matched.get("hit_count", 0)) + 1
@@ -122,6 +131,54 @@ class LocalStateStore:
         matched["evidence"] = evidence[:10]
         self._save_items(self.observe_path, items)
         return observe_id
+
+    def get_observe_item(self, observe_id: str) -> dict[str, Any] | None:
+        items = self._load_items(self.observe_path)
+        normalized = str(observe_id or "").strip()
+        if not normalized:
+            return None
+        return next((item for item in items if str(item.get("observe_id", "")) == normalized), None)
+
+    def list_observe_items(self) -> list[dict[str, Any]]:
+        return self._load_items(self.observe_path)
+
+    def apply_observe_ferment(self, observe_id: str, *, logic: str, score_added: float) -> dict[str, Any] | None:
+        items = self._load_items(self.observe_path)
+        normalized = str(observe_id or "").strip()
+        if not normalized:
+            return None
+        matched = next((item for item in items if str(item.get("observe_id", "")) == normalized), None)
+        if matched is None:
+            return None
+        if str(matched.get("pop_status", "tracking")) == "popped":
+            return matched
+        before = float(matched.get("ferment_score", 0.0) or 0.0)
+        matched["ferment_score"] = round(before + float(score_added), 4)
+        if logic == "logic1":
+            matched["logic1_count"] = int(matched.get("logic1_count", 0)) + 1
+        elif logic == "logic2":
+            matched["logic2_count"] = int(matched.get("logic2_count", 0)) + 1
+        elif logic == "logic3":
+            matched["logic3_count"] = int(matched.get("logic3_count", 0)) + 1
+        matched["last_logic"] = logic
+        matched["last_trigger_at"] = now_utc_iso()
+        self._save_items(self.observe_path, items)
+        return matched
+
+    def mark_observe_popped(self, observe_id: str, *, final_target: str) -> dict[str, Any] | None:
+        items = self._load_items(self.observe_path)
+        normalized = str(observe_id or "").strip()
+        if not normalized:
+            return None
+        matched = next((item for item in items if str(item.get("observe_id", "")) == normalized), None)
+        if matched is None:
+            return None
+        matched["pop_status"] = "popped"
+        matched["pop_count"] = int(matched.get("pop_count", 0)) + 1
+        matched["last_popped_at"] = now_utc_iso()
+        matched["escalation_state"] = f"popped_{final_target}"
+        self._save_items(self.observe_path, items)
+        return matched
 
     def escalate_observations(self, threshold: int = 3) -> list[dict[str, Any]]:
         items = self._load_items(self.observe_path)

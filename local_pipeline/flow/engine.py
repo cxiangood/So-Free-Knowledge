@@ -7,6 +7,12 @@ from typing import Any
 from ..msg.types import MessageEvent
 from ..comm.send import TaskPushAttempt, TaskPushConfig, push_text_message, queue_failed_pushes
 from ..core.detect import detect_candidates
+from ..core.observe_ferment import (
+    apply_logic1_on_observe_add,
+    apply_logic2_on_knowledge,
+    apply_logic3_on_task,
+    pop_ready_items,
+)
 from ..core.observe_qa import is_question_by_rule, try_answer_with_rag
 from ..core.kb import save_knowledge
 from ..core.lift import lift_candidates
@@ -17,7 +23,7 @@ from ..msg.cache import ChatMessageStore
 from ..msg.parse import event_row_to_plain_message
 from ..rag.index import VectorKnowledgeStore
 from ..rag.retriever import retrieve
-from ..shared.models import ObserveReplyEvent
+from ..shared.models import LiftedCard, ObservePopItem, ObserveReplyEvent
 from ..shared.utils import now_utc_iso
 from ..store.io import append_jsonl, read_json, write_json
 from ..store.state import LocalStateStore
@@ -44,6 +50,11 @@ class EngineConfig:
     rag_min_score: float = 0.35
     rag_embed_model: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
     observe_auto_reply_enabled: bool = True
+    observe_ferment_threshold: float = 4.0
+    observe_logic1_base: float = 1.0
+    observe_logic2_base: float = 1.5
+    observe_logic3_base: float = 2.0
+    observe_force_non_observe_on_pop: bool = True
 
 
 @dataclass(slots=True)
@@ -62,6 +73,9 @@ class EngineResult:
     observe_question_count: int = 0
     observe_answered_count: int = 0
     observe_fallback_count: int = 0
+    observe_pop_count: int = 0
+    observe_reroute_task_count: int = 0
+    observe_reroute_knowledge_count: int = 0
     created_at: str = field(default_factory=now_utc_iso)
 
     def to_dict(self) -> dict[str, Any]:
@@ -80,6 +94,9 @@ class EngineResult:
             "observe_question_count": self.observe_question_count,
             "observe_answered_count": self.observe_answered_count,
             "observe_fallback_count": self.observe_fallback_count,
+            "observe_pop_count": self.observe_pop_count,
+            "observe_reroute_task_count": self.observe_reroute_task_count,
+            "observe_reroute_knowledge_count": self.observe_reroute_knowledge_count,
             "created_at": self.created_at,
         }
 
@@ -117,6 +134,8 @@ class Engine:
         self.runtime_state = RuntimeState(Path(config.state_dir) / "listener_runtime_state.json")
         self.events_path = Path(config.state_dir) / "realtime_events.jsonl"
         self.observe_reply_events_path = Path(config.state_dir) / "observe_reply_events.jsonl"
+        self.observe_ferment_events_path = Path(config.state_dir) / "observe_ferment_events.jsonl"
+        self.observe_pop_events_path = Path(config.state_dir) / "observe_pop_events.jsonl"
         self.vector_store: VectorKnowledgeStore | None = None
         if self.config.rag_enabled:
             try:
@@ -188,6 +207,17 @@ class Engine:
                     if self.config.step_trace_enabled:
                         trace_node(message_id=message.message_id, node_name="knowledge_store")
                     decision.stored_id = save_knowledge(self.state_store, card, vector_store=self.vector_store)
+                    if self.config.step_trace_enabled:
+                        trace_node(message_id=message.message_id, node_name="observe_logic2_check")
+                    ferment_results = apply_logic2_on_knowledge(
+                        card=card,
+                        state_store=self.state_store,
+                        threshold=self.config.observe_ferment_threshold,
+                        base_score=self.config.observe_logic2_base,
+                    )
+                    for item in ferment_results:
+                        self._append_observe_ferment_event(message.message_id, card.card_id, item.to_dict())
+                    self._process_observe_pop(message=message, result=result)
                 elif decision.target_pool == "task":
                     task_card = card
                     if self.config.rag_enabled:
@@ -211,6 +241,17 @@ class Engine:
                         trace_node(message_id=message.message_id, node_name="task_store")
                     task_result = save_task(store=self.state_store, card=task_card, run_id=self._build_run_id(message), push_config=push_cfg)
                     decision.stored_id = task_result.task_id
+                    if self.config.step_trace_enabled:
+                        trace_node(message_id=message.message_id, node_name="observe_logic3_check")
+                    ferment_results = apply_logic3_on_task(
+                        card=task_card,
+                        state_store=self.state_store,
+                        threshold=self.config.observe_ferment_threshold,
+                        base_score=self.config.observe_logic3_base,
+                    )
+                    for item in ferment_results:
+                        self._append_observe_ferment_event(message.message_id, task_card.card_id, item.to_dict())
+                    self._process_observe_pop(message=message, result=result)
                     result.task_push_attempted += 1
                     if task_result.push_attempt is not None:
                         if self.config.step_trace_enabled:
@@ -273,6 +314,18 @@ class Engine:
                         if self.config.step_trace_enabled:
                             trace_node(message_id=message.message_id, node_name="observe_store")
                         decision.stored_id = save_observe(self.state_store, card)
+                        if self.config.step_trace_enabled:
+                            trace_node(message_id=message.message_id, node_name="observe_logic1_check")
+                        ferment_result = apply_logic1_on_observe_add(
+                            card=card,
+                            message=message,
+                            state_store=self.state_store,
+                            threshold=self.config.observe_ferment_threshold,
+                            base_score=self.config.observe_logic1_base,
+                        )
+                        if ferment_result is not None:
+                            self._append_observe_ferment_event(message.message_id, card.card_id, ferment_result.to_dict())
+                        self._process_observe_pop(message=message, result=result)
             if failed_attempts:
                 queue_failed_pushes(self.config.state_dir, failed_attempts)
 
@@ -290,6 +343,92 @@ class Engine:
 
     def _append_observe_reply_event(self, event: ObserveReplyEvent) -> None:
         append_jsonl(self.observe_reply_events_path, [event.to_dict()])
+
+    def _append_observe_ferment_event(self, message_id: str, card_id: str, payload: dict[str, Any]) -> None:
+        append_jsonl(
+            self.observe_ferment_events_path,
+            [
+                {
+                    "message_id": message_id,
+                    "card_id": card_id,
+                    **payload,
+                    "created_at": now_utc_iso(),
+                }
+            ],
+        )
+
+    def _append_observe_pop_event(self, payload: dict[str, Any]) -> None:
+        append_jsonl(self.observe_pop_events_path, [{**payload, "created_at": now_utc_iso()}])
+
+    def _process_observe_pop(self, *, message: MessageEvent, result: EngineResult) -> None:
+        ready_items = pop_ready_items(self.state_store, threshold=self.config.observe_ferment_threshold)
+        for item in ready_items:
+            if self.config.step_trace_enabled:
+                trace_node(message_id=message.message_id, node_name="observe_pop_route")
+            observe_card = self._build_observe_card(item)
+            decisions = route_cards(
+                [observe_card],
+                knowledge_threshold=self.config.knowledge_threshold,
+                task_threshold=self.config.task_threshold,
+            )
+            if not decisions:
+                continue
+            decision = decisions[0]
+            reroute_target = decision.target_pool
+            final_target = reroute_target
+            if reroute_target == "observe" and self.config.observe_force_non_observe_on_pop:
+                final_target = "task" if observe_card.confidence >= self.config.task_threshold else "knowledge"
+            if final_target == "task":
+                task_result = save_task(
+                    store=self.state_store,
+                    card=observe_card,
+                    run_id=self._build_run_id(message),
+                    push_config=TaskPushConfig(enabled=False, chat_id="", env_file=self.config.env_file),
+                )
+                stored_id = task_result.task_id
+                result.observe_reroute_task_count += 1
+            else:
+                stored_id = save_knowledge(self.state_store, observe_card, vector_store=self.vector_store)
+                result.observe_reroute_knowledge_count += 1
+            self.state_store.mark_observe_popped(str(item.get("observe_id", "")), final_target=final_target)
+            pop_item = ObservePopItem(
+                observe_id=str(item.get("observe_id", "")),
+                topic=str(item.get("topic", "")),
+                ferment_score=float(item.get("ferment_score", 0.0) or 0.0),
+                reroute_target=reroute_target,
+                final_target=final_target,
+                reason_codes=list(decision.reason_codes),
+            )
+            self._append_observe_pop_event(
+                {
+                    **pop_item.to_dict(),
+                    "stored_id": stored_id,
+                    "message_id": message.message_id,
+                    "chat_id": message.chat_id,
+                }
+            )
+            result.observe_pop_count += 1
+
+    @staticmethod
+    def _build_observe_card(item: dict[str, Any]) -> LiftedCard:
+        observe_id = str(item.get("observe_id", "obs"))
+        topic = str(item.get("topic", "")).strip() or "observe topic"
+        evidence = [str(v) for v in item.get("evidence", []) if str(v).strip()] if isinstance(item.get("evidence"), list) else []
+        confidence = min(0.95, max(0.5, float(item.get("ferment_score", 0.0) or 0.0) / 5.0))
+        return LiftedCard(
+            card_id=f"pop-{observe_id}",
+            candidate_id=f"pop-{observe_id}",
+            title=topic,
+            summary=f"Observe popped: {topic}",
+            problem="Observe fermentation threshold reached.",
+            suggestion="Please route to executable action or knowledge.",
+            target_audience="team",
+            evidence=evidence[:5],
+            tags=["observe-pop"],
+            confidence=confidence,
+            suggested_target="observe",
+            source_message_ids=[],
+        )
 
     @staticmethod
     def _build_run_id(message: MessageEvent) -> str:

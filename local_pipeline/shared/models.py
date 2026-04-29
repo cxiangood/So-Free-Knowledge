@@ -101,6 +101,31 @@ class ObserveReplyEvent:
         return asdict(self)
 
 
+@dataclass(slots=True)
+class ObserveFermentResult:
+    observe_id: str
+    logic: str
+    score_added: float
+    ferment_score: float
+    triggered_pop: bool
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(slots=True)
+class ObservePopItem:
+    observe_id: str
+    topic: str
+    ferment_score: float
+    reroute_target: str
+    final_target: str
+    reason_codes: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
 __all__ = [
     "RouteTarget",
     "InspirationCandidate",
@@ -109,4 +134,6 @@ __all__ = [
     "PushEvent",
     "RagHit",
     "ObserveReplyEvent",
+    "ObserveFermentResult",
+    "ObservePopItem",
 ]

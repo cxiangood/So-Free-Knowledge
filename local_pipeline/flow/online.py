@@ -28,6 +28,11 @@ class OnlineConfig:
     rag_min_score: float = 0.35
     rag_embed_model: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
     observe_auto_reply_enabled: bool = True
+    observe_ferment_threshold: float = 4.0
+    observe_logic1_base: float = 1.0
+    observe_logic2_base: float = 1.5
+    observe_logic3_base: float = 2.0
+    observe_force_non_observe_on_pop: bool = True
 
 
 def start(config: OnlineConfig | None = None) -> None:
@@ -53,6 +58,11 @@ def start(config: OnlineConfig | None = None) -> None:
             rag_min_score=cfg.rag_min_score,
             rag_embed_model=cfg.rag_embed_model,
             observe_auto_reply_enabled=cfg.observe_auto_reply_enabled,
+            observe_ferment_threshold=cfg.observe_ferment_threshold,
+            observe_logic1_base=cfg.observe_logic1_base,
+            observe_logic2_base=cfg.observe_logic2_base,
+            observe_logic3_base=cfg.observe_logic3_base,
+            observe_force_non_observe_on_pop=cfg.observe_force_non_observe_on_pop,
         )
     )
     bus.subscribe(TOPIC_MESSAGE_RECEIVED, lambda evt: engine.run(evt, context={"mode": "online"}))

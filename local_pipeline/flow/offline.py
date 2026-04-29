@@ -32,6 +32,11 @@ class OfflineConfig:
     rag_min_score: float = 0.35
     rag_embed_model: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
     observe_auto_reply_enabled: bool = True
+    observe_ferment_threshold: float = 4.0
+    observe_logic1_base: float = 1.0
+    observe_logic2_base: float = 1.5
+    observe_logic3_base: float = 2.0
+    observe_force_non_observe_on_pop: bool = True
 
 
 def run(config: OfflineConfig | None = None) -> dict[str, Any]:
@@ -56,6 +61,11 @@ def run(config: OfflineConfig | None = None) -> dict[str, Any]:
             rag_min_score=cfg.rag_min_score,
             rag_embed_model=cfg.rag_embed_model,
             observe_auto_reply_enabled=cfg.observe_auto_reply_enabled,
+            observe_ferment_threshold=cfg.observe_ferment_threshold,
+            observe_logic1_base=cfg.observe_logic1_base,
+            observe_logic2_base=cfg.observe_logic2_base,
+            observe_logic3_base=cfg.observe_logic3_base,
+            observe_force_non_observe_on_pop=cfg.observe_force_non_observe_on_pop,
         )
     )
 
@@ -72,6 +82,9 @@ def run(config: OfflineConfig | None = None) -> dict[str, Any]:
     observe_question_count = 0
     observe_answered_count = 0
     observe_fallback_count = 0
+    observe_pop_count = 0
+    observe_reroute_task_count = 0
+    observe_reroute_knowledge_count = 0
 
     for msg in messages:
         evt = plain_message_to_event(msg)
@@ -89,6 +102,9 @@ def run(config: OfflineConfig | None = None) -> dict[str, Any]:
         observe_question_count += int(result.observe_question_count)
         observe_answered_count += int(result.observe_answered_count)
         observe_fallback_count += int(result.observe_fallback_count)
+        observe_pop_count += int(result.observe_pop_count)
+        observe_reroute_task_count += int(result.observe_reroute_task_count)
+        observe_reroute_knowledge_count += int(result.observe_reroute_knowledge_count)
 
     return {
         "ok": True,
@@ -104,6 +120,9 @@ def run(config: OfflineConfig | None = None) -> dict[str, Any]:
         "observe_question_count": observe_question_count,
         "observe_answered_count": observe_answered_count,
         "observe_fallback_count": observe_fallback_count,
+        "observe_pop_count": observe_pop_count,
+        "observe_reroute_task_count": observe_reroute_task_count,
+        "observe_reroute_knowledge_count": observe_reroute_knowledge_count,
         "warnings": warnings,
         "errors": errors,
     }

@@ -1,6 +1,8 @@
 from .models import (
     InspirationCandidate,
     LiftedCard,
+    ObserveFermentResult,
+    ObservePopItem,
     ObserveReplyEvent,
     PushEvent,
     RagHit,
@@ -17,5 +19,7 @@ __all__ = [
     "PushEvent",
     "RagHit",
     "ObserveReplyEvent",
+    "ObserveFermentResult",
+    "ObservePopItem",
     "now_utc_iso",
 ]
