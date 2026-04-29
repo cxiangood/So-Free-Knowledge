@@ -1,3 +1,4 @@
+from .denoise import denoise_messages
 from .detect import detect_candidates
 from .kb import save_knowledge
 from .lift import lift_candidates
@@ -14,6 +15,7 @@ from .task import enhance_task_card_with_rag, save_task
 
 __all__ = [
     "detect_candidates",
+    "denoise_messages",
     "lift_candidates",
     "route_cards",
     "save_knowledge",

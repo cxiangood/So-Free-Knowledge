@@ -85,6 +85,7 @@ def run(config: OfflineConfig | None = None) -> dict[str, Any]:
     observe_pop_count = 0
     observe_reroute_task_count = 0
     observe_reroute_knowledge_count = 0
+    denoise_filtered_count = 0
 
     for msg in messages:
         evt = plain_message_to_event(msg)
@@ -105,6 +106,7 @@ def run(config: OfflineConfig | None = None) -> dict[str, Any]:
         observe_pop_count += int(result.observe_pop_count)
         observe_reroute_task_count += int(result.observe_reroute_task_count)
         observe_reroute_knowledge_count += int(result.observe_reroute_knowledge_count)
+        denoise_filtered_count += int(result.denoise_filtered_count)
 
     return {
         "ok": True,
@@ -123,6 +125,7 @@ def run(config: OfflineConfig | None = None) -> dict[str, Any]:
         "observe_pop_count": observe_pop_count,
         "observe_reroute_task_count": observe_reroute_task_count,
         "observe_reroute_knowledge_count": observe_reroute_knowledge_count,
+        "denoise_filtered_count": denoise_filtered_count,
         "warnings": warnings,
         "errors": errors,
     }

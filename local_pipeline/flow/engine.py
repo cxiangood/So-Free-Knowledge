@@ -6,6 +6,7 @@ from typing import Any
 
 from ..msg.types import MessageEvent
 from ..comm.send import TaskPushAttempt, TaskPushConfig, push_text_message, queue_failed_pushes
+from ..core.denoise import denoise_messages
 from ..core.detect import detect_candidates
 from ..core.observe_ferment import (
     apply_logic1_on_observe_add,
@@ -76,6 +77,7 @@ class EngineResult:
     observe_pop_count: int = 0
     observe_reroute_task_count: int = 0
     observe_reroute_knowledge_count: int = 0
+    denoise_filtered_count: int = 0
     created_at: str = field(default_factory=now_utc_iso)
 
     def to_dict(self) -> dict[str, Any]:
@@ -97,6 +99,7 @@ class EngineResult:
             "observe_pop_count": self.observe_pop_count,
             "observe_reroute_task_count": self.observe_reroute_task_count,
             "observe_reroute_knowledge_count": self.observe_reroute_knowledge_count,
+            "denoise_filtered_count": self.denoise_filtered_count,
             "created_at": self.created_at,
         }
 
@@ -167,6 +170,10 @@ class Engine:
                 trace_node(message_id=message.message_id, node_name="context_extract")
             context_rows = self.chat_store.get_chat_messages(message.chat_id)[-max(1, int(self.config.context_window_size)) :]
             plain_messages = [item for item in (event_row_to_plain_message(row) for row in context_rows) if item is not None]
+            plain_messages, dropped = denoise_messages(plain_messages)
+            result.denoise_filtered_count = int(dropped)
+            if self.config.step_trace_enabled:
+                trace_node(message_id=message.message_id, node_name="message_denoise")
 
             if self.config.step_trace_enabled:
                 trace_node(message_id=message.message_id, node_name="signal_detect")
