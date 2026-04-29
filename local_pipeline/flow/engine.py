@@ -188,7 +188,7 @@ class Engine:
 
             if self.config.step_trace_enabled:
                 trace_node(message_id=message.message_id, node_name="semantic_lift")
-            lift_result = lift_candidates(current_candidates, message_events)
+            lift_result = lift_candidates(current_candidates, simple_messages)
             result.warnings.extend(lift_result.warnings)
 
             if self.config.step_trace_enabled:

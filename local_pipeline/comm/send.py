@@ -110,15 +110,25 @@ def _temporary_feishu_credentials(app_id: str, app_secret: str):
 def build_task_card_payload(card: LiftedCard, *, run_id: str, task_id: str) -> dict[str, Any]:
     evidence = card.evidence[0] if card.evidence else ""
     tags = " ".join(f"`{tag}`" for tag in card.tags[:6]) if card.tags else ""
-    markdown = (
-        f"**{card.summary}**\n"
-        f"- 建议动作: {card.suggestion}\n"
-        f"- 置信度: {card.confidence:.2f}\n"
-        f"- 证据片段: {evidence}\n"
-        f"- 标签: {tags or '无'}\n"
-        f"- task_id: `{task_id}`\n"
-        f"- run_id: `{run_id}`"
-    )
+    markdown = f"""
+        ### 🧠 关键摘要
+        > **{card.summary}**
+
+        ---
+
+        ### 📌 详情信息
+
+        | 项目 | 内容 |
+        |------|------|
+        | ⚠️ 问题 | {card.problem} |
+        | 💡 建议 | {card.suggestion} |
+        | 👥 相关人员 | {card.target_audience} |
+
+        ---
+
+        <sub>📎 相关片段：</sub>  
+        <sub>> {evidence}</sub>
+    """
     return {
         "config": {"wide_screen_mode": True},
         "header": {
@@ -226,3 +236,28 @@ __all__ = [
     "push_text_message",
     "queue_failed_pushes",
 ]
+
+if __name__ == "__main__":
+    import json
+
+    sample_card = LiftedCard(
+        card_id="card-123",
+        candidate_id="candidate-123",
+        title="示例卡片标题",
+        summary="这是一个示例卡片的摘要信息，用于展示推送功能。",
+        problem="存在一个未决问题，需要明确答复或行动。",
+        suggestion="建议将该信号转为待办并指定负责人。",
+        target_audience="张三、李四",
+        evidence=["这是相关的证据片段。"],
+        tags=["tag1", "tag2"],
+        confidence=0.85,
+        suggested_target=None,
+        source_message_ids=["msg-123"],
+    )
+    attempt = push_task_card(
+        config=TaskPushConfig(enabled=True, chat_id="oc_9663f97db577d40181f3ccc9a4ef4b03", env_file=".env"),
+        run_id="run-001",
+        task_id="task-001",
+        card=sample_card,
+    )
+    print(json.dumps(attempt.to_dict(), ensure_ascii=False, indent=2))

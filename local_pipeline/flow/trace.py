@@ -40,7 +40,7 @@ def trace_finish(*, message_id: str, suffix_status: str = "ok") -> None:
     if suffix_status and suffix_status != "ok" and nodes:
         nodes[-1] = f"{nodes[-1]}({suffix_status})"
     path = "→".join(nodes) if nodes else "无节点"
-    line = f"[ {content} ] : {path}"
+    line = f"[{content}] : {path}"
     LOGGER.info(line)
     print(line, flush=True)
 

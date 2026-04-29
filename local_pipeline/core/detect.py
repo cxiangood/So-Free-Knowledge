@@ -26,9 +26,6 @@ class DetectionResult:
     candidates: list[InspirationCandidate]
 
 
-def _normalize_text(text: str) -> str:
-    return _SPACE_RE.sub(" ", text.strip().lower())
-
 
 def _is_noise(text: str) -> bool:
     content = text.strip()
@@ -93,10 +90,10 @@ def _extract_json(text: str) -> dict[str, Any] | None:
 
 def _score_total(score_breakdown: dict[str, float]) -> float:
     return (
-        0.35 * score_breakdown["novelty"]
-        + 0.30 * score_breakdown["actionability"]
-        + 0.20 * score_breakdown["impact"]
-        + 0.15 * score_breakdown["emotion"]
+        0.25 * score_breakdown["novelty"]
+        + 0.25 * score_breakdown["actionability"]
+        + 0.25 * score_breakdown["impact"]
+        + 0.25 * score_breakdown["emotion"]
     )
 
 
@@ -118,10 +115,10 @@ def _score_with_llm(*, context_lines: list[str], current_line: str) -> dict[str,
     if not payload:
         return None
     score_breakdown = {
-        "novelty": payload.get("novelty"),
-        "actionability": payload.get("actionability"),
-        "impact": payload.get("impact"),
-        "emotion": payload.get("emotion"),
+        "novelty": payload.get("novelty")/100,
+        "actionability": payload.get("actionability")/100,
+        "impact": payload.get("impact")/100,
+        "emotion": payload.get("emotion")/100,
     }
     return score_breakdown
 
