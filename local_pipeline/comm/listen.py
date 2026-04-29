@@ -11,6 +11,7 @@ from typing import Any
 
 from ..msg.parse import parse_message_event, should_accept_message_event
 from ..msg.types import MessageEvent
+from .user import get_user_name_by_user_id
 
 try:
     import lark_oapi as lark
@@ -139,6 +140,8 @@ class OpenAPIMessageListener:
     ) -> None:
         self.bus = bus
         self.compact = compact
+        self._app_id = app_id
+        self._app_secret = app_secret
         self._event_handler = (
             lark.EventDispatcherHandler.builder("", "").register_p2_im_message_receive_v1(self._handle_message_receive).build()
         )
@@ -149,12 +152,23 @@ class OpenAPIMessageListener:
         self._client.start()
 
     def _handle_message_receive(self, data: Any) -> None:
-        event = parse_message_event(data, supported_event_type=SUPPORTED_EVENT_TYPE)
+        event = parse_message_event(
+            data,
+            supported_event_type=SUPPORTED_EVENT_TYPE,
+            user_name_resolver=self._resolve_user_name,
+        )
         if event is None:
             return
         if not should_accept_message_event(event):
             return
         dispatch_message_event(self.bus, event)
+
+    def _resolve_user_name(self, user_id: str) -> str:
+        try:
+            return get_user_name_by_user_id(user_id, self._app_id, self._app_secret)
+        except Exception:
+            LOGGER.debug("resolve user name failed for user_id=%s", user_id, exc_info=True)
+            return ""
 
 
 __all__ = [

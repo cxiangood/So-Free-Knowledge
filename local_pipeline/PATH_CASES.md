@@ -147,7 +147,7 @@
 
 触发条件：
 
-- `enable_llm=true`
+- LLM-first mode (no enable flag)
 - LLM 将 `suggested_target=knowledge`
 - `confidence>=0.60`
 
@@ -161,7 +161,7 @@
 
 现象：
 
-- `enable_llm=true` 但缺少配置，自动回退模板升维。
+- 缺少 LLM 配置时，自动回退模板升维。
 - `warnings` 中会出现缺失配置告警。
 
 ### B. LLM 改写路由

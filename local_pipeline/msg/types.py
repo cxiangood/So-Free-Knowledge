@@ -39,13 +39,20 @@ class MessageEvent:
     sender_user_id: str
     sender_type: str
     tenant_key: str
+    sender_name: str = ""
     mentions: list[dict[str, Any]] = field(default_factory=list)
     user_agent: str = ""
     raw: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         if isinstance(self.raw, dict) and isinstance(self.raw.get("message"), dict):
-            return self.raw
+            payload = dict(self.raw)
+            sender = payload.get("sender")
+            if isinstance(sender, dict):
+                sender = dict(sender)
+                sender["name"] = self.sender_name
+                payload["sender"] = sender
+            return payload
         return {
             "sender": {
                 "sender_id": {
@@ -53,6 +60,7 @@ class MessageEvent:
                     "user_id": self.sender_user_id,
                     "open_id": self.sender_open_id,
                 },
+                "name": self.sender_name,
                 "sender_type": self.sender_type,
                 "tenant_key": self.tenant_key,
             },
@@ -71,6 +79,16 @@ class MessageEvent:
                 "user_agent": self.user_agent,
             },
         }
+    
+    def replace_mentions_to_content(self) -> str:
+        content=self.content_text
+        for mention in self.mentions:
+            key,name=mention.get("key",""),mention.get("name","")
+            content = content.replace(key, f"@{name}")
+        return content
+
+    def get_simple_message(self) -> str:
+        return f"[{self.sender_name}] {self.replace_mentions_to_content()}"
 
 
 __all__ = ["MessageEvent", "PlainMessage"]

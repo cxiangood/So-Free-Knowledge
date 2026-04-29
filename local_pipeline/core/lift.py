@@ -1,14 +1,17 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 import re
 from dataclasses import dataclass
 from typing import Any
 
-from ..msg.types import PlainMessage
+from llm.client import LLMClient, LLMConfig
+
+from ..msg.types import MessageEvent
+from ..prompt import get_prompt
 from ..shared.models import InspirationCandidate, LiftedCard
 
-ACTION_HINTS = ("需要", "建议", "请", "麻烦", "安排", "修复", "优化", "跟进", "完成", "截止")
+ACTION_HINTS = ("需要", "建议", "请", "安排", "修复", "优化", "跟进", "完成", "截止")
 
 
 @dataclass(slots=True)
@@ -32,19 +35,41 @@ def _suggest_target(candidate: InspirationCandidate, content: str) -> str:
     return "observe"
 
 
-def _build_template_card(candidate: InspirationCandidate, msg: PlainMessage) -> LiftedCard:
+def _mention_names(msg: MessageEvent) -> list[str]:
+    names: list[str] = []
+    for item in msg.mentions:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name", "")).strip()
+        if name:
+            names.append(name)
+    return names
+
+
+def _build_template_card(candidate: InspirationCandidate, msg: MessageEvent) -> LiftedCard:
     content = candidate.content.strip()
     title = _clip(content.replace("\n", " "), 30)
-    suggestion = "建议先在群内确认负责人与时间节点。"
+    suggestion = "寤鸿鍏堝湪缇ゅ唴纭璐熻矗浜轰笌鏃堕棿鑺傜偣銆?"
     if any(term in content for term in ACTION_HINTS):
-        suggestion = "建议将该信号转为待办并指定负责人。"
-    problem = "讨论中出现潜在高价值弱信号。"
+        suggestion = "寤鸿灏嗚淇″彿杞负寰呭姙骞舵寚瀹氳礋璐ｄ汉銆?"
+    problem = "璁ㄨ涓嚭鐜版綔鍦ㄩ珮浠峰€煎急淇″彿銆?"
     if "?" in content or "？" in content:
-        problem = "存在未决问题，需要明确答复或行动。"
-    audience = "团队成员"
-    if msg.mentions:
-        audience = "、".join(f"@{name}" for name in msg.mentions[:4])
-    tags = [item for item in candidate.reasons if item] or ["weak-signal"]
+        problem = "瀛樺湪鏈喅闂锛岄渶瑕佹槑纭瓟澶嶆垨琛屽姩銆?"
+    audience = "鍥㈤槦鎴愬憳"
+    names = _mention_names(msg)
+    if names:
+        audience = " ".join(f"@{name}" for name in names[:4])
+    tags: list[str] = []
+    if candidate.score_breakdown.get("novelty", 0.0) >= 0.9:
+        tags.append("novel-content")
+    if candidate.score_breakdown.get("actionability", 0.0) >= 0.55:
+        tags.append("actionable-signal")
+    if candidate.score_breakdown.get("impact", 0.0) >= 0.45:
+        tags.append("group-impact")
+    if candidate.score_breakdown.get("emotion", 0.0) >= 0.45:
+        tags.append("emotion-intensity")
+    if not tags:
+        tags = ["weak-signal"]
     return LiftedCard(
         card_id=f"card-{candidate.candidate_id}",
         candidate_id=candidate.candidate_id,
@@ -53,7 +78,7 @@ def _build_template_card(candidate: InspirationCandidate, msg: PlainMessage) -> 
         problem=problem,
         suggestion=suggestion,
         target_audience=audience,
-        evidence=[candidate.evidence],
+        evidence=[_clip(content, 220)] if content else [],
         tags=tags,
         confidence=candidate.score_total,
         suggested_target=_suggest_target(candidate, content),  # type: ignore[arg-type]
@@ -80,11 +105,14 @@ def _extract_json(text: str) -> dict[str, Any] | None:
 
 
 def _llm_refine_card(client: Any, card: LiftedCard) -> LiftedCard | None:
-    system_prompt = (
-        "你是办公协同知识整理助手。请将输入卡片优化为简洁结构化 JSON。"
-        "仅输出 JSON，字段: title,summary,problem,suggestion,target_audience,tags,confidence,suggested_target。"
-        "suggested_target 只能是 knowledge/task/observe。"
-    )
+    try:
+        system_prompt = get_prompt("lift.system_prompt")
+    except Exception:
+        system_prompt = (
+            "You refine a collaboration card. Output JSON only with fields: "
+            "title,summary,problem,suggestion,target_audience,tags,confidence,suggested_target. "
+            "suggested_target must be one of knowledge/task/observe."
+        )
     user_prompt = json.dumps(card.to_dict(), ensure_ascii=False)
     response = client.build_reply(system_prompt, user_prompt)
     if response.startswith("LLM "):
@@ -120,9 +148,8 @@ def _llm_refine_card(client: Any, card: LiftedCard) -> LiftedCard | None:
 
 def lift_candidates(
     candidates: list[InspirationCandidate],
-    messages: list[PlainMessage],
+    messages: list[MessageEvent],
     *,
-    enable_llm: bool = False,
     llm_max_items: int = 20,
 ) -> LiftResult:
     message_by_id = {item.message_id: item for item in messages}
@@ -132,18 +159,31 @@ def lift_candidates(
         source_id = candidate.source_message_ids[0] if candidate.source_message_ids else ""
         msg = message_by_id.get(source_id)
         if msg is None:
-            msg = PlainMessage(
+            msg = MessageEvent(
+                event_type="im.message.receive_v1",
+                event_id=f"evt-{source_id or 'unknown'}",
+                create_time="",
                 message_id=source_id or "unknown",
                 chat_id="",
-                send_time="",
-                sender="",
+                chat_type="group",
+                message_type="text",
+                content_text=candidate.content,
+                content_raw=candidate.content,
+                root_id="",
+                parent_id="",
+                update_time="",
+                thread_id="",
+                sender_open_id="",
+                sender_union_id="",
+                sender_user_id="",
+                sender_type="user",
+                tenant_key="",
                 mentions=[],
-                content=candidate.content,
+                raw={},
             )
         cards.append(_build_template_card(candidate, msg))
-    if not enable_llm or not cards:
+    if not cards:
         return LiftResult(cards=cards, warnings=warnings)
-    from llm.client import LLMClient, LLMConfig
 
     config = LLMConfig.from_env()
     missing = config.missing_fields()
@@ -159,5 +199,6 @@ def lift_candidates(
             continue
         cards[idx] = refined
     return LiftResult(cards=cards, warnings=warnings)
+
 
 __all__ = ["LiftResult", "lift_candidates"]

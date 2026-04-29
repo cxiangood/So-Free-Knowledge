@@ -15,7 +15,6 @@ class OnlineConfig:
     state_dir: str = "outputs/local_pipeline/state"
     chat_history_path: str = "outputs/local_pipeline/state/chat_message_store.json"
     chat_history_limit: int = 100
-    enable_llm: bool = False
     context_window_size: int = 20
     task_push_enabled: bool = False
     task_push_chat_id: str = ""
@@ -45,7 +44,6 @@ def start(config: OnlineConfig | None = None) -> None:
             chat_history_path=cfg.chat_history_path,
             chat_history_limit=cfg.chat_history_limit,
             context_window_size=cfg.context_window_size,
-            enable_llm=cfg.enable_llm,
             candidate_threshold=cfg.candidate_threshold,
             knowledge_threshold=cfg.knowledge_threshold,
             task_threshold=cfg.task_threshold,

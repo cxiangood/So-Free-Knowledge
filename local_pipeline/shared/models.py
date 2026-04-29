@@ -15,8 +15,6 @@ class InspirationCandidate:
     source_message_ids: list[str]
     score_total: float
     score_breakdown: dict[str, float]
-    reasons: list[str]
-    evidence: str
     content: str
     created_at: str = field(default_factory=now_utc_iso)
 

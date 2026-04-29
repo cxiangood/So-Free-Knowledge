@@ -19,7 +19,6 @@ class OfflineConfig:
     chat_history_path: str | Path = "outputs/local_pipeline/state/chat_message_store.json"
     chat_history_limit: int = 100
     context_window_size: int = 20
-    enable_llm: bool = False
     candidate_threshold: float = 0.45
     knowledge_threshold: float = 0.60
     task_threshold: float = 0.50
@@ -48,7 +47,6 @@ def run(config: OfflineConfig | None = None) -> dict[str, Any]:
             chat_history_path=cfg.chat_history_path,
             chat_history_limit=cfg.chat_history_limit,
             context_window_size=cfg.context_window_size,
-            enable_llm=cfg.enable_llm,
             candidate_threshold=cfg.candidate_threshold,
             knowledge_threshold=cfg.knowledge_threshold,
             task_threshold=cfg.task_threshold,

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from message_extract.extract_chat_messages import (
     build_global_mention_map,
@@ -72,31 +72,49 @@ def _mentions_list(value: Any) -> list[dict[str, Any]]:
     return rows
 
 
-def event_row_to_plain_message(row: dict[str, Any]) -> PlainMessage | None:
+def event_row_to_message_event(row: dict[str, Any]) -> MessageEvent | None:
     sender = row.get("sender")
     message = row.get("message")
-    
-    sender_id = sender.get("sender_id")
+    if not isinstance(sender, dict) or not isinstance(message, dict):
+        return None
+    sender_id = _get_field(sender, "sender_id", {})
     if not isinstance(sender_id, dict):
         sender_id = {}
-
-    message_id = message.get("message_id", "")
-    chat_id = message.get("chat_id", "")
+    message_id = _get_field(message, "message_id", "")
+    chat_id = _get_field(message, "chat_id", "")
     if not message_id or not chat_id:
         return None
-    content_raw = message.get("content", "")
-    return PlainMessage(
+    content_raw = _get_field(message, "content", "")
+    return MessageEvent(
+        event_type="im.message.receive_v1",
+        event_id=f"evt-{message_id}",
+        create_time=_get_field(message, "create_time", ""),
         message_id=message_id,
         chat_id=chat_id,
-        send_time=message.get("create_time", ""),
-        sender=sender_id.get("open_id", ""),
-        mentions=_mentions_to_names(message.get("mentions", [])),
-        content=_parse_content_text(content_raw),
-        msg_type=message.get("message_type", "") or "text",
+        chat_type=_get_field(message, "chat_type", ""),
+        message_type=_get_field(message, "message_type", "") or "text",
+        content_text=_parse_content_text(content_raw),
+        content_raw=content_raw,
+        root_id=_get_field(message, "root_id", ""),
+        parent_id=_get_field(message, "parent_id", ""),
+        update_time=_get_field(message, "update_time", ""),
+        thread_id=_get_field(message, "thread_id", ""),
+        sender_open_id=_get_field(sender_id, "open_id", ""),
+        sender_union_id=_get_field(sender_id, "union_id", ""),
+        sender_user_id=_get_field(sender_id, "user_id", ""),
+        sender_type=_get_field(sender, "sender_type", ""),
+        tenant_key=_get_field(sender, "tenant_key", ""),
+        mentions=_get_field(message, "mentions", []) if isinstance(_get_field(message, "mentions", []), list) else [],
+        user_agent=_get_field(message, "user_agent", ""),
+        raw=row,
     )
 
 
-def parse_message_event(data: Any, supported_event_type: str = "im.message.receive_v1") -> MessageEvent | None:
+def parse_message_event(
+    data: Any,
+    supported_event_type: str = "im.message.receive_v1",
+    user_name_resolver: Callable[[str], str] | None = None,
+) -> MessageEvent | None:
     header = _get_field(data, "header", None)
     event = _get_field(data, "event", None)
     if event is None:
@@ -131,7 +149,13 @@ def parse_message_event(data: Any, supported_event_type: str = "im.message.recei
             "user_agent": _get_field(message, "user_agent", ""),
         },
     }
-    print(raw)
+    sender_user_id = raw["sender"]["sender_id"]["user_id"]
+    sender_name = ""
+    if callable(user_name_resolver) and sender_user_id:
+        try:
+            sender_name = str(user_name_resolver(sender_user_id) or "").strip()
+        except Exception:
+            sender_name = ""
     return MessageEvent(
         event_type=event_type,
         event_id=_get_field(header, "event_id", ""),
@@ -148,9 +172,10 @@ def parse_message_event(data: Any, supported_event_type: str = "im.message.recei
         thread_id=raw["message"]["thread_id"],
         sender_open_id=raw["sender"]["sender_id"]["open_id"],
         sender_union_id=raw["sender"]["sender_id"]["union_id"],
-        sender_user_id=raw["sender"]["sender_id"]["user_id"],
+        sender_user_id=sender_user_id,
         sender_type=raw["sender"]["sender_type"],
         tenant_key=raw["sender"]["tenant_key"],
+        sender_name=sender_name,
         mentions=raw["message"]["mentions"],
         user_agent=raw["message"]["user_agent"],
         raw=raw,
@@ -249,7 +274,7 @@ def plain_message_to_event(message: PlainMessage) -> MessageEvent:
 
 
 __all__ = [
-    "event_row_to_plain_message",
+    "event_row_to_message_event",
     "plain_message_to_event",
     "load_plain_messages_from_archive",
     "parse_message_event",

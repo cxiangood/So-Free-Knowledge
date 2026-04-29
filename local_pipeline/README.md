@@ -26,7 +26,6 @@ result = run(
         chat_history_path="outputs/local_pipeline/state/chat_message_store.json",
         chat_history_limit=100,
         context_window_size=20,
-        enable_llm=False,
         candidate_threshold=0.45,
         knowledge_threshold=0.60,
         task_threshold=0.50,
@@ -59,7 +58,6 @@ start(
         chat_history_path="outputs/local_pipeline/state/chat_message_store.json",
         chat_history_limit=100,
         context_window_size=20,
-        enable_llm=False,
         candidate_threshold=0.45,
         knowledge_threshold=0.60,
         task_threshold=0.50,
@@ -94,7 +92,7 @@ No outer `event` wrapper is used for internal message serialization or chat hist
   - `index.faiss`
   - `meta.json`
 - Task route uses RAG retrieval to enrich task card content before push/store.
-- Observe route supports rule-based question detection:
+- Observe route supports LLM-first question detection with rule fallback:
   - question + retrievable knowledge => auto reply to source `chat_id` (`text` message)
   - otherwise => fallback to `observe_store`.
 

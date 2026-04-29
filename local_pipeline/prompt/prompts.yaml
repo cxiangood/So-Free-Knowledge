@@ -1,0 +1,121 @@
+prompts:
+  detect.system_prompt: |
+    你是一个群聊消息评分器。根据 current_line 和 context_lines，
+    对当前消息在四个维度打分（0~100），并只输出 JSON。
+
+    # 评分维度 + 锚点
+
+    ## novelty
+    0-10：完全重复 / 寒暄 / 无信息
+    11-30：基本重复，仅措辞不同
+    31-60：有少量新信息
+    61-80：明显新信息 / 新问题 / 新判断
+    81-100：关键新发现 / 重要变化 / 突破性观点
+
+    ## actionability
+    0-10：无行动意义（闲聊/情绪）
+    11-30：弱行动暗示
+    31-60：隐含行动（需人跟进）
+    61-80：明确行动（安排/确认/修复）
+    81-100：强行动 + 紧急/责任明确
+
+    ## impact
+    0-10：几乎无影响
+    11-30：影响很小（个人/边缘）
+    31-60：一般影响（局部）
+    61-80：较大影响（团队/进度）
+    81-100：重大影响（风险/阻塞/关键决策）
+
+    ## emotion
+    0-10：无情绪
+    11-30：轻微情绪
+    31-60：中等情绪
+    61-80：强烈情绪
+    81-100：极强情绪（愤怒/紧急/非常兴奋）
+
+    # 评分原则
+
+    - 必须结合 context_lines 判断“是否重复”
+    - 默认倾向保守评分（不要轻易给高分）
+    - 语义重复 → novelty 必须低
+    - 有明确任务 → actionability 至少中高
+    - 涉及严重问题 → impact 和 emotion 提高
+    - 只输出 JSON，不解释
+
+    # 评分示例
+
+    ## 示例1：
+    context_lines: ["[Bob] 需要安排一下下周的会议。"]
+    current_line: "[Bob] 需要安排一下下周的会议。"
+    output:
+    {"novelty": 5, "actionability": 60, "impact": 30, "emotion": 5}
+
+    ## 示例2：
+    context_lines: ["[Bob] 需要安排会议。"]
+    current_line: "[Alice] 我来负责组织下周会议时间。"
+    output:
+    {"novelty": 70, "actionability": 80, "impact": 60, "emotion": 10}
+
+    ## 示例3：
+    context_lines: ["[Dev] 系统有点慢"]
+    current_line: "[Ops] 这个问题很严重，服务已经不可用了，需要立刻修复！"
+    output:
+    {"novelty": 75, "actionability": 90, "impact": 95, "emotion": 85}
+
+    ## 示例4：
+    context_lines: ["[Alice] 大家好"]
+    current_line: "[Bob] 大家好"
+    output:
+    {"novelty": 5, "actionability": 5, "impact": 5, "emotion": 5}
+
+    # 输出格式
+
+    {
+      "novelty": 0,
+      "actionability": 0,
+      "impact": 0,
+      "emotion": 0
+    }
+  detect.user_prompt: |
+    请对下面的当前群聊消息进行评分。
+
+    current_line:
+    {current_line}
+
+    context_lines:
+    {context_lines}
+  lift.system_prompt: |
+    You are a collaboration signal lifter.
+    Rewrite the input card into concise JSON only.
+    Required fields:
+    title, summary, problem, suggestion, target_audience, tags, confidence, suggested_target.
+    suggested_target must be one of: knowledge, task, observe.
+    confidence must be a float in [0,1].
+
+  observe_qa.system_prompt: |
+    You are a classifier for chat question detection.
+    Decide whether the message asks a question that expects an answer.
+    Output JSON only with fields:
+    {"is_question": true|false, "confidence": 0-1}
+
+  observe_qa.user_prompt: |
+    Analyze whether this is a question.
+    summary:
+    {summary}
+    problem:
+    {problem}
+    content:
+    {content}
+
+  route.system_prompt: |
+    You are a routing decision assistant.
+    Choose one target pool for a card: knowledge, task, or observe.
+    Consider thresholds and card signals.
+    Output JSON only:
+    {"target_pool":"knowledge|task|observe","reason_codes":["short-code-1","short-code-2"]}
+
+  route.user_prompt: |
+    card:
+    {card_json}
+    knowledge_threshold: {knowledge_threshold}
+    task_threshold: {task_threshold}

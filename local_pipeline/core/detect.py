@@ -1,23 +1,28 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import hashlib
+import json
 import re
 from dataclasses import dataclass
+from typing import Any
 
-from ..msg.types import PlainMessage
+from llm.client import LLMClient, LLMConfig
+
 from ..shared.models import InspirationCandidate
+from ..prompt import get_prompt
 
 _ONLY_URL_RE = re.compile(r"^\s*https?://\S+\s*$", re.IGNORECASE)
 _SPACE_RE = re.compile(r"\s+")
+_SIMPLE_MSG_RE = re.compile(r"^\s*\[(?P<sender>[^\]]*)\]\s*(?P<content>.*)$")
 
-ACTION_TERMS = ("需要", "建议", "请", "麻烦", "安排", "修复", "改进", "优化", "跟进", "截止", "完成")
+ACTION_TERMS = ("需要", "建议", "请", "安排", "修复", "改进", "优化", "跟进", "截止", "完成")
 IMPACT_TERMS = ("大家", "我们", "各位", "同学", "团队", "全员")
 EMOTION_TERMS = ("吐槽", "抱怨", "卡住", "着急", "崩溃", "问题", "失败", "超时")
 
 
 @dataclass(slots=True)
 class DetectionResult:
-    messages: list[PlainMessage]
+    messages: list[str]
     candidates: list[InspirationCandidate]
 
 
@@ -39,14 +44,14 @@ def _is_noise(text: str) -> bool:
     return False
 
 
-def _score_message(msg: PlainMessage, duplicate_count: int) -> tuple[dict[str, float], list[str]]:
-    content = msg.content
+def _score_message_rule(content: str, duplicate_count: int) -> tuple[dict[str, float], list[str]]:
     novelty = 1.0 / float(1 + max(0, duplicate_count))
     action_hits = sum(1 for term in ACTION_TERMS if term in content)
     impact_hits = sum(1 for term in IMPACT_TERMS if term in content)
     emotion_hits = sum(1 for term in EMOTION_TERMS if term in content)
     is_question = 1.0 if ("?" in content or "？" in content) else 0.0
-    has_mentions = min(1.0, len(msg.mentions) / 2.0)
+    mention_hits = max(0, content.count("@"))
+    has_mentions = min(1.0, mention_hits / 2.0)
     exclaim_strength = min(1.0, (content.count("!") + content.count("！")) / 3.0)
     actionability = min(1.0, 0.35 * is_question + 0.45 * min(1.0, action_hits / 2.0) + 0.2 * has_mentions)
     impact = min(1.0, 0.5 * has_mentions + 0.5 * min(1.0, impact_hits / 2.0))
@@ -69,44 +74,97 @@ def _score_message(msg: PlainMessage, duplicate_count: int) -> tuple[dict[str, f
     }, reasons
 
 
-def detect_candidates(messages: list[PlainMessage], *, candidate_threshold: float = 0.45) -> DetectionResult:
-    filtered: list[PlainMessage] = []
-    candidates: list[InspirationCandidate] = []
-    seen_count: dict[str, int] = {}
-    for msg in messages:
-        if _is_noise(msg.content):
-            continue
-        normalized = _normalize_text(msg.content)
-        count = seen_count.get(normalized, 0)
-        seen_count[normalized] = count + 1
-        score_breakdown, reasons = _score_message(msg, count)
-        score_total = (
-            0.35 * score_breakdown["novelty"]
-            + 0.30 * score_breakdown["actionability"]
-            + 0.20 * score_breakdown["impact"]
-            + 0.15 * score_breakdown["emotion"]
-        )
-        msg.features = {
-            "normalized": normalized,
-            "duplicate_count": count,
-            "is_question": bool("?" in msg.content or "？" in msg.content),
-            "length": len(msg.content),
-        }
-        filtered.append(msg)
-        if score_total < candidate_threshold:
-            continue
-        candidate_id = "cand-" + hashlib.md5(msg.message_id.encode("utf-8")).hexdigest()[:12]
-        candidates.append(
-            InspirationCandidate(
-                candidate_id=candidate_id,
-                source_message_ids=[msg.message_id],
-                score_total=round(score_total, 4),
-                score_breakdown=score_breakdown,
-                reasons=reasons or ["weak-signal"],
-                evidence=msg.content[:220],
-                content=msg.content,
-            )
-        )
-    return DetectionResult(messages=filtered, candidates=candidates)
+def _extract_json(text: str) -> dict[str, Any] | None:
+    stripped = text.strip()
+    try:
+        payload = json.loads(stripped)
+        return payload if isinstance(payload, dict) else None
+    except json.JSONDecodeError:
+        pass
+    match = re.search(r"\{.*\}", stripped, re.DOTALL)
+    if not match:
+        return None
+    try:
+        payload = json.loads(match.group(0))
+    except json.JSONDecodeError:
+        return None
+    return payload if isinstance(payload, dict) else None
 
+
+def _score_total(score_breakdown: dict[str, float]) -> float:
+    return (
+        0.35 * score_breakdown["novelty"]
+        + 0.30 * score_breakdown["actionability"]
+        + 0.20 * score_breakdown["impact"]
+        + 0.15 * score_breakdown["emotion"]
+    )
+
+
+def _score_with_llm(*, context_lines: list[str], current_line: str) -> dict[str, float] | None:
+    config = LLMConfig.from_env(max_tokens=280, temperature=0.1)
+    if config.missing_fields():
+        return None
+    client = LLMClient(config)
+    try:
+        system_prompt = get_prompt("detect.system_prompt")
+        user_prompt = get_prompt("detect.user_prompt").format(current_line=current_line, context_lines="\n".join(context_lines))
+    except Exception:
+        return None
+    
+    response = client.build_reply(system_prompt, user_prompt)
+    if response.startswith("LLM "):
+        return None
+    payload = _extract_json(response)
+    if not payload:
+        return None
+    score_breakdown = {
+        "novelty": payload.get("novelty"),
+        "actionability": payload.get("actionability"),
+        "impact": payload.get("impact"),
+        "emotion": payload.get("emotion"),
+    }
+    return score_breakdown
+
+
+def detect_candidates(messages: list[str], *, candidate_threshold: float = 0.45) -> DetectionResult:
+    filtered = [msg for msg in messages if not _is_noise(msg)]
+    if not filtered:
+        return DetectionResult(messages=[], candidates=[])
+
+    current_content = filtered[-1]
+    
+
+    context_raw = filtered[:-1]
+
+    scored = _score_with_llm(context_lines=context_raw, current_line=current_content)
+    if scored is None:
+        score_breakdown, _ = _score_message_rule(current_content, 0)
+    else:
+        score_breakdown = scored
+
+    score_total = _score_total(score_breakdown)
+    if score_total < candidate_threshold:
+        return DetectionResult(messages=filtered, candidates=[])
+
+    candidate_id = "cand-" + hashlib.md5(current_content.encode("utf-8")).hexdigest()[:12]
+    candidate = InspirationCandidate(
+        candidate_id=candidate_id,
+        source_message_ids=[candidate_id],
+        score_total=round(score_total, 4),
+        score_breakdown=score_breakdown,
+        content=current_content,
+    )
+    return DetectionResult(messages=filtered, candidates=[candidate])
 __all__ = ["DetectionResult", "detect_candidates"]
+    
+if __name__ == "__main__":
+    test_messages = [
+        "[Alice] 大家好！",
+        "[Bob] 需要安排一下下周的会议。",
+        "[Charlie] 这个功能太棒了！",
+        "[Alice] 大家好！",  # duplicate
+        # "[Bob] 需要安排一下下周的会议。",  # duplicate
+        # "[Dave] @Alice 我觉得这个问题很严重，需要尽快修复！",
+    ]
+    result = detect_candidates(test_messages, candidate_threshold=0.01)
+    print("Detect End")

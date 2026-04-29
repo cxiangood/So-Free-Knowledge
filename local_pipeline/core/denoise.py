@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 
-from ..msg.types import PlainMessage
+from ..msg.types import MessageEvent
 
 _SPACE_RE = re.compile(r"\s+")
 _ONLY_PUNCT_RE = re.compile(r"^[\W_]+$", re.UNICODE)
@@ -24,11 +24,11 @@ _SHORT_ACKS = {
 }
 
 
-def denoise_messages(messages: list[PlainMessage]) -> tuple[list[PlainMessage], int]:
-    kept: list[PlainMessage] = []
+def denoise_messages(messages: list[MessageEvent]) -> tuple[list[MessageEvent], int]:
+    kept: list[MessageEvent] = []
     dropped = 0
     for msg in messages:
-        text = _normalize(msg.content)
+        text = _normalize(msg.content_text)
         if _is_meaningless(text):
             dropped += 1
             continue

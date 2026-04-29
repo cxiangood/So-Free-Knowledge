@@ -14,14 +14,14 @@ from ..core.observe_ferment import (
     apply_logic3_on_task,
     pop_ready_items,
 )
-from ..core.observe_qa import is_question_by_rule, try_answer_with_rag
+from ..core.observe_qa import is_question_with_llm, try_answer_with_rag
 from ..core.kb import save_knowledge
 from ..core.lift import lift_candidates
 from ..core.obs import save_observe
 from ..core.route import route_cards
 from ..core.task import enhance_task_card_with_rag, save_task
 from ..msg.cache import ChatMessageStore
-from ..msg.parse import event_row_to_plain_message
+from ..msg.parse import event_row_to_message_event
 from ..rag.index import VectorKnowledgeStore
 from ..rag.retriever import retrieve
 from ..shared.models import LiftedCard, ObservePopItem, ObserveReplyEvent
@@ -38,7 +38,6 @@ class EngineConfig:
     chat_history_path: str | Path = "outputs/local_pipeline/state/chat_message_store.json"
     chat_history_limit: int = 100
     context_window_size: int = 20
-    enable_llm: bool = False
     candidate_threshold: float = 0.45
     knowledge_threshold: float = 0.60
     task_threshold: float = 0.50
@@ -169,16 +168,18 @@ class Engine:
             if self.config.step_trace_enabled:
                 trace_node(message_id=message.message_id, node_name="context_extract")
             context_rows = self.chat_store.get_chat_messages(message.chat_id)[-max(1, int(self.config.context_window_size)) :]
-            plain_messages = [item for item in (event_row_to_plain_message(row) for row in context_rows) if item is not None]
-            plain_messages, dropped = denoise_messages(plain_messages)
-            result.denoise_filtered_count = int(dropped)
-            if self.config.step_trace_enabled:
-                trace_node(message_id=message.message_id, node_name="message_denoise")
-
+            message_events = [item for item in (event_row_to_message_event(row) for row in context_rows) if item is not None]
+            
+            # message_events, dropped = denoise_messages(message_events)
+            # result.denoise_filtered_count = int(dropped)
+            # if self.config.step_trace_enabled:
+            #     trace_node(message_id=message.message_id, node_name="message_denoise")
+            
+            simple_messages = [message.get_simple_message() for message in message_events]
             if self.config.step_trace_enabled:
                 trace_node(message_id=message.message_id, node_name="signal_detect")
-            detection = detect_candidates(plain_messages, candidate_threshold=self.config.candidate_threshold)
-            current_candidates = [item for item in detection.candidates if message.message_id in item.source_message_ids]
+            detection = detect_candidates(simple_messages, candidate_threshold=self.config.candidate_threshold)
+            current_candidates = list(detection.candidates)
             result.candidate_count = len(current_candidates)
             if not current_candidates:
                 self.runtime_state.add(message.message_id)
@@ -187,7 +188,7 @@ class Engine:
 
             if self.config.step_trace_enabled:
                 trace_node(message_id=message.message_id, node_name="semantic_lift")
-            lift_result = lift_candidates(current_candidates, detection.messages, enable_llm=self.config.enable_llm)
+            lift_result = lift_candidates(current_candidates, message_events)
             result.warnings.extend(lift_result.warnings)
 
             if self.config.step_trace_enabled:
@@ -272,7 +273,7 @@ class Engine:
                             failed_attempts.append(task_result.push_attempt)
                 else:
                     answered_this_decision = False
-                    should_question = is_question_by_rule(summary=card.summary, problem=card.problem, content=message.content_text)
+                    should_question = is_question_with_llm(summary=card.summary, problem=card.problem, content=message.content_text)
                     if should_question:
                         result.observe_question_count += 1
                     if should_question and self.config.observe_auto_reply_enabled and self.config.rag_enabled:
