@@ -10,6 +10,22 @@ from .confused_detector import (
 )
 from .assistant_brief import build_personal_brief
 from .assistant_online import collect_online_personal_inputs
+from .assistant import (
+    AccessRecord,
+    DocumentRecord,
+    InterestDigestItem,
+    KnowledgeItem,
+    MessageRecord,
+    RankedDocument,
+    ScheduleConfig,
+    UserProfile,
+    build_interest_digest,
+    collect_personal_inputs_online,
+    rank_related_knowledge,
+    rank_related_messages,
+    score_doc_recommend,
+    score_doc_urgency,
+)
 from .interest_filter import build_interest_filter_prompt, parse_interest_filter_judgements
 from .lingo_context import (
     build_lingo_judge_prompt,
@@ -29,8 +45,22 @@ __all__ = [
     "format_inline_explanation",
     "build_interest_filter_prompt",
     "LingoStore",
+    "AccessRecord",
+    "DocumentRecord",
+    "InterestDigestItem",
+    "KnowledgeItem",
+    "MessageRecord",
+    "RankedDocument",
+    "ScheduleConfig",
+    "UserProfile",
+    "build_interest_digest",
     "parse_interest_filter_judgements",
     "parse_confused_judgement",
     "parse_lingo_judgements",
     "publishable_lingo_judgements",
+    "collect_personal_inputs_online",
+    "rank_related_knowledge",
+    "rank_related_messages",
+    "score_doc_recommend",
+    "score_doc_urgency",
 ]

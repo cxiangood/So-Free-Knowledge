@@ -7,16 +7,28 @@ from pathlib import Path
 from typing import Any
 
 from .archive import collect_messages
+from .assistant.profile import (
+    assistant_profile_default_path,
+    build_profile_overrides,
+    build_retrieval_overrides,
+    build_schedule_overrides,
+    load_assistant_profile_config,
+)
+from .assistant.service import build_personal_brief_command_result, recommend_command_result, resolve_push_target
+from .assistant.training import export_dual_tower_samples, load_dual_tower_samples, train_dual_tower_baseline
 from .auth import (
     DEFAULT_REDIRECT_URI,
     DEFAULT_SCOPE,
     auth_status,
     build_authorization_url,
+    device_login,
+    ensure_user_auth,
     exchange_code_for_token,
     init_token,
+    resume_device_login,
+    start_device_login,
 )
-from .config import load_env_file, resolve_env_file
-from .config import get_user_identity
+from .config import get_user_access_token, get_user_identity, load_env_file, resolve_env_file
 from .confused_detector import (
     build_confused_judge_prompt,
     detect_confused_candidates,
@@ -55,6 +67,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="sofree-knowledge")
     parser.add_argument("--env-file", default="", help="Path to .env file.")
     parser.add_argument("--output-dir", default=".", help="Archive and policy root directory.")
+    parser.add_argument("--token-file", default="", help="Optional user token file path.")
     subparsers = parser.add_subparsers(dest="command")
 
     collect = subparsers.add_parser("collect-messages", help="Collect Feishu messages.")
@@ -97,6 +110,19 @@ def build_parser() -> argparse.ArgumentParser:
     status = subparsers.add_parser("auth-status", help="Show local Feishu token status.")
     status.add_argument("--token-file", default="")
     status.set_defaults(func=cmd_auth_status)
+
+    auth = subparsers.add_parser("auth", help="Authentication operations.")
+    auth_subparsers = auth.add_subparsers(dest="auth_command")
+
+    auth_login = auth_subparsers.add_parser("login", help="Run Feishu device-flow login.")
+    auth_login.add_argument("--scope", default=DEFAULT_SCOPE)
+    auth_login.add_argument("--token-file", default="")
+    auth_login.add_argument("--no-browser", action="store_true", help="Do not open the verification URL automatically.")
+    auth_login.add_argument("--no-wait", action="store_true", help="Start device flow and return device_code immediately.")
+    auth_login.add_argument("--device-code", default="", help="Resume a previous device-flow login with a device code.")
+    auth_login.add_argument("--interval", type=int, default=5, help="Polling interval used with --device-code.")
+    auth_login.add_argument("--expires-in", type=int, default=240, help="Polling timeout used with --device-code.")
+    auth_login.set_defaults(func=cmd_auth_login)
 
     # Lingo commands
     lingo = subparsers.add_parser("lingo", help="Lingo (glossary) operations.")
@@ -190,6 +216,11 @@ def build_parser() -> argparse.ArgumentParser:
     assistant_profile_set.add_argument("--nightly-interest-cron", default="0 21 * * *")
     assistant_profile_set.add_argument("--weekly-enabled", action=argparse.BooleanOptionalAction, default=True)
     assistant_profile_set.add_argument("--nightly-enabled", action=argparse.BooleanOptionalAction, default=True)
+    assistant_profile_set.add_argument("--dual-tower-enabled", action=argparse.BooleanOptionalAction, default=None)
+    assistant_profile_set.add_argument("--dual-tower-model", default="")
+    assistant_profile_set.add_argument("--dual-tower-model-file", default="")
+    assistant_profile_set.add_argument("--dual-tower-top-k", type=int, default=None)
+    assistant_profile_set.add_argument("--dual-tower-min-score", type=float, default=None)
     assistant_profile_set.set_defaults(func=cmd_assistant_set_profile)
 
     assistant_profile_get = assistant_subparsers.add_parser("get-profile", help="Read assistant profile + schedule config.")
@@ -225,6 +256,11 @@ def build_parser() -> argparse.ArgumentParser:
     assistant_build.add_argument("--nightly-interest-cron", default="", help="Override nightly digest cron.")
     assistant_build.add_argument("--weekly-enabled", action=argparse.BooleanOptionalAction, default=None)
     assistant_build.add_argument("--nightly-enabled", action=argparse.BooleanOptionalAction, default=None)
+    assistant_build.add_argument("--dual-tower-enabled", action=argparse.BooleanOptionalAction, default=None)
+    assistant_build.add_argument("--dual-tower-model", default="")
+    assistant_build.add_argument("--dual-tower-model-file", default="")
+    assistant_build.add_argument("--dual-tower-top-k", type=int, default=None)
+    assistant_build.add_argument("--dual-tower-min-score", type=float, default=None)
     assistant_build.add_argument("--push", action="store_true", help="Push assistant result to Feishu.")
     assistant_build.add_argument("--push-interest-card", action=argparse.BooleanOptionalAction, default=True, help="Whether to push interest digest card.")
     assistant_build.add_argument("--push-summary-card", action=argparse.BooleanOptionalAction, default=True, help="Whether to push summary card.")
@@ -238,13 +274,86 @@ def build_parser() -> argparse.ArgumentParser:
     )
     assistant_build.set_defaults(func=cmd_assistant_build_personal_brief)
 
+    assistant_recommend = assistant_subparsers.add_parser(
+        "recommend",
+        help="One-command OpenClaw recommendation with auto dual-tower enable/disable.",
+    )
+    assistant_recommend.add_argument("--target-user-id", default="", help="Optional target user id for access filtering.")
+    assistant_recommend.add_argument("--token-file", default="", help="Optional token file for auto-resolving current user id.")
+    assistant_recommend.add_argument("--chat-ids", default="", help="Comma-separated chat IDs for online mode.")
+    assistant_recommend.add_argument("--include-visible-chats", action=argparse.BooleanOptionalAction, default=True)
+    assistant_recommend.add_argument("--max-chats", type=int, default=20)
+    assistant_recommend.add_argument("--max-messages-per-chat", type=int, default=200)
+    assistant_recommend.add_argument("--max-drive-docs", type=int, default=50)
+    assistant_recommend.add_argument("--max-knowledge", type=int, default=30)
+    assistant_recommend.add_argument("--recent-days", type=int, default=7)
+    assistant_recommend.add_argument("--max-docs", type=int, default=10)
+    assistant_recommend.add_argument("--max-related", type=int, default=5)
+    assistant_recommend.add_argument("--max-interest-items", type=int, default=8)
+    assistant_recommend.add_argument("--profile-file", default="", help="Optional profile json path.")
+    assistant_recommend.add_argument("--persona", default="", help="Override persona/avatar for this run.")
+    assistant_recommend.add_argument("--role", default="", help="Override role/profession for this run.")
+    assistant_recommend.add_argument("--businesses", default="", help="Override business tracks, comma-separated.")
+    assistant_recommend.add_argument("--interests", default="", help="Override interests, comma-separated.")
+    assistant_recommend.add_argument("--mode", choices=["scheduled", "manual", "hybrid"], default="")
+    assistant_recommend.add_argument("--timezone", default="")
+    assistant_recommend.add_argument("--weekly-brief-cron", default="")
+    assistant_recommend.add_argument("--nightly-interest-cron", default="")
+    assistant_recommend.add_argument("--weekly-enabled", action=argparse.BooleanOptionalAction, default=None)
+    assistant_recommend.add_argument("--nightly-enabled", action=argparse.BooleanOptionalAction, default=None)
+    assistant_recommend.add_argument("--dual-tower-model", default="")
+    assistant_recommend.add_argument("--dual-tower-model-file", default="")
+    assistant_recommend.add_argument("--dual-tower-top-k", type=int, default=None)
+    assistant_recommend.add_argument("--dual-tower-min-score", type=float, default=None)
+    assistant_recommend.add_argument("--dual-tower-min-samples", type=int, default=20)
+    assistant_recommend.add_argument("--push", action="store_true", help="Push assistant result to Feishu.")
+    assistant_recommend.add_argument("--push-interest-card", action=argparse.BooleanOptionalAction, default=True)
+    assistant_recommend.add_argument("--push-summary-card", action=argparse.BooleanOptionalAction, default=True)
+    assistant_recommend.add_argument("--receive-chat-id", default="")
+    assistant_recommend.add_argument("--receive-open-id", default="")
+    assistant_recommend.add_argument("--output-format", choices=["all", "json", "doc", "card"], default="all")
+    assistant_recommend.set_defaults(func=cmd_assistant_recommend)
+
+    assistant_export_samples = assistant_subparsers.add_parser(
+        "export-dual-tower-samples",
+        help="Export weak-supervision samples for dual-tower training.",
+    )
+    assistant_export_samples.add_argument("--documents-file", required=True)
+    assistant_export_samples.add_argument("--access-records-file", required=True)
+    assistant_export_samples.add_argument("--messages-file", required=True)
+    assistant_export_samples.add_argument("--target-user-id", default="")
+    assistant_export_samples.add_argument("--profile-file", default="", help="Optional profile json path.")
+    assistant_export_samples.add_argument("--persona", default="", help="Override persona/avatar for this run.")
+    assistant_export_samples.add_argument("--role", default="", help="Override role/profession for this run.")
+    assistant_export_samples.add_argument("--businesses", default="", help="Override business tracks, comma-separated.")
+    assistant_export_samples.add_argument("--interests", default="", help="Override interests, comma-separated.")
+    assistant_export_samples.add_argument("--output-file", default="", help="Optional JSONL file path.")
+    assistant_export_samples.set_defaults(func=cmd_assistant_export_dual_tower_samples)
+
+    assistant_train_dual_tower = assistant_subparsers.add_parser(
+        "train-dual-tower",
+        help="Train a lightweight dual-tower baseline from exported JSONL samples.",
+    )
+    assistant_train_dual_tower.add_argument("--samples-file", required=True, help="JSONL file from export-dual-tower-samples.")
+    assistant_train_dual_tower.add_argument("--output-file", default="", help="Optional model output JSON path.")
+    assistant_train_dual_tower.add_argument("--min-token-weight", type=float, default=0.0)
+    assistant_train_dual_tower.set_defaults(func=cmd_assistant_train_dual_tower)
+
     return parser
 
 
 def cmd_collect_messages(args: argparse.Namespace) -> dict[str, Any]:
     prepare_env(args)
+    require_user_auth(
+        args,
+        required_scopes=[
+            "im:chat:read",
+            "im:message:readonly",
+            "im:message.group_msg:get_as_user",
+        ],
+    )
     result = collect_messages(
-        client=FeishuClient(),
+        client=build_user_feishu_client(args, require_token=True),
         output_dir=args.output_dir,
         output_subdir=args.output_subdir,
         chat_ids=args.chat_ids or None,
@@ -290,7 +399,7 @@ def cmd_init_token(args: argparse.Namespace) -> dict[str, Any]:
         enable_autofill=args.enable_autofill,
         redirect_uri=args.redirect_uri,
         scope=args.scope,
-        token_file=args.token_file or None,
+        token_file=get_token_file_arg(args),
     )
     result["ok"] = True
     return result
@@ -298,14 +407,35 @@ def cmd_init_token(args: argparse.Namespace) -> dict[str, Any]:
 
 def cmd_exchange_code(args: argparse.Namespace) -> dict[str, Any]:
     prepare_env(args)
-    result = exchange_code_for_token(args.code_or_url, token_file=args.token_file or None)
+    result = exchange_code_for_token(args.code_or_url, token_file=get_token_file_arg(args))
     result["ok"] = True
     return result
 
 
 def cmd_auth_status(args: argparse.Namespace) -> dict[str, Any]:
     prepare_env(args)
-    result = auth_status(token_file=args.token_file or None)
+    result = auth_status(token_file=get_token_file_arg(args))
+    result["ok"] = True
+    return result
+
+
+def cmd_auth_login(args: argparse.Namespace) -> dict[str, Any]:
+    prepare_env(args)
+    if str(args.device_code or "").strip():
+        result = resume_device_login(
+            str(args.device_code).strip(),
+            interval=int(args.interval),
+            expires_in=int(args.expires_in),
+            token_file=get_token_file_arg(args),
+        )
+    elif args.no_wait:
+        result = start_device_login(scope=args.scope)
+    else:
+        result = device_login(
+            scope=args.scope,
+            token_file=get_token_file_arg(args),
+            open_browser=not bool(args.no_browser),
+        )
     result["ok"] = True
     return result
 
@@ -313,6 +443,32 @@ def cmd_auth_status(args: argparse.Namespace) -> dict[str, Any]:
 def prepare_env(args: argparse.Namespace) -> None:
     env_file = resolve_env_file(args.env_file, output_dir=args.output_dir)
     load_env_file(env_file)
+
+
+def get_token_file_arg(args: argparse.Namespace) -> str | None:
+    value = str(getattr(args, "token_file", "") or "").strip()
+    return value or None
+
+
+def require_user_auth(args: argparse.Namespace, required_scopes: str | list[str] | tuple[str, ...]) -> dict[str, Any]:
+    return ensure_user_auth(required_scopes=required_scopes, token_file=get_token_file_arg(args))
+
+
+def _instantiate_feishu_client(*, user_access_token: str | None = None) -> Any:
+    if user_access_token is None:
+        return FeishuClient()
+    try:
+        return FeishuClient(user_access_token=user_access_token)
+    except TypeError:
+        # Tests sometimes monkeypatch FeishuClient with a zero-arg callable.
+        return FeishuClient()
+
+
+def build_user_feishu_client(args: argparse.Namespace, *, require_token: bool = False) -> Any:
+    token = get_user_access_token(token_file=get_token_file_arg(args))
+    if require_token and not token:
+        raise ValueError("Missing Feishu user access token. Run `sofree-knowledge auth login` first.")
+    return _instantiate_feishu_client(user_access_token=token)
 
 
 def load_json_file(path: str) -> Any:
@@ -325,72 +481,39 @@ def load_text_file(path: str) -> str:
         return f.read()
 
 
-def resolve_push_target(
+def _resolve_push_target(
     args: argparse.Namespace,
     resolved_target_user_id: str,
 ) -> tuple[str, str]:
-    explicit_chat_id = str(args.receive_chat_id or "").strip()
-    if explicit_chat_id:
-        return "chat_id", explicit_chat_id
-
-    explicit_open_id = str(args.receive_open_id or "").strip()
-    if explicit_open_id:
-        return "open_id", explicit_open_id
-
-    identity = get_user_identity(token_file=args.token_file or None)
-    open_id = str(identity.get("open_id") or "").strip()
-    if open_id:
-        return "open_id", open_id
-
-    if str(resolved_target_user_id or "").strip().startswith("ou_"):
-        return "open_id", str(resolved_target_user_id).strip()
-
-    raise ValueError("Push target unresolved. Provide --receive-open-id or --receive-chat-id, or init token with open_id.")
+    return resolve_push_target(
+        args,
+        resolved_target_user_id=resolved_target_user_id,
+        get_user_identity=get_user_identity,
+    )
 
 
-def assistant_profile_default_path(output_dir: str) -> Path:
-    return Path(output_dir).expanduser() / "assistant_profile.json"
+def _load_assistant_profile_config(args: argparse.Namespace) -> dict[str, Any]:
+    return load_assistant_profile_config(output_dir=args.output_dir, profile_file=args.profile_file)
 
 
-def load_assistant_profile_config(args: argparse.Namespace) -> dict[str, Any]:
-    path = Path(args.profile_file).expanduser() if str(args.profile_file or "").strip() else assistant_profile_default_path(args.output_dir)
-    if not path.exists():
-        return {}
-    try:
-        parsed = json.loads(path.read_text(encoding="utf-8-sig"))
-    except json.JSONDecodeError:
-        return {}
-    return parsed if isinstance(parsed, dict) else {}
+def _build_profile_overrides(args: argparse.Namespace) -> dict[str, Any]:
+    return build_profile_overrides(
+        persona=args.persona,
+        role=args.role,
+        businesses=args.businesses,
+        interests=args.interests,
+    )
 
 
-def build_profile_overrides(args: argparse.Namespace) -> dict[str, Any]:
-    payload: dict[str, Any] = {}
-    if str(args.persona or "").strip():
-        payload["persona"] = str(args.persona).strip()
-    if str(args.role or "").strip():
-        payload["role"] = str(args.role).strip()
-    if str(args.businesses or "").strip():
-        payload["businesses"] = [item.strip() for item in str(args.businesses).split(",") if item.strip()]
-    if str(args.interests or "").strip():
-        payload["interests"] = [item.strip() for item in str(args.interests).split(",") if item.strip()]
-    return payload
-
-
-def build_schedule_overrides(args: argparse.Namespace) -> dict[str, Any]:
-    payload: dict[str, Any] = {}
-    if str(args.mode or "").strip():
-        payload["mode"] = str(args.mode).strip()
-    if str(args.timezone or "").strip():
-        payload["timezone"] = str(args.timezone).strip()
-    if str(args.weekly_brief_cron or "").strip():
-        payload["weekly_brief_cron"] = str(args.weekly_brief_cron).strip()
-    if str(args.nightly_interest_cron or "").strip():
-        payload["nightly_interest_cron"] = str(args.nightly_interest_cron).strip()
-    if args.weekly_enabled is not None:
-        payload["weekly_enabled"] = bool(args.weekly_enabled)
-    if args.nightly_enabled is not None:
-        payload["nightly_enabled"] = bool(args.nightly_enabled)
-    return payload
+def _build_schedule_overrides(args: argparse.Namespace) -> dict[str, Any]:
+    return build_schedule_overrides(
+        mode=args.mode,
+        timezone=args.timezone,
+        weekly_brief_cron=args.weekly_brief_cron,
+        nightly_interest_cron=args.nightly_interest_cron,
+        weekly_enabled=args.weekly_enabled,
+        nightly_enabled=args.nightly_enabled,
+    )
 
 
 def cmd_assistant_set_profile(args: argparse.Namespace) -> dict[str, Any]:
@@ -398,8 +521,15 @@ def cmd_assistant_set_profile(args: argparse.Namespace) -> dict[str, Any]:
     path = Path(args.profile_file).expanduser() if str(args.profile_file or "").strip() else assistant_profile_default_path(args.output_dir)
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
-        "profile": build_profile_overrides(args),
-        "schedule": build_schedule_overrides(args),
+        "profile": _build_profile_overrides(args),
+        "schedule": _build_schedule_overrides(args),
+        "retrieval": build_retrieval_overrides(
+            dual_tower_enabled=args.dual_tower_enabled,
+            dual_tower_model=args.dual_tower_model,
+            dual_tower_model_file=args.dual_tower_model_file,
+            dual_tower_top_k=args.dual_tower_top_k,
+            dual_tower_min_score=args.dual_tower_min_score,
+        ),
     }
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     return {
@@ -418,14 +548,67 @@ def cmd_assistant_set_profile(args: argparse.Namespace) -> dict[str, Any]:
 def cmd_assistant_get_profile(args: argparse.Namespace) -> dict[str, Any]:
     prepare_env(args)
     path = Path(args.profile_file).expanduser() if str(args.profile_file or "").strip() else assistant_profile_default_path(args.output_dir)
-    parsed = load_assistant_profile_config(args)
+    parsed = _load_assistant_profile_config(args)
     return {
         "ok": True,
         "profile_file": str(path),
         "exists": path.exists(),
         "profile": parsed.get("profile", {}) if isinstance(parsed, dict) else {},
         "schedule": parsed.get("schedule", {}) if isinstance(parsed, dict) else {},
+        "retrieval": parsed.get("retrieval", {}) if isinstance(parsed, dict) else {},
     }
+
+
+def cmd_assistant_export_dual_tower_samples(args: argparse.Namespace) -> dict[str, Any]:
+    prepare_env(args)
+    profile_config = _load_assistant_profile_config(args)
+    user_profile = dict(profile_config.get("profile", {})) if isinstance(profile_config, dict) else {}
+    user_profile.update(_build_profile_overrides(args))
+
+    loaded_documents = load_json_file(args.documents_file)
+    if isinstance(loaded_documents, dict) and isinstance(loaded_documents.get("documents"), list):
+        documents = [item for item in loaded_documents["documents"] if isinstance(item, dict)]
+    elif isinstance(loaded_documents, list):
+        documents = [item for item in loaded_documents if isinstance(item, dict)]
+    else:
+        raise ValueError("--documents-file must contain a JSON array or {'documents': [...]} object")
+
+    loaded_access = load_json_file(args.access_records_file)
+    if not isinstance(loaded_access, list):
+        raise ValueError("--access-records-file must contain a JSON array")
+    access_records = [item for item in loaded_access if isinstance(item, dict)]
+
+    loaded_messages = load_json_file(args.messages_file)
+    if isinstance(loaded_messages, dict) and isinstance(loaded_messages.get("messages"), list):
+        messages = [item for item in loaded_messages["messages"] if isinstance(item, dict)]
+    elif isinstance(loaded_messages, list):
+        messages = [item for item in loaded_messages if isinstance(item, dict)]
+    else:
+        raise ValueError("--messages-file must contain a JSON array or {'messages': [...]} object")
+
+    result = export_dual_tower_samples(
+        documents=documents,
+        access_records=access_records,
+        messages=messages,
+        user_profile=user_profile,
+        target_user_id=str(args.target_user_id or "").strip(),
+        output_file=str(args.output_file or "").strip(),
+    )
+    result["ok"] = True
+    return result
+
+
+def cmd_assistant_train_dual_tower(args: argparse.Namespace) -> dict[str, Any]:
+    prepare_env(args)
+    samples = load_dual_tower_samples(args.samples_file)
+    result = train_dual_tower_baseline(
+        samples=samples,
+        output_file=str(args.output_file or "").strip(),
+        min_token_weight=float(args.min_token_weight or 0.0),
+    )
+    result["ok"] = True
+    result["samples_file"] = str(args.samples_file)
+    return result
 
 
 def cmd_lingo_extract_contexts(args: argparse.Namespace) -> dict[str, Any]:
@@ -500,7 +683,7 @@ def cmd_lingo_upsert(args: argparse.Namespace) -> dict[str, Any]:
         resolved_entity_id = str(existing.get("entity_id") or resolved_entity_id)
         skip_reason = "duplicate_guard: same keyword/type/value already has remote entity_id in local mirror"
     if args.remote and not skipped_remote_create:
-        client = FeishuClient()
+        client = _instantiate_feishu_client()
         replace_entity_id = str(args.replace_entity_id or "").strip()
         if replace_entity_id:
             remote_deleted = client.delete_lingo_entity(replace_entity_id)
@@ -561,7 +744,7 @@ def cmd_lingo_delete(args: argparse.Namespace) -> dict[str, Any]:
         entity_id = str(args.entity_id or "").strip()
         if not entity_id:
             raise ValueError("--entity-id is required when --remote is enabled")
-        result["remote"] = FeishuClient().delete_lingo_entity(entity_id)
+        result["remote"] = _instantiate_feishu_client().delete_lingo_entity(entity_id)
     if args.delete_local and str(args.keyword or "").strip():
         store = LingoStore(args.output_dir)
         local = store.delete_entry(args.keyword)
@@ -605,7 +788,7 @@ def cmd_lingo_sync_from_file(args: argparse.Namespace) -> dict[str, Any]:
         judgements = publishable_lingo_judgements(judgements)
 
     store = LingoStore(args.output_dir)
-    client = FeishuClient() if args.remote else None
+    client = _instantiate_feishu_client() if args.remote else None
     upserted: list[dict[str, Any]] = []
     for item in judgements:
         if not isinstance(item, dict):
@@ -742,184 +925,25 @@ def cmd_confused_parse_judgement(args: argparse.Namespace) -> dict[str, Any]:
 
 def cmd_assistant_build_personal_brief(args: argparse.Namespace) -> dict[str, Any]:
     prepare_env(args)
-    documents: list[dict[str, Any]] = []
-    access_records: list[dict[str, Any]] = []
-    messages: list[dict[str, Any]] = []
-    knowledge_items: list[dict[str, Any]] = []
-    resolved_target_user_id = str(args.target_user_id or "").strip()
-    online_meta: dict[str, Any] = {}
-    profile_config = load_assistant_profile_config(args)
-    user_profile = dict(profile_config.get("profile", {})) if isinstance(profile_config, dict) else {}
-    user_profile.update(build_profile_overrides(args))
-    schedule = dict(profile_config.get("schedule", {})) if isinstance(profile_config, dict) else {}
-    schedule.update(build_schedule_overrides(args))
-
-    if args.online:
-        online = collect_online_personal_inputs(
-            client=FeishuClient(),
-            target_user_id=resolved_target_user_id,
-            token_file=args.token_file,
-            chat_ids=args.chat_ids or None,
-            include_visible_chats=bool(args.include_visible_chats),
-            max_chats=args.max_chats,
-            max_messages_per_chat=args.max_messages_per_chat,
-            max_drive_docs=args.max_drive_docs,
-            max_knowledge=args.max_knowledge,
-            recent_days=args.recent_days,
-        )
-        documents = [item for item in online.get("documents", []) if isinstance(item, dict)]
-        access_records = [item for item in online.get("access_records", []) if isinstance(item, dict)]
-        messages = [item for item in online.get("messages", []) if isinstance(item, dict)]
-        knowledge_items = [item for item in online.get("knowledge_items", []) if isinstance(item, dict)]
-        resolved_target_user_id = str(online.get("resolved_target_user_id") or resolved_target_user_id)
-        online_meta = online.get("meta", {}) if isinstance(online.get("meta", {}), dict) else {}
-    else:
-        if not args.documents_file:
-            raise ValueError("--documents-file is required in offline mode, or use --online")
-        loaded_documents = load_json_file(args.documents_file)
-        if isinstance(loaded_documents, dict) and isinstance(loaded_documents.get("documents"), list):
-            documents = loaded_documents["documents"]
-        elif isinstance(loaded_documents, list):
-            documents = loaded_documents
-        else:
-            raise ValueError("--documents-file must contain a JSON array or {'documents': [...]} object")
-
-        if args.access_records_file:
-            loaded_access = load_json_file(args.access_records_file)
-            if isinstance(loaded_access, list):
-                access_records = [item for item in loaded_access if isinstance(item, dict)]
-
-        if args.messages_file:
-            loaded_messages = load_json_file(args.messages_file)
-            if isinstance(loaded_messages, dict) and isinstance(loaded_messages.get("messages"), list):
-                messages = [item for item in loaded_messages["messages"] if isinstance(item, dict)]
-            elif isinstance(loaded_messages, list):
-                messages = [item for item in loaded_messages if isinstance(item, dict)]
-
-        if args.knowledge_file:
-            loaded_knowledge = load_json_file(args.knowledge_file)
-            if isinstance(loaded_knowledge, dict) and isinstance(loaded_knowledge.get("items"), list):
-                knowledge_items = [item for item in loaded_knowledge["items"] if isinstance(item, dict)]
-            elif isinstance(loaded_knowledge, list):
-                knowledge_items = [item for item in loaded_knowledge if isinstance(item, dict)]
-
-        if not resolved_target_user_id:
-            identity = get_user_identity(token_file=args.token_file or None)
-            resolved_target_user_id = str(identity.get("open_id") or identity.get("user_id") or "")
-
-    report = build_personal_brief(
-        documents=documents,
-        access_records=access_records,
-        messages=messages,
-        target_user_id=resolved_target_user_id,
-        knowledge_items=knowledge_items,
-        max_docs=args.max_docs,
-        max_related=args.max_related,
-        user_profile=user_profile,
-        schedule=schedule,
-        max_interest_items=args.max_interest_items,
+    return build_personal_brief_command_result(
+        args,
+        load_json_file=load_json_file,
+        collect_online_personal_inputs=collect_online_personal_inputs,
+        build_personal_brief=build_personal_brief,
+        get_user_identity=get_user_identity,
+        client_factory=lambda: build_user_feishu_client(args, require_token=False),
     )
 
-    base_meta = {
-        "mode": "online" if args.online else "offline",
-        "recent_days": int(args.recent_days),
-        "resolved_target_user_id": resolved_target_user_id,
-        "inputs": {
-            "document_count": len(documents),
-            "access_record_count": len(access_records),
-            "message_count": len(messages),
-            "knowledge_item_count": len(knowledge_items),
-        },
-    }
-    if online_meta:
-        base_meta["online"] = online_meta
-    if args.push:
-        receive_id_type, receive_id = resolve_push_target(args, resolved_target_user_id=resolved_target_user_id)
-        client = FeishuClient()
-        push_summary_card = bool(args.push_summary_card)
-        push_interest_card = bool(args.push_interest_card)
-        if not push_summary_card and not push_interest_card:
-            push_interest_card = True
-        summary_push_result: dict[str, Any] | None = None
-        interest_push_result: dict[str, Any] | None = None
-        push_errors: list[dict[str, str]] = []
-        if push_summary_card:
-            try:
-                summary_push_result = client.send_message(
-                    receive_id=receive_id,
-                    receive_id_type=receive_id_type,
-                    msg_type="interactive",
-                    content=report["card"],
-                )
-            except Exception as exc:
-                push_errors.append({"card": "summary", "error": str(exc)})
-        if push_interest_card:
-            try:
-                interest_push_result = client.send_message(
-                    receive_id=receive_id,
-                    receive_id_type=receive_id_type,
-                    msg_type="interactive",
-                    content=report["interest_card"],
-                )
-            except Exception as exc:
-                push_errors.append({"card": "interest", "error": str(exc)})
-        base_meta["push"] = {
-            "enabled": True,
-            "receive_id_type": receive_id_type,
-            "receive_id": receive_id,
-            "chat_id": (summary_push_result or interest_push_result or {}).get("chat_id", ""),
-            "doc_push_enabled": False,
-            "doc_push_skipped": True,
-            "docs_status": "disabled",
-            "docs": [],
-            "summary_enabled": bool(push_summary_card),
-            "summary_message_id": (summary_push_result or {}).get("message_id", ""),
-            "interest_enabled": bool(push_interest_card),
-            "interest_message_id": (interest_push_result or {}).get("message_id", ""),
-            "errors": push_errors,
-        }
-    else:
-        base_meta["push"] = {
-            "enabled": False,
-            "doc_push_enabled": False,
-            "doc_push_skipped": True,
-            "docs_status": "disabled",
-            "docs": [],
-        }
 
-    if args.output_format == "json":
-        filtered = {k: v for k, v in report.items() if k not in {"doc_markdown", "card", "interest_card"}}
-        filtered["docs"] = filtered.get("documents", [])
-        return {
-            "ok": True,
-            "meta": base_meta,
-            "report": filtered,
-        }
-    if args.output_format == "doc":
-        return {
-            "ok": True,
-            "meta": base_meta,
-            "doc_markdown": report["doc_markdown"],
-            "deprecated": {
-                "output_format_doc": True,
-                "message": "output-format=doc is deprecated; prefer output-format=card or output-format=all.",
-            },
-        }
-    if args.output_format == "card":
-        return {
-            "ok": True,
-            "meta": base_meta,
-            "card": report["card"],
-            "interest_card": report["interest_card"],
-        }
-    return {
-        "ok": True,
-        "meta": base_meta,
-        "report": {
-            **{k: v for k, v in report.items() if k != "doc_markdown"},
-            "docs": report.get("documents", []),
-        },
-    }
+def cmd_assistant_recommend(args: argparse.Namespace) -> dict[str, Any]:
+    prepare_env(args)
+    return recommend_command_result(
+        args,
+        collect_online_personal_inputs=collect_online_personal_inputs,
+        build_personal_brief=build_personal_brief,
+        get_user_identity=get_user_identity,
+        client_factory=lambda: build_user_feishu_client(args, require_token=False),
+    )
 
 
 if __name__ == "__main__":

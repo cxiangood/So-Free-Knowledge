@@ -5,7 +5,9 @@
 from __future__ import annotations
 
 import json
+import shutil
 import sys
+import uuid
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -97,6 +99,45 @@ def _show_pipeline_details(case_name: str, result: Dict[str, Any]) -> None:
         f"{case_name} - 8) Final classification_results",
         result["classification_results"],
     )
+
+
+def _write_sample_archive(input_path: Path) -> None:
+    input_path.parent.mkdir(parents=True, exist_ok=True)
+    records = [
+        {
+            "msg_type": "text",
+            "content": "OpenClaw 今天要上线，相关文档请 @张三 在今晚前确认。",
+            "mentions": [{"key": "@_user_1", "name": "张三"}],
+            "sender": {"name": "李四"},
+            "create_time": "1714046400000",
+        },
+        {
+            "msg_type": "post",
+            "raw_content": json.dumps(
+                {
+                    "content": [
+                        [
+                            {"tag": "text", "text": "AAA 模块同步提醒，修复内容已合入主干。"},
+                        ]
+                    ]
+                },
+                ensure_ascii=False,
+            ),
+            "sender": {"name": "王五"},
+            "create_time": "1714046460000",
+        },
+    ]
+    with input_path.open("w", encoding="utf-8") as f:
+        for record in records:
+            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+
+def _make_workspace_tmp_dir() -> Path:
+    root = Path(__file__).resolve().parent / "_tmp"
+    root.mkdir(parents=True, exist_ok=True)
+    path = root / uuid.uuid4().hex
+    path.mkdir()
+    return path
 
 
 def test_end_to_end_text() -> None:
@@ -193,60 +234,65 @@ def test_archive_reproducible_flow() -> None:
     message_archive/messages.jsonl -> plain text -> classify
     Save text/tokens/filtered/classification to token_classify/outputs.
     """
-    input_path = Path("message_archive/20260425T130609Z/messages.jsonl")
-    assert input_path.exists(), f"input not found: {input_path}"
+    tmp_path = _make_workspace_tmp_dir()
+    try:
+        archive_dir = tmp_path / "message_archive" / "20260425T130609Z"
+        input_path = archive_dir / "messages.jsonl"
+        _write_sample_archive(input_path)
 
-    records = load_records(input_path)
-    plain_messages = extract_plain_messages(records, include_types={"text", "post"})[:1]
-    plain_text = "\n".join(plain_messages)
+        records = load_records(input_path)
+        plain_messages = extract_plain_messages(records, include_types={"text", "post"})[:1]
+        plain_text = "\n".join(plain_messages)
 
-    config = {
-        "top_keywords": 20,
-        "text_window_tokens": 80,
-        "message_window_sentences": 4,
-    }
-    result = classify(plain_text, config)
-    pipeline = TextKeywordClassifierPipeline(config)
-    tokens = pipeline.tokenizer.tokenize(plain_text)
-    filtered_tokens = result.get("semantic_filter_details", {}).get("filtered_tokens", [])
-    classification_results = result.get("classification_results", {})
+        config = {
+            "top_keywords": 20,
+            "text_window_tokens": 80,
+            "message_window_sentences": 4,
+        }
+        result = classify(plain_text, config)
+        pipeline = TextKeywordClassifierPipeline(config)
+        tokens = pipeline.tokenizer.tokenize(plain_text)
+        filtered_tokens = result.get("semantic_filter_details", {}).get("filtered_tokens", [])
+        classification_results = result.get("classification_results", {})
 
-    out_dir = Path("token_classify/outputs")
-    out_dir.mkdir(parents=True, exist_ok=True)
-    prefix = "20260425T132724Z"
-    output_paths = {
-        "plain_text": out_dir / f"{prefix}_plain_text.txt",
-        "tokens": out_dir / f"{prefix}_tokens.json",
-        "filtered_tokens": out_dir / f"{prefix}_filtered_tokens.json",
-        "classification_results": out_dir / f"{prefix}_classification_results.json",
-    }
+        out_dir = tmp_path / "token_classify" / "outputs"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        prefix = "20260425T132724Z"
+        output_paths = {
+            "plain_text": out_dir / f"{prefix}_plain_text.txt",
+            "tokens": out_dir / f"{prefix}_tokens.json",
+            "filtered_tokens": out_dir / f"{prefix}_filtered_tokens.json",
+            "classification_results": out_dir / f"{prefix}_classification_results.json",
+        }
 
-    output_paths["plain_text"].write_text(plain_text, encoding="utf-8")
-    output_paths["tokens"].write_text(json.dumps(tokens, ensure_ascii=False, indent=2), encoding="utf-8")
-    output_paths["filtered_tokens"].write_text(
-        json.dumps(filtered_tokens, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-    output_paths["classification_results"].write_text(
-        json.dumps(classification_results, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+        output_paths["plain_text"].write_text(plain_text, encoding="utf-8")
+        output_paths["tokens"].write_text(json.dumps(tokens, ensure_ascii=False, indent=2), encoding="utf-8")
+        output_paths["filtered_tokens"].write_text(
+            json.dumps(filtered_tokens, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        output_paths["classification_results"].write_text(
+            json.dumps(classification_results, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
 
-    for name, path in output_paths.items():
-        assert path.exists(), f"{name} output not generated: {path}"
+        for name, path in output_paths.items():
+            assert path.exists(), f"{name} output not generated: {path}"
 
-    _show_stage(
-        "Archive Reproducible Flow Summary",
-        {
-            "input": str(input_path),
-            "records_count": len(records),
-            "plain_messages_count": len(plain_messages),
-            "plain_text_chars": len(plain_text),
-            "tokens_count": len(tokens),
-            "filtered_tokens_count": len(filtered_tokens),
-            "output_files": {k: str(v) for k, v in output_paths.items()},
-        },
-    )
+        _show_stage(
+            "Archive Reproducible Flow Summary",
+            {
+                "input": str(input_path),
+                "records_count": len(records),
+                "plain_messages_count": len(plain_messages),
+                "plain_text_chars": len(plain_text),
+                "tokens_count": len(tokens),
+                "filtered_tokens_count": len(filtered_tokens),
+                "output_files": {k: str(v) for k, v in output_paths.items()},
+            },
+        )
+    finally:
+        shutil.rmtree(tmp_path, ignore_errors=True)
 
 
 def main() -> int:

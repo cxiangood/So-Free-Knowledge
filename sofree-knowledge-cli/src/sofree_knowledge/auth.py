@@ -11,6 +11,9 @@ from urllib.parse import parse_qs, urlencode, urlparse
 
 import httpx
 
+from .auth_device_flow import has_required_scopes, login_with_device_flow, poll_device_token, request_device_authorization
+from .auth_token_manager import TokenManager
+from .auth_token_store import TokenStore
 from .config import DEFAULT_TOKEN_FILE, get_app_credentials
 from .feishu_client import FeishuAPIError, MissingFeishuConfigError
 
@@ -85,14 +88,10 @@ def init_token(
 
 
 def auth_status(token_file: str | Path | None = None) -> dict[str, Any]:
-    path = Path(token_file).expanduser() if token_file else DEFAULT_TOKEN_FILE
+    store = TokenStore(token_file=token_file)
+    path = store.path
     exists = path.exists()
-    result: dict[str, Any] = {
-        "token_file": str(path),
-        "exists": exists,
-        "has_access_token": False,
-        "has_refresh_token": False,
-    }
+    result: dict[str, Any] = store.status()
     if not exists:
         return result
     raw = path.read_text(encoding="utf-8")
@@ -109,7 +108,57 @@ def auth_status(token_file: str | Path | None = None) -> dict[str, Any]:
     for key in ("token_type", "expires_in", "refresh_expires_in", "open_id", "user_id", "tenant_key"):
         if key in data:
             result[key] = data[key]
+    if "scope" in data:
+        result["scope"] = data["scope"]
     return result
+
+
+def device_login(
+    scope: str = DEFAULT_SCOPE,
+    *,
+    token_file: str | Path | None = None,
+    open_browser: bool = True,
+) -> dict[str, Any]:
+    result = TokenManager(token_file=token_file).device_login(scope=scope, open_browser=open_browser)
+    token_data = result.get("token", {})
+    if not isinstance(token_data, dict):
+        raise FeishuAPIError("Device login did not return token data.")
+    return {
+        "flow": "device_code",
+        "request": result.get("request", {}),
+        "token": redact_token_data(token_data),
+    }
+
+
+def start_device_login(scope: str = DEFAULT_SCOPE) -> dict[str, Any]:
+    return TokenManager().start_device_login(scope=scope)
+
+
+def resume_device_login(
+    device_code: str,
+    *,
+    interval: int = 5,
+    expires_in: int = 240,
+    token_file: str | Path | None = None,
+) -> dict[str, Any]:
+    result = TokenManager(token_file=token_file).resume_device_login(
+        device_code=device_code,
+        interval=interval,
+        expires_in=expires_in,
+    )
+    token_data = result.get("token", {})
+    return {
+        "flow": "device_code",
+        "token": redact_token_data(token_data),
+    }
+
+
+def ensure_user_auth(
+    required_scopes: str | list[str] | tuple[str, ...] = (),
+    *,
+    token_file: str | Path | None = None,
+) -> dict[str, Any]:
+    return TokenManager(token_file=token_file).ensure_user_auth(required_scopes=required_scopes)
 
 
 def get_app_access_token() -> str:
@@ -132,10 +181,7 @@ def get_app_access_token() -> str:
 
 
 def save_token(token_data: dict[str, Any], token_file: str | Path | None = None) -> Path:
-    path = Path(token_file).expanduser() if token_file else DEFAULT_TOKEN_FILE
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(token_data, ensure_ascii=False, indent=2), encoding="utf-8")
-    return path
+    return TokenStore(token_file=token_file).save(token_data)
 
 
 def extract_code(code_or_url: str) -> str:

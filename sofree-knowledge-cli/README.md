@@ -164,6 +164,26 @@ sofree-knowledge --output-dir . lingo delete --no-remote --keyword "北极星指
 
 ## Personal Assistant
 
+Recommended final usage for OpenClaw scheduling:
+
+```bash
+sofree-knowledge --env-file ../So-Free-Knowledge/.env --output-dir . assistant recommend --output-format card
+```
+
+This single command will:
+
+1. Pull recent online documents/messages/knowledge data.
+2. Append weak-supervision samples to `assistant_dual_tower_samples.jsonl`.
+3. If accumulated samples are not enough, automatically disable dual tower and fall back to OpenClaw signals.
+4. Once accumulated samples are enough, automatically train/update `assistant_dual_tower_model.json`.
+5. Use the trained dual tower model for recommendation automatically.
+
+Tune the switch threshold if needed:
+
+```bash
+sofree-knowledge --env-file ../So-Free-Knowledge/.env --output-dir . assistant recommend --dual-tower-min-samples 20 --output-format json
+```
+
 Build personal aggregation from documents + access records + chat messages + knowledge items, then score urgency/recommendation:
 
 ```bash

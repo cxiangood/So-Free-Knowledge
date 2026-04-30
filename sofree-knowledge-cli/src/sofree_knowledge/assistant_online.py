@@ -9,7 +9,7 @@ from urllib.parse import urlparse
 
 from .archive import list_chat_messages, list_visible_chats, split_chat_ids
 from .config import get_user_identity
-from .feishu_client import FeishuClient, FeishuAPIError
+from .feishu_client import FeishuClient, FeishuAPIError, MissingFeishuConfigError
 
 _DOC_HOST_HINTS = ("feishu.cn", "larksuite.com")
 _DOC_PATH_HINTS = ("/docx/", "/wiki/", "/base/", "/sheet/", "/slides/", "/file/")
@@ -57,37 +57,52 @@ def collect_online_personal_inputs(
 
     chat_records = list(chats_by_id.values())[:max_chats]
 
+    # 收集用户ID到昵称的映射
+    user_id_to_name: dict[str, str] = {}
+
     messages: list[dict[str, Any]] = []
     for chat in chat_records:
         chat_id = str(chat.get("chat_id") or "").strip()
+        chat_name = str(chat.get("name") or chat_id).strip()
         if not chat_id:
             continue
-        chat_messages = list_chat_messages(
-            client,
-            chat_id=chat_id,
-            max_items=max_messages_per_chat,
-            page_size=min(50, max_messages_per_chat),
-        )
-        for msg in chat_messages:
-            text = _normalize_message_text(msg.get("content", ""))
-            if _is_noise_message_text(text):
-                continue
-            if not _is_within_recent_days(str(msg.get("create_time") or ""), recent_days):
-                continue
-            messages.append(
-                {
-                    "message_id": msg.get("message_id", ""),
-                    "chat_id": msg.get("chat_id", chat_id),
-                    "sender_name": _extract_sender_name(msg.get("sender", {})),
-                    "content": text,
-                    "text": text,
-                    "create_time": msg.get("create_time", ""),
-                    "sender": msg.get("sender", {}),
-                    "message_url": _resolve_online_message_url(
-                        message=msg,
-                    ),
-                }
+        try:
+            chat_messages = list_chat_messages(
+                client,
+                chat_id=chat_id,
+                max_items=max_messages_per_chat,
+                page_size=min(50, max_messages_per_chat),
             )
+            for msg in chat_messages:
+                # 收集发件人信息
+                sender = msg.get("sender", {})
+                sender_name = _extract_sender_name(sender)
+                sender_id = _extract_sender_id(msg)
+                if sender_id and sender_name and not sender_name.startswith("ou_"):
+                    user_id_to_name[sender_id] = sender_name
+
+                text = _normalize_message_text(msg.get("content", ""), user_id_to_name)
+                if _is_noise_message_text(text):
+                    continue
+                if not _is_within_recent_days(str(msg.get("create_time") or ""), recent_days):
+                    continue
+                messages.append(
+                    {
+                        "message_id": msg.get("message_id", ""),
+                        "chat_id": msg.get("chat_id", chat_id),
+                        "sender_name": sender_name,
+                        "content": text,
+                        "text": text,
+                        "create_time": msg.get("create_time", ""),
+                        "sender": sender,
+                        "message_url": _resolve_online_message_url(
+                            message=msg,
+                        ),
+                    }
+                )
+        except (FeishuAPIError, MissingFeishuConfigError):
+            # 跳过无权限或配置错误的群，不影响整体流程
+            continue
 
     drive_docs: list[dict[str, Any]] = []
     drive_error = ""
@@ -121,9 +136,12 @@ def collect_online_personal_inputs(
                 doc["title"] = meta["title"]
                 if meta.get("updated_at"):
                     doc["updated_at"] = meta["updated_at"]
+            else:
+                # 查询失败也显示为"相关文档"，不显示原始ID
+                doc["title"] = "相关文档"
         except Exception:
-            # 查询失败不影响主流程，保持原有标题即可
-            pass
+            # 查询失败显示为"相关文档"，不暴露ID
+            doc["title"] = "相关文档"
 
     documents = _merge_documents(drive_docs, linked_docs)
     access_records = link_access_records
@@ -192,7 +210,7 @@ def extract_docs_and_access_from_messages(
                 key,
                 {
                     "doc_id": key,
-                    "title": "相关文档",
+                    "title": key,  # 默认用doc_id占位，查询到真实标题再替换
                     "summary": _trim(text, 120),
                     "url": url,
                     "updated_at": str(message.get("create_time") or ""),
@@ -314,8 +332,19 @@ def _trim(text: str, max_len: int) -> str:
     return value[: max_len - 1] + "…"
 
 
-def _normalize_message_text(text: str) -> str:
-    return re.sub(r"\s+", " ", str(text or "").strip())
+def _normalize_message_text(text: str, user_id_to_name: dict[str, str] | None = None) -> str:
+    normalized = re.sub(r"\s+", " ", str(text or "").strip())
+    if user_id_to_name:
+        # 替换@用户ID为昵称
+        for user_id, name in user_id_to_name.items():
+            normalized = normalized.replace(f"@{user_id}", f"@{name}")
+            normalized = normalized.replace(f"_user_{user_id}", name)
+        # 处理通用的@_user_xxx格式
+        def replace_at_user(match):
+            user_id = match.group(1)
+            return f"@{user_id_to_name.get(user_id, user_id)}"
+        normalized = re.sub(r"@_user_([a-f0-9]+)", replace_at_user, normalized)
+    return normalized
 
 
 def _is_noise_message_text(text: str) -> bool:

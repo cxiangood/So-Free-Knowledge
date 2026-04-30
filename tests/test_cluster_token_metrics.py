@@ -9,13 +9,15 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-import matplotlib
+import pytest
+
+matplotlib = pytest.importorskip("matplotlib")
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-import numpy as np
-from sklearn.cluster import KMeans
-from wordcloud import WordCloud
+np = pytest.importorskip("numpy")
+KMeans = pytest.importorskip("sklearn.cluster").KMeans
+WordCloud = pytest.importorskip("wordcloud").WordCloud
 
 if __package__ is None or __package__ == "":
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

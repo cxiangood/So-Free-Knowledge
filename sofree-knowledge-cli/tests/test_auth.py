@@ -1,5 +1,6 @@
 import json
 
+from sofree_knowledge.auth_device_flow import has_required_scopes
 from sofree_knowledge.auth import auth_status, build_authorization_url, extract_code, save_token
 
 
@@ -44,3 +45,12 @@ def test_auth_status_redacts_token(tmp_path):
     assert status["open_id"] == "ou_test"
     assert "u-secret" not in status_text
     assert "r-secret" not in status_text
+
+
+def test_has_required_scopes_matches_space_separated_scopes():
+    assert has_required_scopes("im:chat:read drive:file:read offline_access", "im:chat:read")
+    assert has_required_scopes(
+        "im:chat:read drive:file:read offline_access",
+        ["im:chat:read", "drive:file:read"],
+    )
+    assert not has_required_scopes("im:chat:read offline_access", "drive:file:read")

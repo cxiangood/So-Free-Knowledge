@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import html
 import json
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -25,8 +26,28 @@ class FeishuClient:
         tenant_access_token: str | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
-        self.user_access_token = user_access_token if user_access_token is not None else get_user_access_token()
+        self.user_access_token = user_access_token
         self._tenant_access_token = tenant_access_token
+
+    @classmethod
+    def from_user_context(
+        cls,
+        *,
+        token_file: str | Path | None = None,
+        base_url: str = "https://open.feishu.cn",
+        tenant_access_token: str | None = None,
+        require_user_token: bool = False,
+    ) -> FeishuClient:
+        user_access_token = get_user_access_token(token_file=token_file)
+        if require_user_token and not user_access_token:
+            raise MissingFeishuConfigError(
+                "Missing Feishu user access token. Run `sofree-knowledge auth login` first."
+            )
+        return cls(
+            base_url=base_url,
+            user_access_token=user_access_token,
+            tenant_access_token=tenant_access_token,
+        )
 
     def list_visible_chats(self, page_size: int = 100, page_token: str = "") -> dict[str, Any]:
         params: dict[str, Any] = {"user_id_type": "open_id", "page_size": min(max(page_size, 1), 100)}
@@ -82,13 +103,18 @@ class FeishuClient:
         if self.user_access_token:
             try:
                 data = self.request("GET", "/open-apis/im/v1/messages", params=params)
-            except FeishuAPIError:
-                data = self.request(
-                    "GET",
-                    "/open-apis/im/v1/messages",
-                    access_token=self.get_tenant_access_token(),
-                    params=params,
-                )
+            except (FeishuAPIError, MissingFeishuConfigError):
+                # 用户token失败，且租户token配置不存在或也失败时，直接抛出给上层处理
+                try:
+                    data = self.request(
+                        "GET",
+                        "/open-apis/im/v1/messages",
+                        access_token=self.get_tenant_access_token(),
+                        params=params,
+                    )
+                except MissingFeishuConfigError:
+                    # 没有配置租户凭证，直接抛出让上层跳过该群
+                    raise
         else:
             data = self.request(
                 "GET",

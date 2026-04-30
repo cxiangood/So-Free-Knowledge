@@ -24,6 +24,28 @@ def test_auth_status_cli_outputs_json(tmp_path, capsys):
     assert out["exists"] is False
 
 
+def test_auth_login_no_wait_cli_outputs_json(monkeypatch, capsys):
+    monkeypatch.setattr(
+        cli_module,
+        "start_device_login",
+        lambda scope: {
+            "flow": "device_code",
+            "request": {
+                "device_code": "dev123",
+                "verification_uri_complete": "https://accounts.feishu.cn/verify",
+            },
+        },
+    )
+
+    code = main(["auth", "login", "--no-wait", "--scope", "im:chat:read"])
+
+    out = json.loads(capsys.readouterr().out)
+    assert code == 0
+    assert out["ok"] is True
+    assert out["flow"] == "device_code"
+    assert out["request"]["device_code"] == "dev123"
+
+
 def test_auth_url_cli_outputs_json(monkeypatch, capsys):
     monkeypatch.setenv("FEISHU_APP_ID", "cli_test")
 
@@ -166,6 +188,9 @@ def test_assistant_profile_set_and_get_cli(tmp_path, capsys):
             "hybrid",
             "--weekly-brief-cron",
             "0 10 * * MON",
+            "--dual-tower-enabled",
+            "--dual-tower-model",
+            "text-embedding-3-large",
         ]
     )
     out = json.loads(capsys.readouterr().out)
@@ -179,10 +204,23 @@ def test_assistant_profile_set_and_get_cli(tmp_path, capsys):
     assert out["ok"] is True
     assert out["profile"]["persona"] == "专业形象"
     assert out["schedule"]["mode"] == "hybrid"
+    assert out["retrieval"]["enabled"] is True
+    assert out["retrieval"]["embedding_model"] == "text-embedding-3-large"
 
 
 def test_assistant_build_personal_brief_uses_profile_file(tmp_path, capsys):
     profile_file = tmp_path / "assistant_profile.json"
+    model_file = tmp_path / "dual_tower_model.json"
+    model_file.write_text(
+        json.dumps(
+            {
+                "model_type": "dual_tower_baseline_term_weight",
+                "token_weights": {"发布": 1.5, "流程": 1.0},
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
     profile_file.write_text(
         json.dumps(
             {
@@ -196,6 +234,11 @@ def test_assistant_build_personal_brief_uses_profile_file(tmp_path, capsys):
                     "mode": "scheduled",
                     "weekly_brief_cron": "0 9 * * MON",
                     "nightly_interest_cron": "0 21 * * *",
+                },
+                "retrieval": {
+                    "enabled": True,
+                    "embedding_model": "text-embedding-3-large",
+                    "model_file": str(model_file),
                 },
             },
             ensure_ascii=False,
@@ -233,6 +276,184 @@ def test_assistant_build_personal_brief_uses_profile_file(tmp_path, capsys):
     assert out["report"]["profile"]["role"] == "工程经理"
     assert out["report"]["interest_card"]["header"]["title"]["content"] == "群聊兴趣消息汇总"
     assert out["report"]["runtime_plan"]["cron_jobs"][0]["job_name"] == "assistant_weekly_brief"
+    assert out["report"]["retrieval_plan"]["strategy"] == "dual_tower_trained"
+    assert out["report"]["retrieval_plan"]["model_file"] == str(model_file)
+
+
+def test_assistant_export_dual_tower_samples_cli(tmp_path, capsys):
+    documents_file = tmp_path / "documents.json"
+    documents_file.write_text(
+        json.dumps(
+            [
+                {"doc_id": "d1", "title": "Release Flow", "summary": "Rollback checklist"},
+                {"doc_id": "d2", "title": "Weekly Notes", "summary": "Routine sync"},
+            ],
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    access_file = tmp_path / "access.json"
+    access_file.write_text(
+        json.dumps([{"doc_id": "d1", "user_id": "ou_1", "action": "view", "count": 2}], ensure_ascii=False),
+        encoding="utf-8",
+    )
+    messages_file = tmp_path / "messages.json"
+    messages_file.write_text(
+        json.dumps([{"message_id": "m1", "chat_id": "oc_x", "content": "release risk rollback review"}], ensure_ascii=False),
+        encoding="utf-8",
+    )
+    output_file = tmp_path / "dual_tower_samples.jsonl"
+
+    code = main(
+        [
+            "assistant",
+            "export-dual-tower-samples",
+            "--documents-file",
+            str(documents_file),
+            "--access-records-file",
+            str(access_file),
+            "--messages-file",
+            str(messages_file),
+            "--target-user-id",
+            "ou_1",
+            "--role",
+            "PM",
+            "--interests",
+            "release,risk",
+            "--output-file",
+            str(output_file),
+        ]
+    )
+
+    out = json.loads(capsys.readouterr().out)
+    assert code == 0
+    assert out["ok"] is True
+    assert out["sample_count"] == 1
+    assert output_file.exists()
+
+
+def test_assistant_train_dual_tower_cli(tmp_path, capsys):
+    samples_file = tmp_path / "samples.jsonl"
+    samples_file.write_text(
+        json.dumps(
+            {
+                "user_id": "ou_1",
+                "doc_id": "d1",
+                "label": 1,
+                "strength": 2,
+                "user_tower_text": "role: PM | interests: release, risk",
+                "positive_doc_text": "title: Release Flow | summary: Rollback checklist | business: Release | doc_type: file",
+                "negative_doc_texts": [
+                    "title: Weekly Notes | summary: Routine sync | business: General | doc_type: file"
+                ],
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    output_file = tmp_path / "dual_tower_model.json"
+
+    code = main(
+        [
+            "assistant",
+            "train-dual-tower",
+            "--samples-file",
+            str(samples_file),
+            "--output-file",
+            str(output_file),
+        ]
+    )
+
+    out = json.loads(capsys.readouterr().out)
+    assert code == 0
+    assert out["ok"] is True
+    assert out["model_type"] == "dual_tower_baseline_term_weight"
+    assert out["quality"]["evaluated_samples"] == 1
+    assert output_file.exists()
+
+
+def test_assistant_recommend_falls_back_to_openclaw_when_samples_insufficient(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(cli_module, "FeishuClient", lambda: object())
+    monkeypatch.setattr(
+        cli_module,
+        "collect_online_personal_inputs",
+        lambda **kwargs: {
+            "documents": [{"doc_id": "d1", "title": "发布流程", "summary": "审批后发布", "url": "", "updated_at": ""}],
+            "access_records": [{"doc_id": "d1", "user_id": "ou_test", "action": "view", "count": 1}],
+            "messages": [{"message_id": "m1", "chat_id": "oc_x", "text": "发布今天截止", "create_time": ""}],
+            "knowledge_items": [],
+            "resolved_target_user_id": "ou_test",
+            "meta": {"message_count": 1},
+        },
+    )
+
+    code = main(
+        [
+            "--output-dir",
+            str(tmp_path),
+            "assistant",
+            "recommend",
+            "--role",
+            "PM",
+            "--interests",
+            "发布,风险",
+            "--dual-tower-min-samples",
+            "2",
+            "--output-format",
+            "json",
+        ]
+    )
+
+    out = json.loads(capsys.readouterr().out)
+    assert code == 0
+    assert out["ok"] is True
+    assert out["report"]["retrieval_plan"]["strategy"] == "openclaw_fallback"
+    assert out["meta"]["auto_retrieval"]["enough_data"] is False
+    assert out["meta"]["auto_retrieval"]["accumulated_sample_count"] == 1
+
+
+def test_assistant_recommend_trains_and_uses_dual_tower_when_samples_sufficient(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(cli_module, "FeishuClient", lambda: object())
+    monkeypatch.setattr(
+        cli_module,
+        "collect_online_personal_inputs",
+        lambda **kwargs: {
+            "documents": [
+                {"doc_id": "d1", "title": "发布流程", "summary": "审批后发布", "url": "", "updated_at": ""},
+                {"doc_id": "d2", "title": "周会纪要", "summary": "例行同步", "url": "", "updated_at": ""},
+            ],
+            "access_records": [{"doc_id": "d1", "user_id": "ou_test", "action": "view", "count": 2}],
+            "messages": [{"message_id": "m1", "chat_id": "oc_x", "text": "发布风险今晚处理", "create_time": ""}],
+            "knowledge_items": [],
+            "resolved_target_user_id": "ou_test",
+            "meta": {"message_count": 1},
+        },
+    )
+
+    code = main(
+        [
+            "--output-dir",
+            str(tmp_path),
+            "assistant",
+            "recommend",
+            "--role",
+            "PM",
+            "--interests",
+            "发布,风险",
+            "--dual-tower-min-samples",
+            "1",
+            "--output-format",
+            "json",
+        ]
+    )
+
+    out = json.loads(capsys.readouterr().out)
+    assert code == 0
+    assert out["ok"] is True
+    assert out["report"]["retrieval_plan"]["strategy"] == "dual_tower_trained"
+    assert out["meta"]["auto_retrieval"]["enough_data"] is True
+    assert (tmp_path / "assistant_dual_tower_model.json").exists()
 
 
 def test_assistant_push_defaults_to_personal_open_id(monkeypatch, tmp_path, capsys):

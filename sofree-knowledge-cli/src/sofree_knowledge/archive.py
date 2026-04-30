@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
-from .feishu_client import FeishuClient
+from .feishu_client import FeishuClient, FeishuAPIError, MissingFeishuConfigError
 
 
 def collect_messages(
@@ -49,19 +49,23 @@ def collect_messages(
     with messages_path.open("w", encoding="utf-8") as message_file:
         for chat in chat_records:
             chat_id = str(chat.get("chat_id", ""))
-            messages = list_chat_messages(
-                client,
-                chat_id=chat_id,
-                start_time=start_time,
-                end_time=end_time,
-                max_items=max_messages_per_chat,
-                page_size=page_size,
-            )
-            for message in messages:
-                message["collected_at"] = collected_at
-                message["chat"] = normalize_chat_record(chat)
-                message_file.write(json.dumps(message, ensure_ascii=False) + "\n")
-            total_messages += len(messages)
+            try:
+                messages = list_chat_messages(
+                    client,
+                    chat_id=chat_id,
+                    start_time=start_time,
+                    end_time=end_time,
+                    max_items=max_messages_per_chat,
+                    page_size=page_size,
+                )
+                for message in messages:
+                    message["collected_at"] = collected_at
+                    message["chat"] = normalize_chat_record(chat)
+                    message_file.write(json.dumps(message, ensure_ascii=False) + "\n")
+                total_messages += len(messages)
+            except (FeishuAPIError, MissingFeishuConfigError):
+                # 跳过无权限或配置错误的群，不影响整体归档流程
+                continue
 
     manifest = {
         "run_id": run_id,

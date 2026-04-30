@@ -8,12 +8,20 @@ from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import quote
 
+from .assistant import features, ranker, renderer, retriever
+from .assistant.models import DualTowerConfig
+
 
 URGENCY_KEYWORDS = (
     "紧急",
     "马上",
     "尽快",
+    "urgent",
     "asap",
+    "today",
+    "tonight",
+    "deadline",
+    "due",
     "今天",
     "今晚",
     "截止",
@@ -126,31 +134,71 @@ def build_personal_brief(
     user_profile: dict[str, Any] | None = None,
     schedule: dict[str, Any] | None = None,
     max_interest_items: int = 8,
+    dual_tower_config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    docs = [_normalize_doc(item) for item in documents]
+    docs = [features.normalize_doc(item) for item in documents]
     records = [item for item in (access_records or []) if isinstance(item, dict)]
-    msgs = [_normalize_message(item) for item in (messages or []) if isinstance(item, dict)]
-    knowledge = [_normalize_knowledge(item) for item in (knowledge_items or []) if isinstance(item, dict)]
-    profile = _normalize_profile(user_profile or {})
-    normalized_schedule = _normalize_schedule(schedule or {})
+    msgs = [features.normalize_message(item) for item in (messages or []) if isinstance(item, dict)]
+    knowledge = [features.normalize_knowledge(item) for item in (knowledge_items or []) if isinstance(item, dict)]
+    profile = features.normalize_profile(user_profile or {})
+    normalized_schedule = features.normalize_schedule(schedule or {})
+    retrieval_config = DualTowerConfig(
+        enabled=bool((dual_tower_config or {}).get("enabled", True)),
+        embedding_model=str((dual_tower_config or {}).get("embedding_model", "") or ""),
+        model_file=str((dual_tower_config or {}).get("model_file", "") or ""),
+        top_k=int((dual_tower_config or {}).get("top_k", 50) or 50),
+        min_score=float((dual_tower_config or {}).get("min_score", 0.0) or 0.0),
+    )
 
     doc_stats = _build_doc_stats(records, target_user_id=target_user_id)
 
     ranked_docs: list[dict[str, Any]] = []
     for doc in docs:
         doc_type = _infer_doc_type(doc)
-        title_keywords = _extract_keywords(" ".join([doc["title"], doc["summary"]]))
-        related_messages = _rank_related_messages(doc, title_keywords, msgs, max_related=max_related)
-        related_knowledge = _rank_related_knowledge(title_keywords, knowledge, max_related=max_related)
+        business = _infer_business(doc, profile["business_tracks"])
+        title_keywords = features.extract_keywords(" ".join([doc["title"], doc["summary"]]))
+        candidate = retriever.build_document_candidate(
+            doc=doc,
+            doc_type=doc_type,
+            business=business,
+            title_keywords=title_keywords,
+            messages=msgs,
+            knowledge=knowledge,
+            profile=profile,
+            max_related=max_related,
+            dual_tower_config=retrieval_config,
+        )
+        related_messages = [
+            {
+                "message_id": item.message_id,
+                "chat_id": item.chat_id,
+                "summary": item.summary,
+                "score": item.score,
+                "create_time": item.create_time,
+            }
+            for item in candidate.related_messages
+        ]
+        related_knowledge = [
+            {
+                "id": item.id,
+                "title": item.title,
+                "summary": item.summary,
+                "score": item.score,
+            }
+            for item in candidate.related_knowledge
+        ]
 
-        urgency_score = _score_doc_urgency(doc=doc, related_messages=related_messages)
-        recommend_score = _score_doc_recommend(
+        urgency_score = ranker.score_doc_urgency(doc=doc, related_messages=related_messages)
+        recommend_score = ranker.score_doc_recommend(
             doc=doc,
             stats=doc_stats.get(doc["doc_id"], {}),
             related_messages=related_messages,
             related_knowledge=related_knowledge,
         )
-        business = _infer_business(doc, profile["business_tracks"])
+        if candidate.retrieval_debug.dual_tower_ready:
+            recommend_score = min(100, recommend_score + int(candidate.retrieval_debug.dual_tower_score * 20))
+        if candidate.retrieval_debug.model_applied:
+            recommend_score = min(100, recommend_score + int(candidate.retrieval_debug.trained_dual_tower_score * 5))
         todo_items = _extract_todo_items(doc, related_messages)
         ranked_docs.append(
             {
@@ -168,6 +216,19 @@ def build_personal_brief(
                 "todo_items": todo_items,
                 "related_messages": related_messages,
                 "related_knowledge": related_knowledge,
+                "retrieval": {
+                    "strategy": candidate.retrieval_debug.strategy,
+                    "dual_tower_score": candidate.retrieval_debug.dual_tower_score,
+                    "trained_dual_tower_score": candidate.retrieval_debug.trained_dual_tower_score,
+                    "lexical_overlap": candidate.retrieval_debug.lexical_overlap,
+                    "related_message_count": candidate.retrieval_debug.related_message_count,
+                    "related_knowledge_count": candidate.retrieval_debug.related_knowledge_count,
+                    "dual_tower_ready": candidate.retrieval_debug.dual_tower_ready,
+                    "model_applied": candidate.retrieval_debug.model_applied,
+                    "model_file": candidate.retrieval_debug.model_file,
+                    "user_tower_text": candidate.retrieval_debug.user_tower_text,
+                    "content_tower_text": candidate.retrieval_debug.content_tower_text,
+                },
             }
         )
 
@@ -178,7 +239,7 @@ def build_personal_brief(
     ranked_docs = ranked_docs[:max_docs]
 
     grouped_documents = _group_documents_by_business(ranked_docs)
-    interest_digest = _build_interest_digest(msgs, profile["interests"], max_items=max_interest_items)
+    interest_digest = retriever.build_interest_digest(msgs, profile["interests"], max_items=max_interest_items)
 
     summary = {
         "doc_count": len(ranked_docs),
@@ -190,9 +251,9 @@ def build_personal_brief(
         "interest_hit_count": len(interest_digest.get("items", [])),
     }
 
-    doc_markdown = _to_markdown(ranked_docs, grouped_documents=grouped_documents, profile=profile)
-    card = _to_card(ranked_docs, profile=profile)
-    interest_card = _to_interest_card(interest_digest, profile=profile)
+    doc_markdown = renderer.to_markdown(ranked_docs, grouped_documents=grouped_documents, profile=profile)
+    card = renderer.to_card(ranked_docs, profile=profile)
+    interest_card = renderer.to_interest_card(interest_digest, profile=profile)
     runtime_plan = _build_runtime_plan(normalized_schedule)
     return {
         "summary": summary,
@@ -202,6 +263,19 @@ def build_personal_brief(
         "schedule": normalized_schedule,
         "runtime_plan": runtime_plan,
         "interest_digest": interest_digest,
+        "retrieval_plan": {
+            "strategy": (
+                "dual_tower_trained"
+                if retrieval_config.enabled and retrieval_config.model_file
+                else ("dual_tower_bootstrap" if retrieval_config.enabled else "openclaw_fallback")
+            ),
+            "dual_tower_ready": True,
+            "dual_tower_enabled": bool(retrieval_config.enabled),
+            "embedding_model": retrieval_config.embedding_model,
+            "model_file": retrieval_config.model_file,
+            "top_k": retrieval_config.top_k,
+            "min_score": retrieval_config.min_score,
+        },
         "doc_markdown": doc_markdown,
         "card": card,
         "interest_card": interest_card,
@@ -613,6 +687,8 @@ def _build_interest_digest(messages: list[dict[str, Any]], interests: list[str],
             message=message,
             signal_hits=signal_hits,
             urgency_hit=urgency_hit,
+            hit_term_count=len(hit_terms),
+            mention_signal=mention_signal,
         )
         if not openclaw_screen["accepted"]:
             continue
@@ -698,6 +774,8 @@ def _openclaw_interest_screen(
     message: dict[str, Any],
     signal_hits: int,
     urgency_hit: bool,
+    hit_term_count: int = 0,
+    mention_signal: str = "",
 ) -> dict[str, Any]:
     explicit_include = _coerce_bool(message.get("openclaw_include_in_digest"))
     if explicit_include is False:
@@ -737,7 +815,7 @@ def _openclaw_interest_screen(
         return {"accepted": True, "reason": "accepted_by_openclaw_relevant_true"}
 
     # Fallback rule path when OpenClaw metadata is absent.
-    if signal_hits > 0 or urgency_hit:
+    if signal_hits > 0 or urgency_hit or hit_term_count >= 2 or bool(mention_signal):
         return {"accepted": True, "reason": "accepted_by_rule_fallback"}
     return {"accepted": False, "reason": "blocked_by_rule_fallback"}
 
@@ -777,7 +855,9 @@ def _coerce_float(value: Any) -> float | None:
 
 def _is_noise_interest_text(text: str) -> bool:
     lowered = text.lower()
-    if len(lowered) < 6:
+    # Short Chinese alerts such as "上线提醒" can be meaningful, while very short
+    # ASCII snippets are usually noise.
+    if len(lowered) < 6 and not re.search(r"[\u4e00-\u9fff]{2,}", lowered):
         return True
     if _looks_like_bot_prompt(lowered):
         return True

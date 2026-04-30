@@ -30,6 +30,84 @@ def test_build_personal_brief_ranks_docs_with_urgency_and_recommend():
     assert report["documents"][0]["doc_id"] == "d1"
     assert report["documents"][0]["urgency_score"] >= report["documents"][1]["urgency_score"]
     assert report["documents"][0]["recommend_score"] >= report["documents"][1]["recommend_score"]
+    assert report["documents"][0]["retrieval"]["dual_tower_ready"] is True
+    assert report["retrieval_plan"]["dual_tower_ready"] is True
+
+
+def test_build_personal_brief_emits_dual_tower_text_payload():
+    report = build_personal_brief(
+        documents=[{"doc_id": "d1", "title": "Release Flow", "summary": "Rollback checklist for release"}],
+        messages=[{"message_id": "m1", "chat_id": "oc_x", "content": "Release due today"}],
+        user_profile={
+            "role": "PM",
+            "persona": "冷静分析",
+            "businesses": ["Release"],
+            "interests": ["risk", "release"],
+        },
+        dual_tower_config={"enabled": True, "embedding_model": "text-embedding-3-large", "top_k": 20},
+    )
+
+    retrieval = report["documents"][0]["retrieval"]
+    assert "role: PM" in retrieval["user_tower_text"]
+    assert "title: Release Flow" in retrieval["content_tower_text"]
+    assert retrieval["dual_tower_score"] > 0
+    assert report["retrieval_plan"]["dual_tower_enabled"] is True
+    assert report["retrieval_plan"]["embedding_model"] == "text-embedding-3-large"
+
+
+def test_build_personal_brief_can_fallback_to_openclaw_strategy():
+    report = build_personal_brief(
+        documents=[{"doc_id": "d1", "title": "Release Flow", "summary": "Rollback checklist for release"}],
+        messages=[
+            {
+                "message_id": "m1",
+                "chat_id": "oc_x",
+                "content": "Release due today",
+                "openclaw_interest_relevant": True,
+            }
+        ],
+        user_profile={"role": "PM", "interests": ["release"]},
+        dual_tower_config={"enabled": False},
+    )
+
+    retrieval = report["documents"][0]["retrieval"]
+    assert retrieval["strategy"] == "openclaw_fallback"
+    assert retrieval["dual_tower_ready"] is False
+    assert retrieval["user_tower_text"] == ""
+    assert report["retrieval_plan"]["strategy"] == "openclaw_fallback"
+    assert report["retrieval_plan"]["dual_tower_enabled"] is False
+
+
+def test_build_personal_brief_applies_trained_dual_tower_model(tmp_path):
+    model_file = tmp_path / "dual_tower_model.json"
+    model_file.write_text(
+        json.dumps(
+            {
+                "model_type": "dual_tower_baseline_term_weight",
+                "token_weights": {"release": 2.0, "rollback": 1.5},
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    report = build_personal_brief(
+        documents=[{"doc_id": "d1", "title": "Release Flow", "summary": "Rollback checklist for release"}],
+        messages=[{"message_id": "m1", "chat_id": "oc_x", "content": "Release due today"}],
+        user_profile={"role": "PM", "persona": "冷静分析", "businesses": ["Release"], "interests": ["release", "risk"]},
+        dual_tower_config={
+            "enabled": True,
+            "embedding_model": "text-embedding-3-large",
+            "model_file": str(model_file),
+        },
+    )
+
+    retrieval = report["documents"][0]["retrieval"]
+    assert retrieval["strategy"] == "dual_tower_trained"
+    assert retrieval["model_applied"] is True
+    assert retrieval["trained_dual_tower_score"] > retrieval["dual_tower_score"]
+    assert report["retrieval_plan"]["strategy"] == "dual_tower_trained"
+    assert report["retrieval_plan"]["model_file"] == str(model_file)
 
 
 def test_interest_digest_filters_noise_messages():
@@ -217,3 +295,4 @@ def test_interest_digest_accepts_at_all_without_interest_keyword_hit():
     items = report["interest_digest"]["items"]
     assert len(items) == 1
     assert items[0]["message_id"] == "om_at_all"
+import json
