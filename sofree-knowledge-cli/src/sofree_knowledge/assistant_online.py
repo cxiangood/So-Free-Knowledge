@@ -63,7 +63,6 @@ def collect_online_personal_inputs(
     messages: list[dict[str, Any]] = []
     for chat in chat_records:
         chat_id = str(chat.get("chat_id") or "").strip()
-        chat_name = str(chat.get("name") or chat_id).strip()
         if not chat_id:
             continue
         try:
@@ -81,7 +80,7 @@ def collect_online_personal_inputs(
                 if sender_id and sender_name and not sender_name.startswith("ou_"):
                     user_id_to_name[sender_id] = sender_name
 
-                text = _normalize_message_text(msg.get("content", ""), user_id_to_name)
+                text = _normalize_message_text(msg.get("content", ""), user_id_to_name, client)
                 if _is_noise_message_text(text):
                     continue
                 if not _is_within_recent_days(str(msg.get("create_time") or ""), recent_days):
@@ -332,18 +331,53 @@ def _trim(text: str, max_len: int) -> str:
     return value[: max_len - 1] + "…"
 
 
-def _normalize_message_text(text: str, user_id_to_name: dict[str, str] | None = None) -> str:
+def _normalize_message_text(
+    text: str,
+    user_id_to_name: dict[str, str] | None = None,
+    client: FeishuClient | None = None
+) -> str:
     normalized = re.sub(r"\s+", " ", str(text or "").strip())
-    if user_id_to_name:
-        # 替换@用户ID为昵称
-        for user_id, name in user_id_to_name.items():
-            normalized = normalized.replace(f"@{user_id}", f"@{name}")
-            normalized = normalized.replace(f"_user_{user_id}", name)
-        # 处理通用的@_user_xxx格式
-        def replace_at_user(match):
-            user_id = match.group(1)
-            return f"@{user_id_to_name.get(user_id, user_id)}"
-        normalized = re.sub(r"@_user_([a-f0-9]+)", replace_at_user, normalized)
+    if user_id_to_name is None:
+        user_id_to_name = {}
+
+    # 替换已知的用户ID
+    for user_id, name in user_id_to_name.items():
+        normalized = normalized.replace(f"@{user_id}", f"@{name}")
+        normalized = normalized.replace(f"_user_{user_id}", name)
+        normalized = normalized.replace(f"{user_id}", name)
+
+    # 处理@_user_xxx格式
+    def replace_at_user(match):
+        user_id = match.group(1)
+        full_user_id = f"ou_{user_id}" if not user_id.startswith("ou_") else user_id
+        # 优先查缓存
+        if full_user_id in user_id_to_name:
+            return f"@{user_id_to_name[full_user_id]}"
+        # 缓存没有且有client时调用API查询
+        if client:
+            user_info = _get_user_info(client, full_user_id)
+            if user_info.get("name"):
+                user_id_to_name[full_user_id] = user_info["name"]
+                return f"@{user_info['name']}"
+        # 查询失败保留原格式
+        return f"@{user_id}"
+
+    normalized = re.sub(r"@_user_([a-f0-9]+)", replace_at_user, normalized)
+
+    # 处理直接出现的ou_xxx ID
+    def replace_ou_id(match):
+        user_id = match.group(0)
+        if user_id in user_id_to_name:
+            return user_id_to_name[user_id]
+        if client:
+            user_info = _get_user_info(client, user_id)
+            if user_info.get("name"):
+                user_id_to_name[user_id] = user_info["name"]
+                return user_info["name"]
+        return user_id
+
+    normalized = re.sub(r"ou_[a-f0-9]+", replace_ou_id, normalized)
+
     return normalized
 
 
@@ -414,25 +448,41 @@ def _resolve_online_message_url(
     )
 
 
+def _get_user_info(client: FeishuClient, user_id: str) -> dict[str, str]:
+    """调用通讯录API获取用户信息"""
+    if not user_id or not user_id.startswith("ou_"):
+        return {}
+    try:
+        path = f"/open-apis/contact/v3/users/{user_id}?user_id_type=open_id"
+        data = client.request("GET", path)
+        user = data.get("data", {}).get("user", {})
+        return {
+            "name": user.get("name", ""),
+            "avatar": user.get("avatar", {}).get("avatar_72", ""),
+        }
+    except Exception:
+        return {}
+
+
 def _get_doc_meta(client: FeishuClient, doc_token: str, doc_type: str = "docx") -> dict[str, Any]:
     """独立的文档元数据查询功能，不依赖FeishuClient的内置方法"""
     doc_type_map = {
-        "docx": "docs",
+        "docx": "docx",
         "wiki": "wiki",
-        "base": "bitable",
-        "sheet": "sheets",
+        "base": "base",
+        "sheet": "sheet",
         "slides": "slides",
-        "file": "drive",
+        "file": "file",
     }
-    api_type = doc_type_map.get(doc_type, "docs")
-    path = f"/open-apis/{api_type}/v1/{doc_type}s/{doc_token}"
-    if doc_type == "file":
-        path = f"/open-apis/drive/v1/files/{doc_token}"
+    api_doc_type = doc_type_map.get(doc_type, "docx")
+
+    # 优先使用drive v2 API查询所有类型文档的元数据，兼容性更好
+    path = f"/open-apis/drive/v2/files/{doc_token}"
 
     try:
         # 使用用户token查询
         data = client.request("GET", path)
-    except FeishuAPIError:
+    except (FeishuAPIError, MissingFeishuConfigError):
         try:
             # 失败则用租户token重试
             data = client.request(
@@ -441,19 +491,28 @@ def _get_doc_meta(client: FeishuClient, doc_token: str, doc_type: str = "docx") 
                 access_token=client.get_tenant_access_token(),
             )
         except Exception:
-            return {}
+            # 最终fallback到各类型专属API
+            try:
+                type_path_map = {
+                    "docx": f"/open-apis/docx/v1/documents/{doc_token}",
+                    "wiki": f"/open-apis/wiki/v2/spaces/{doc_token}",
+                    "base": f"/open-apis/bitable/v1/apps/{doc_token}",
+                    "sheet": f"/open-apis/sheet/v2/spreadsheets/{doc_token}",
+                    "slides": f"/open-apis/slides/v1/presentations/{doc_token}",
+                }
+                if api_doc_type in type_path_map:
+                    path = type_path_map[api_doc_type]
+                    data = client.request("GET", path)
+                else:
+                    return {}
+            except Exception:
+                return {}
 
     body = data.get("data", data)
-    if doc_type == "file":
-        return {
-            "title": body.get("name", ""),
-            "url": body.get("url", ""),
-            "updated_at": body.get("modified_time", ""),
-        }
     return {
-        "title": body.get("title", ""),
+        "title": body.get("name", body.get("title", "")),
         "url": body.get("url", ""),
-        "updated_at": body.get("modified_time", ""),
+        "updated_at": body.get("modified_time", body.get("edit_time", "")),
     }
 
 

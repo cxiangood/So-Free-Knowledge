@@ -964,19 +964,12 @@ def _build_runtime_plan(schedule: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _build_lark_message_url(chat_id: str, message_id: str) -> str:
+def _build_lark_message_url(chat_id: str, message_id: str = "") -> str:
     normalized_chat_id = str(chat_id or "").strip()
-    normalized_message_id = str(message_id or "").strip()
-    if not normalized_chat_id and not normalized_message_id:
+    if not normalized_chat_id:
         return ""
-    query_parts: list[str] = []
-    if normalized_chat_id:
-        encoded_chat_id = quote(normalized_chat_id, safe="")
-        query_parts.append(f"chatId={encoded_chat_id}")
-        query_parts.append(f"openChatId={encoded_chat_id}")
-    if normalized_message_id:
-        query_parts.append(f"openMessageId={quote(normalized_message_id, safe='')}")
-    return "https://applink.feishu.cn/client/chat/open?" + "&".join(query_parts)
+    encoded_chat_id = quote(normalized_chat_id, safe="")
+    return f"https://applink.feishu.cn/client/chat/open?openChatId={encoded_chat_id}"
 
 
 def _is_recent(raw: str) -> bool:
@@ -1092,8 +1085,9 @@ def _to_interest_card(interest_digest: dict[str, Any], profile: dict[str, Any]) 
         sender_name = str(item.get("sender_name", "") or "").strip()
         from_label = f"（From：{sender_name}）" if sender_name else ""
         message_url = str(item.get("message_url", "") or "").strip()
-        if message_url:
-            lines.append(f"- {summary}{from_label} [原消息]({message_url})")
+        if message_url and summary:
+            # 把超链接做到消息摘要上，不单独显示"原消息"
+            lines.append(f"- [{summary}]({message_url}){from_label}")
         else:
             lines.append(f"- {summary}{from_label}")
     if not lines:
