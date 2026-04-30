@@ -77,6 +77,19 @@ def collect_online_personal_inputs(
                 sender = msg.get("sender", {})
                 sender_name = _extract_sender_name(sender)
                 sender_id = _extract_sender_id(msg)
+
+                # 确保发件人名称是真实昵称，不是ID
+                if sender_id and (not sender_name or sender_name.startswith("ou_")):
+                    # 先查缓存
+                    if sender_id in user_id_to_name:
+                        sender_name = user_id_to_name[sender_id]
+                    else:
+                        # 缓存没有就查API
+                        user_info = _get_user_info(client, sender_id)
+                        if user_info.get("name"):
+                            sender_name = user_info["name"]
+                            user_id_to_name[sender_id] = sender_name
+
                 if sender_id and sender_name and not sender_name.startswith("ou_"):
                     user_id_to_name[sender_id] = sender_name
 
@@ -90,6 +103,7 @@ def collect_online_personal_inputs(
                         "message_id": msg.get("message_id", ""),
                         "chat_id": msg.get("chat_id", chat_id),
                         "sender_name": sender_name,
+                        "sender_id": sender_id,  # 保存发件人ID
                         "content": text,
                         "text": text,
                         "create_time": msg.get("create_time", ""),
@@ -136,11 +150,11 @@ def collect_online_personal_inputs(
                 if meta.get("updated_at"):
                     doc["updated_at"] = meta["updated_at"]
             else:
-                # 查询失败也显示为"相关文档"，不显示原始ID
-                doc["title"] = "相关文档"
+                # 查询失败 → 用token前8位拼标题，不暴露完整ID
+                doc["title"] = f"文档（{doc_token[:8]}...）"
         except Exception:
-            # 查询失败显示为"相关文档"，不暴露ID
-            doc["title"] = "相关文档"
+            # 查询失败 → 用token前8位拼标题，不暴露完整ID
+            doc["title"] = f"文档（{doc_token[:8]}...）"
 
     documents = _merge_documents(drive_docs, linked_docs)
     access_records = link_access_records
@@ -377,6 +391,20 @@ def _normalize_message_text(
         return user_id
 
     normalized = re.sub(r"ou_[a-f0-9]+", replace_ou_id, normalized)
+
+    # 兜底：扫描所有剩余的ou_xxx ID，批量查询替换
+    if client and user_id_to_name is not None:
+        ou_ids = set(re.findall(r"ou_[a-f0-9]+", normalized))
+        for uid in ou_ids:
+            if uid not in user_id_to_name:
+                user_info = _get_user_info(client, uid)
+                if user_info.get("name"):
+                    user_id_to_name[uid] = user_info["name"]
+                    normalized = normalized.replace(uid, user_info["name"])
+        # 替换所有已知ID
+        for uid, name in user_id_to_name.items():
+            normalized = normalized.replace(f"@{uid}", f"@{name}")
+            normalized = normalized.replace(uid, name)
 
     return normalized
 
