@@ -98,6 +98,33 @@ def collect_online_personal_inputs(
 
     linked_docs, link_access_records = extract_docs_and_access_from_messages(messages, resolved_target)
 
+    # 批量获取消息提及文档的真实标题（使用独立实现，不依赖FeishuClient内置方法）
+    for doc in linked_docs:
+        try:
+            doc_token = doc["doc_id"]
+            url = doc.get("url", "")
+            doc_type = "docx"
+            if "/wiki/" in url:
+                doc_type = "wiki"
+            elif "/base/" in url:
+                doc_type = "base"
+            elif "/sheet/" in url:
+                doc_type = "sheet"
+            elif "/slides/" in url:
+                doc_type = "slides"
+            elif "/file/" in url:
+                doc_type = "file"
+
+            # 调用本地独立实现的元数据查询函数
+            meta = _get_doc_meta(client, doc_token, doc_type=doc_type)
+            if meta.get("title"):
+                doc["title"] = meta["title"]
+                if meta.get("updated_at"):
+                    doc["updated_at"] = meta["updated_at"]
+        except Exception:
+            # 查询失败不影响主流程，保持原有标题即可
+            pass
+
     documents = _merge_documents(drive_docs, linked_docs)
     access_records = link_access_records
     knowledge_items = build_knowledge_items(messages=messages, documents=documents, max_items=max_knowledge)
@@ -165,7 +192,7 @@ def extract_docs_and_access_from_messages(
                 key,
                 {
                     "doc_id": key,
-                    "title": f"消息提及文档 {key}",
+                    "title": "相关文档",
                     "summary": _trim(text, 120),
                     "url": url,
                     "updated_at": str(message.get("create_time") or ""),
@@ -356,6 +383,49 @@ def _resolve_online_message_url(
         "https://applink.feishu.cn/client/chat/open?"
         f"chatId={encoded_chat_id}&openChatId={encoded_chat_id}&openMessageId={encoded_message_id}"
     )
+
+
+def _get_doc_meta(client: FeishuClient, doc_token: str, doc_type: str = "docx") -> dict[str, Any]:
+    """独立的文档元数据查询功能，不依赖FeishuClient的内置方法"""
+    doc_type_map = {
+        "docx": "docs",
+        "wiki": "wiki",
+        "base": "bitable",
+        "sheet": "sheets",
+        "slides": "slides",
+        "file": "drive",
+    }
+    api_type = doc_type_map.get(doc_type, "docs")
+    path = f"/open-apis/{api_type}/v1/{doc_type}s/{doc_token}"
+    if doc_type == "file":
+        path = f"/open-apis/drive/v1/files/{doc_token}"
+
+    try:
+        # 使用用户token查询
+        data = client.request("GET", path)
+    except FeishuAPIError:
+        try:
+            # 失败则用租户token重试
+            data = client.request(
+                "GET",
+                path,
+                access_token=client.get_tenant_access_token(),
+            )
+        except Exception:
+            return {}
+
+    body = data.get("data", data)
+    if doc_type == "file":
+        return {
+            "title": body.get("name", ""),
+            "url": body.get("url", ""),
+            "updated_at": body.get("modified_time", ""),
+        }
+    return {
+        "title": body.get("title", ""),
+        "url": body.get("url", ""),
+        "updated_at": body.get("modified_time", ""),
+    }
 
 
 def _extract_sender_name(sender: Any) -> str:

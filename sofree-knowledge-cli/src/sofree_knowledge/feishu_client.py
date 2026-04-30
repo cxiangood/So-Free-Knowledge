@@ -127,6 +127,42 @@ class FeishuClient:
             "page_token": body.get("next_page_token", body.get("page_token", "")),
         }
 
+    def get_doc_meta(self, doc_token: str, doc_type: str = "docx") -> dict[str, Any]:
+        """Get document metadata by token. Supported types: docx, wiki, base, sheet, slides, file."""
+        doc_type_map = {
+            "docx": "docs",
+            "wiki": "wiki",
+            "base": "bitable",
+            "sheet": "sheets",
+            "slides": "slides",
+            "file": "drive",
+        }
+        api_type = doc_type_map.get(doc_type, "docs")
+        path = f"/open-apis/{api_type}/v1/{doc_type}s/{doc_token}"
+        if doc_type == "file":
+            path = f"/open-apis/drive/v1/files/{doc_token}"
+        try:
+            data = self.request("GET", path)
+        except FeishuAPIError:
+            # Fallback to tenant token if user token fails
+            data = self.request(
+                "GET",
+                path,
+                access_token=self.get_tenant_access_token(),
+            )
+        body = data.get("data", data)
+        if doc_type == "file":
+            return {
+                "title": body.get("name", ""),
+                "url": body.get("url", ""),
+                "updated_at": body.get("modified_time", ""),
+            }
+        return {
+            "title": body.get("title", ""),
+            "url": body.get("url", ""),
+            "updated_at": body.get("modified_time", ""),
+        }
+
     def get_app_access_token(self) -> str:
         app_id, app_secret = get_app_credentials()
         if not app_id or not app_secret:

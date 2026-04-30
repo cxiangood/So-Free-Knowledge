@@ -667,6 +667,11 @@ def _normalize_interest_text(text: str) -> str:
 
 
 def _resolve_message_url(message: dict[str, Any]) -> str:
+    chat_id = message.get("chat_id", "")
+    message_id = message.get("message_id", "")
+    if chat_id:
+        return _build_lark_message_url(chat_id, message_id)
+    # Fallback to existing URL fields if no chat_id
     for key in ("message_url", "open_message_url", "deep_link", "link"):
         value = str(message.get(key) or "").strip()
         if value.startswith("http://") or value.startswith("https://"):
@@ -833,8 +838,12 @@ def _strip_interest_artifacts(text: str) -> str:
     # Remove isolated chat/msg tags if they appear alone.
     value = re.sub(r"\bchat:[A-Za-z0-9_]+\b", "", value, flags=re.IGNORECASE)
     value = re.sub(r"\bmsg:[A-Za-z0-9_]+\b", "", value, flags=re.IGNORECASE)
+    # Remove any remaining brackets content that contains chat/msg
+    value = re.sub(r"\[[^\]]*(chat|msg):[^\]]*\]", "", value, flags=re.IGNORECASE)
     # Strong fallback: if marker tail appears, keep only left-side meaningful sentence.
     value = re.sub(r"\s*\[\s*chat:.*$", "", value, flags=re.IGNORECASE)
+    # Clean up extra spaces
+    value = re.sub(r"\s+", " ", value)
     return value.strip()
 
 
@@ -953,7 +962,7 @@ def _to_markdown(
         title = f"[{item['title']}]({item['url']})" if item.get("url") else item["title"]
         lines.append(
             f"{index}. {'★' * int(item['urgency_stars'])}{'☆' * (5 - int(item['urgency_stars']))} "
-            f"[{item['priority'].upper()}] {title} "
+            f"{title} "
             f"(紧急:{item['urgency_score']} 推荐:{item['recommend_score']})"
         )
         for reason in item["reasons"][:2]:
@@ -977,7 +986,7 @@ def _to_card(documents: list[dict[str, Any]], profile: dict[str, Any]) -> dict[s
         )
         content_lines.append(
             f"- {'★' * int(item['urgency_stars'])}{'☆' * (5 - int(item['urgency_stars']))} "
-            f"**{item['priority'].upper()}** [{item['business']}] {title} "
+            f"[{item['business']}] {title} "
             f"(紧急:{item['urgency_score']} 推荐:{item['recommend_score']})"
         )
     if not content_lines:
