@@ -244,7 +244,7 @@ def build_personal_brief(
         )
 
     ranked_docs.sort(
-        key=lambda item: (int(item["urgency_score"]), int(item["recommend_score"])),
+        key=lambda item: _weighted_score(int(item["urgency_score"]), int(item["recommend_score"])),
         reverse=True,
     )
     ranked_docs = ranked_docs[:max_docs]
@@ -574,6 +574,25 @@ def _priority_label(urgency_score: int, recommend_score: int) -> str:
     if urgency_score >= 45 or recommend_score >= 75:
         return "high"
     return "normal"
+
+
+def _weighted_score(urgency_score: int, recommend_score: int) -> float:
+    """计算加权评分：紧急权重0.6，推荐权重0.4"""
+    return urgency_score * 0.6 + recommend_score * 0.4
+
+
+def _weighted_stars(urgency_score: int, recommend_score: int) -> int:
+    """根据加权评分计算星级，阈值适当降低"""
+    score = _weighted_score(urgency_score, recommend_score)
+    if score >= 75:
+        return 5
+    if score >= 60:
+        return 4
+    if score >= 45:
+        return 3
+    if score >= 25:
+        return 2
+    return 1
 
 
 def _urgency_stars(urgency_score: int) -> int:
@@ -1147,7 +1166,8 @@ def _to_markdown(
         for item in group.get("documents", [])[:5]:
             title = f"[{item['title']}]({item['url']})" if item.get("url") else item["title"]
             lines.append(
-                f"- {'★' * int(item['urgency_stars'])}{'☆' * (5 - int(item['urgency_stars']))} "
+                weighted_stars = _weighted_stars(item['urgency_score'], item['recommend_score'])
+                f"- {'★' * weighted_stars}{'☆' * (5 - weighted_stars)} "
                 f"[{item['doc_type']}] {title}"
             )
             lines.append(f"  - 描述: {item['summary'] or '无'}")
@@ -1160,10 +1180,11 @@ def _to_markdown(
         return "\n".join(lines)
     for index, item in enumerate(documents, start=1):
         title = f"[{item['title']}]({item['url']})" if item.get("url") else item["title"]
+        weighted_stars = _weighted_stars(item['urgency_score'], item['recommend_score'])
         lines.append(
-            f"{index}. {'★' * int(item['urgency_stars'])}{'☆' * (5 - int(item['urgency_stars']))} "
+            f"{index}. {'★' * weighted_stars}{'☆' * (5 - weighted_stars)} "
             f"{title} "
-            f"(紧急:{item['urgency_score']} 推荐:{item['recommend_score']})"
+            f"(紧急:{item['urgency_score']} 推荐:{item['recommend_score']} 综合:{int(_weighted_score(item['urgency_score'], item['recommend_score']))})"
         )
         for reason in item["reasons"][:2]:
             lines.append(f"   - {reason}")
@@ -1184,10 +1205,11 @@ def _to_card(documents: list[dict[str, Any]], profile: dict[str, Any]) -> dict[s
             if item.get("url")
             else item["title"]
         )
+        weighted_stars = _weighted_stars(item['urgency_score'], item['recommend_score'])
         content_lines.append(
-            f"- {'★' * int(item['urgency_stars'])}{'☆' * (5 - int(item['urgency_stars']))} "
+            f"- {'★' * weighted_stars}{'☆' * (5 - weighted_stars)} "
             f"[{item['business']}] {title} "
-            f"(紧急:{item['urgency_score']} 推荐:{item['recommend_score']})"
+            f"(紧急:{item['urgency_score']} 推荐:{item['recommend_score']} 综合:{int(_weighted_score(item['urgency_score'], item['recommend_score']))})"
         )
     if not content_lines:
         content_lines = ["- 暂无可推荐文档"]
