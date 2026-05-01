@@ -26,6 +26,13 @@ def trace_node(*, message_id: str, node_name: str) -> None:
         nodes = state.get("nodes")
         if isinstance(nodes, list):
             nodes.append(node_name)
+            # 实时输出当前执行进度（单行覆盖式，避免刷屏）
+            content = str(state.get("content", ""))
+            path = "→".join(nodes)
+            line = f"[{content}] 执行中: {path}"
+            LOGGER.info(line)  # 日志仍然保留完整历史
+            # 控制台使用回车符覆盖上一行，左对齐填充空格避免残留字符
+            print(f"{line:<100}", end='\r', flush=True)
 
 
 def trace_finish(*, message_id: str, suffix_status: str = "ok") -> None:
@@ -40,9 +47,11 @@ def trace_finish(*, message_id: str, suffix_status: str = "ok") -> None:
     if suffix_status and suffix_status != "ok" and nodes:
         nodes[-1] = f"{nodes[-1]}({suffix_status})"
     path = "→".join(nodes) if nodes else "无节点"
-    line = f"[{content}] : {path}"
+    line = f"[{content}] 执行完成: {path}"
     LOGGER.info(line)
-    print(line, flush=True)
+    # 先输出换行，结束之前的覆盖式输出，再显示最终结果
+    print()
+    print(f"{line:<100}", flush=True)
 
 
 __all__ = ["trace_start", "trace_node", "trace_finish"]
