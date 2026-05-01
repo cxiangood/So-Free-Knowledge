@@ -908,3 +908,25 @@ def test_lingo_sync_from_file_cli(tmp_path, capsys):
     assert out["ok"] is True
     assert out["count"] == 1
     assert out["entries"][0]["keyword"] == "A/B实验"
+
+
+def test_wikisheet_create_sheet_routed_from_main_cli(monkeypatch, capsys):
+    monkeypatch.setattr(
+        cli_module.wikisheet_module,
+        "cmd_create_sheet",
+        lambda args: {
+            "ok": True,
+            "action": "create-sheet",
+            "title": args.title,
+            "resolved_space_id": "space_xxx",
+            "spreadsheet_token": "sht_xxx",
+        },
+    )
+
+    code = main(["wikisheet", "create-sheet", "--title", "经营周报", "--space-id", "my_library"])
+    out = json.loads(capsys.readouterr().out)
+
+    assert code == 0
+    assert out["ok"] is True
+    assert out["action"] == "create-sheet"
+    assert out["title"] == "经营周报"

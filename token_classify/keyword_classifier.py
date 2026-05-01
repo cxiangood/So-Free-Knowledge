@@ -70,6 +70,32 @@ class KeywordClassifier:
         return None
 
     @staticmethod
+    def _merge_overlapping_contexts(contexts: List[str]) -> str:
+        """合并多个重叠的上下文片段为完整的连续文本"""
+        if not contexts:
+            return ""
+        if len(contexts) == 1:
+            return contexts[0]
+
+        # 按长度排序，先处理短的再处理长的
+        sorted_contexts = sorted(contexts, key=len)
+        merged = sorted_contexts[0]
+
+        for ctx in sorted_contexts[1:]:
+            # 寻找最长的重叠部分：merged的后缀和ctx的前缀匹配
+            max_overlap = 0
+            # 最多匹配到较短字符串的长度
+            max_possible = min(len(merged), len(ctx))
+            for i in range(max_possible, 0, -1):
+                if merged.endswith(ctx[:i]):
+                    max_overlap = i
+                    break
+            # 合并文本
+            merged += ctx[max_overlap:]
+
+        return merged
+
+    @staticmethod
     def _normalize_items(payload: dict, keywords: List[str]) -> Dict[str, Dict[str, str]]:
         out = {kw: {"type": "confused", "sense": "模型未返回该关键词结果"} for kw in keywords}
 
@@ -108,12 +134,13 @@ class KeywordClassifier:
         if not keywords:
             return {}
 
-        context_lines = "\n".join(f"- {ctx}" for ctx in contexts[:8]) if contexts else "- 无上下文"
+        # 合并重叠的上下文片段为完整文本
+        merged_context = self._merge_overlapping_contexts(contexts[:8]) if contexts else "无上下文"
         user_prompt = (
             "请按组处理以下关键词，并分别判断每个关键词：\n"
             f"关键词组: {', '.join(keywords)}\n"
-            "上下文片段（这些片段可能同时涉及多个关键词）:\n"
-            f"{context_lines}\n\n"
+            "上下文（所有相关片段已合并为完整段落）:\n"
+            f"{merged_context}\n\n"
             "请输出 JSON。"
         )
 

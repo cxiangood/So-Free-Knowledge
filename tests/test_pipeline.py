@@ -241,7 +241,7 @@ def test_archive_reproducible_flow() -> None:
         _write_sample_archive(input_path)
 
         records = load_records(input_path)
-        plain_messages = extract_plain_messages(records, include_types={"text", "post"})[:1]
+        plain_messages = extract_plain_messages(records, include_types={"text", "post"})[:5]
         plain_text = "\n".join(plain_messages)
 
         config = {

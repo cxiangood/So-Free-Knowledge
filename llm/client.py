@@ -1,11 +1,41 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal, TypeVar
 
 import requests
+from pydantic import BaseModel, Field
 
 from utils import getenv
+
+
+class DetectScores(BaseModel):
+    novelty: float = Field(ge=0.0, le=100.0)
+    actionability: float = Field(ge=0.0, le=100.0)
+    impact: float = Field(ge=0.0, le=100.0)
+    emotion: float = Field(ge=0.0, le=100.0)
+
+
+class LiftParts(BaseModel):
+    title: str
+    summary: str
+    suggestion: str
+    problem: str
+    names: list[str] = Field(default_factory=list)
+
+
+class RouteOutput(BaseModel):
+    target_pool: Literal["knowledge", "task", "observe"]
+    reason_codes: list[str] = Field(default_factory=list)
+
+
+class ObserveQuestionOutput(BaseModel):
+    is_question: bool | None = None
+    need_reply: bool | None = None
+    confidence: float | None = None
+
+
+StructuredModel = TypeVar("StructuredModel", bound=BaseModel)
 
 
 @dataclass(slots=True)
@@ -15,6 +45,7 @@ class LLMConfig:
     base_url: str
     temperature: float = 0.2
     max_tokens: int = 512
+    top_p: float = 1.0
 
     @classmethod
     def from_env(
@@ -25,6 +56,7 @@ class LLMConfig:
         base_url: str = "",
         temperature: float = 0.2,
         max_tokens: int = 512,
+        top_p: float = 1.0,
     ) -> "LLMConfig":
         return cls(
             api_key=(api_key or getenv("LLM_API_KEY", "")).strip(),
@@ -32,6 +64,7 @@ class LLMConfig:
             base_url=(base_url or getenv("LLM_BASE_URL", "")).strip(),
             temperature=temperature,
             max_tokens=max_tokens,
+            top_p=top_p,
         )
     def missing_fields(self) -> list[str]:
         missing = []
@@ -42,6 +75,47 @@ class LLMConfig:
         if not self.base_url:
             missing.append("llm_base_url")
         return missing
+
+
+def invoke_structured(
+    *,
+    config: LLMConfig,
+    system_prompt: str,
+    user_prompt: str,
+    schema: type[StructuredModel],
+    method: str = "json_mode",
+) -> StructuredModel | None:
+    if config.missing_fields():
+        return None
+    try:
+        from langchain_openai import ChatOpenAI
+
+        model = ChatOpenAI(
+            model=config.model_id,
+            api_key=config.api_key,
+            base_url=config.base_url,
+            temperature=config.temperature,
+            max_tokens=config.max_tokens,
+            top_p=config.top_p,
+        )
+        structured_model = model.with_structured_output(schema, method=method)
+        response = structured_model.invoke(
+            [
+                ("system", system_prompt),
+                ("user", user_prompt),
+            ]
+        )
+    except Exception:
+        return None
+
+    if isinstance(response, schema):
+        return response
+    if isinstance(response, dict):
+        try:
+            return schema(**response)
+        except Exception:
+            return None
+    return None
 
 
 class LLMClient:
@@ -62,6 +136,7 @@ class LLMClient:
             ],
             "temperature": self.config.temperature,
             "max_tokens": self.config.max_tokens,
+            "top_p": self.config.top_p,
         }
         headers = {
             "Authorization": f"Bearer {self.config.api_key}",
