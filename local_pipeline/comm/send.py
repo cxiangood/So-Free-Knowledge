@@ -109,33 +109,185 @@ def _temporary_feishu_credentials(app_id: str, app_secret: str):
 
 def build_task_card_payload(card: LiftedCard, *, run_id: str, task_id: str) -> dict[str, Any]:
     evidence = card.evidence[0] if card.evidence else ""
-    tags = " ".join(f"`{tag}`" for tag in card.tags[:6]) if card.tags else ""
-    markdown = f"""
-        ### 🧠 关键摘要
-        > **{card.summary}**
+    tags = " ".join(f"{tag}" for tag in card.tags[:6]) if card.tags else ""
 
-        ---
+    elements = [
+        # 关键摘要模块
+        {
+            "tag": "div",
+            "text": {
+                "tag": "lark_md",
+                "content": f"**{card.summary}**"
+            }
+        },
+        # 分割线
+        {"tag": "hr"},
+        # 详情信息模块
+        {
+            "tag": "div",
+            "text": {
+                "tag": "lark_md",
+                "content": "**📌 详情信息**"
+            }
+        },
+        # 表格行 - 问题
+        {
+            "tag": "column_set",
+            "flex_mode": "none",
+            "background_style": "default",
+            "horizontal_spacing": "default",
+            "columns": [
+                {
+                    "tag": "column",
+                    "width": "weighted",
+                    "weight": 1,
+                    "vertical_align": "middle",
+                    "elements": [
+                        {
+                            "tag": "div",
+                            "text": {
+                                "tag": "plain_text",
+                                "content": "⚠️ 问题"
+                            }
+                        }
+                    ]
+                },
+                {
+                    "tag": "column",
+                    "width": "weighted",
+                    "weight": 3,
+                    "vertical_align": "middle",
+                    "elements": [
+                        {
+                            "tag": "div",
+                            "text": {
+                                "tag": "plain_text",
+                                "content": card.problem
+                            }
+                        }
+                    ]
+                }
+            ]
+        },
+        # 表格行 - 建议
+        {
+            "tag": "column_set",
+            "flex_mode": "none",
+            "background_style": "none",
+            "horizontal_spacing": "default",
+            "columns": [
+                {
+                    "tag": "column",
+                    "width": "weighted",
+                    "weight": 1,
+                    "vertical_align": "middle",
+                    "elements": [
+                        {
+                            "tag": "div",
+                            "text": {
+                                "tag": "plain_text",
+                                "content": "💡 建议"
+                            }
+                        }
+                    ]
+                },
+                {
+                    "tag": "column",
+                    "width": "weighted",
+                    "weight": 3,
+                    "vertical_align": "middle",
+                    "elements": [
+                        {
+                            "tag": "div",
+                            "text": {
+                                "tag": "plain_text",
+                                "content": card.suggestion
+                            }
+                        }
+                    ]
+                }
+            ]
+        },
+        # 表格行 - 相关人员
+        {
+            "tag": "column_set",
+            "flex_mode": "none",
+            "background_style": "default",
+            "horizontal_spacing": "default",
+            "columns": [
+                {
+                    "tag": "column",
+                    "width": "weighted",
+                    "weight": 1,
+                    "vertical_align": "middle",
+                    "elements": [
+                        {
+                            "tag": "div",
+                            "text": {
+                                "tag": "plain_text",
+                                "content": "👥 相关人员"
+                            }
+                        }
+                    ]
+                },
+                {
+                    "tag": "column",
+                    "width": "weighted",
+                    "weight": 3,
+                    "vertical_align": "middle",
+                    "elements": [
+                        {
+                            "tag": "div",
+                            "text": {
+                                "tag": "plain_text",
+                                "content": card.target_audience
+                            }
+                        }
+                    ]
+                }
+            ]
+        }
+    ]
 
-        ### 📌 详情信息
+    # 标签模块（如果有标签）
+    # if tags:
+    #     elements.extend([
+    #         {
+    #             "tag": "div",
+    #             "fields": [
+    #                 {
+    #                     "is_short": False,
+    #                     "text": {
+    #                         "tag": "lark_md",
+    #                         "content": "**🏷️ 标签**{}".format(tags)
+    #                     }
+    #                 }
+    #             ]
+    #         }
+    #     ])
 
-        | 项目 | 内容 |
-        |------|------|
-        | ⚠️ 问题 | {card.problem} |
-        | 💡 建议 | {card.suggestion} |
-        | 👥 相关人员 | {card.target_audience} |
+    # 相关片段模块（如果有证据）
+    if evidence:
+        elements.extend([
+            {"tag": "hr"},
+            {
+                "tag": "note",
+                "elements": [
+                    {
+                        "tag": "plain_text",
+                        "content": f"📎 相关片段：{evidence}"
+                    }
+                ]
+            }
+        ])
 
-        ---
-
-        <sub>📎 相关片段：</sub>  
-        <sub>> {evidence}</sub>
-    """
     return {
         "config": {"wide_screen_mode": True},
         "header": {
             "template": "red",
             "title": {"tag": "plain_text", "content": f"[Task] {card.title[:60]}"},
         },
-        "elements": [{"tag": "markdown", "content": markdown}],
+        "elements": elements
     }
 
 
