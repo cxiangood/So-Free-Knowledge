@@ -10,6 +10,7 @@ from urllib.parse import quote
 
 from .assistant import features, ranker, renderer, retriever
 from .assistant.models import DualTowerConfig
+from .interest_filter import apply_interest_filter_annotations
 
 
 URGENCY_KEYWORDS = (
@@ -138,7 +139,8 @@ def build_personal_brief(
 ) -> dict[str, Any]:
     docs = [features.normalize_doc(item) for item in documents]
     records = [item for item in (access_records or []) if isinstance(item, dict)]
-    msgs = [features.normalize_message(item) for item in (messages or []) if isinstance(item, dict)]
+    annotated_messages = apply_interest_filter_annotations([item for item in (messages or []) if isinstance(item, dict)])
+    msgs = [features.normalize_message(item) for item in annotated_messages]
     knowledge = [features.normalize_knowledge(item) for item in (knowledge_items or []) if isinstance(item, dict)]
     profile = features.normalize_profile(user_profile or {})
     normalized_schedule = features.normalize_schedule(schedule or {})

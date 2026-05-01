@@ -86,6 +86,38 @@ def parse_interest_filter_judgements(raw: str | list[dict[str, Any]] | dict[str,
     return result
 
 
+def apply_interest_filter_annotations(
+    messages: list[dict[str, Any]],
+    judgements: str | list[dict[str, Any]] | dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    judgement_map: dict[str, dict[str, Any]] = {}
+    if judgements:
+        for item in parse_interest_filter_judgements(judgements):
+            judgement_map[str(item.get("message_id") or "")] = item
+
+    merged: list[dict[str, Any]] = []
+    for raw_message in messages:
+        message = dict(raw_message)
+        inline = message.get("interest_filter_judgement") or message.get("interest_filter_result")
+        if inline:
+            for item in parse_interest_filter_judgements(inline):
+                judgement_map[str(item.get("message_id") or message.get("message_id") or "")] = item
+        message_id = str(message.get("message_id") or message.get("id") or "").strip()
+        judgement = judgement_map.get(message_id)
+        if judgement:
+            message["include_in_digest"] = judgement.get("include_in_digest")
+            message["is_garbage"] = judgement.get("is_garbage")
+            message["importance"] = judgement.get("importance")
+            message["openclaw_include_in_digest"] = judgement.get("include_in_digest")
+            message["openclaw_is_garbage"] = judgement.get("is_garbage")
+            message["openclaw_importance"] = judgement.get("importance")
+            message["openclaw_interest_score"] = judgement.get("score_relevance")
+            message["openclaw_summary"] = judgement.get("summary") or message.get("openclaw_summary") or ""
+            message["openclaw_reason"] = judgement.get("reason") or ""
+        merged.append(message)
+    return merged
+
+
 def _normalize_message(index: int, item: dict[str, Any] | str) -> dict[str, str]:
     if isinstance(item, str):
         return {

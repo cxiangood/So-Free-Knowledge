@@ -125,6 +125,28 @@ def test_interest_digest_filters_noise_messages():
     assert items[0]["message_id"] == "m3"
 
 
+def test_interest_digest_applies_interest_filter_judgement_from_message():
+    report = build_personal_brief(
+        documents=[{"doc_id": "d1", "title": "Release", "summary": "Plan summary"}],
+        messages=[
+            {
+                "message_id": "m_filter",
+                "chat_id": "oc_x",
+                "content": "系统处罚提醒",
+                "interest_filter_judgement": {
+                    "message_id": "m_filter",
+                    "include_in_digest": False,
+                    "is_garbage": True,
+                    "importance": 0.0,
+                    "summary": "",
+                },
+            }
+        ],
+        user_profile={"interests": ["发布"]},
+    )
+    assert report["interest_digest"]["items"] == []
+
+
 def test_interest_digest_blocks_openclaw_garbage_message():
     report = build_personal_brief(
         documents=[{"doc_id": "d1", "title": "Release", "summary": "Plan summary"}],

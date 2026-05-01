@@ -46,6 +46,60 @@ def test_auth_login_no_wait_cli_outputs_json(monkeypatch, capsys):
     assert out["request"]["device_code"] == "dev123"
 
 
+def test_auth_login_bootstraps_profile_after_token(monkeypatch, tmp_path, capsys):
+    class FakeAuthClient:
+        def request(self, method, path, params=None, access_token=None, **kwargs):
+            return {"data": {"user": {"name": "曹林江"}}}
+
+        def get_tenant_access_token(self):
+            return "tenant_token"
+
+    monkeypatch.setattr(
+        cli_module,
+        "device_login",
+        lambda **kwargs: {
+            "flow": "device_code",
+            "token": {"has_access_token": True, "open_id": "ou_test"},
+        },
+    )
+    monkeypatch.setattr(cli_module.FeishuClient, "from_user_context", classmethod(lambda cls, **kwargs: FakeAuthClient()))
+    monkeypatch.setattr(cli_module, "get_user_identity", lambda token_file=None: {"open_id": "ou_test"})
+    monkeypatch.setattr(
+        cli_module,
+        "collect_online_personal_inputs",
+        lambda **kwargs: {
+            "documents": [{"doc_id": "d1", "title": "关键词提取方案", "summary": "上线排期"}],
+            "messages": [{"message_id": "m1", "chat_id": "oc_x", "text": "请检查关键词提取上线排期"}],
+            "knowledge_items": [{"id": "k1", "title": "关键词提取", "content": "高频主题"}],
+            "meta": {"message_count": 1, "document_count": 1},
+        },
+    )
+
+    code = main(["--output-dir", str(tmp_path), "auth", "login", "--no-browser"])
+
+    out = json.loads(capsys.readouterr().out)
+    assert code == 0
+    assert out["ok"] is True
+    assert out["profile_bootstrap"]["pending_confirmation"] is True
+    assert out["profile_bootstrap"]["profile"]["interests"]
+    assert "AI 画像初始化建议" == out["profile_bootstrap"]["card"]["header"]["title"]["content"]
+
+
+def test_assistant_confirm_profile_cli_marks_confirmation_complete(tmp_path, capsys):
+    profile_file = tmp_path / "assistant_profile.json"
+    profile_file.write_text(
+        json.dumps({"profile": {"persona": "务实推进型", "require_user_confirmation": True}}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    code = main(["--output-dir", str(tmp_path), "assistant", "confirm-profile", "--profile-file", str(profile_file)])
+
+    out = json.loads(capsys.readouterr().out)
+    assert code == 0
+    assert out["confirmed"] is True
+    assert out["profile"]["require_user_confirmation"] is False
+
+
 def test_auth_url_cli_outputs_json(monkeypatch, capsys):
     monkeypatch.setenv("FEISHU_APP_ID", "cli_test")
 

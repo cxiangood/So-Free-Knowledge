@@ -10,6 +10,7 @@ from urllib.parse import urlparse
 from .archive import list_chat_messages, list_visible_chats, split_chat_ids
 from .config import get_user_identity
 from .feishu_client import FeishuClient, FeishuAPIError, MissingFeishuConfigError
+from .interest_filter import apply_interest_filter_annotations
 
 _DOC_HOST_HINTS = ("feishu.cn", "larksuite.com")
 _DOC_PATH_HINTS = ("/docx/", "/wiki/", "/base/", "/sheet/", "/slides/", "/file/")
@@ -119,6 +120,9 @@ def collect_online_personal_inputs(
         except (FeishuAPIError, MissingFeishuConfigError):
             # 跳过无权限或配置错误的群，不影响整体流程
             continue
+
+    messages = apply_interest_filter_annotations(messages)
+    all_messages = apply_interest_filter_annotations(all_messages)
 
     drive_docs: list[dict[str, Any]] = []
     drive_error = ""

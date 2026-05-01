@@ -9,10 +9,13 @@ from typing import Any
 from .archive import collect_messages
 from .assistant.profile import (
     assistant_profile_default_path,
+    build_profile_review_card,
     build_profile_overrides,
     build_retrieval_overrides,
     build_schedule_overrides,
     load_assistant_profile_config,
+    save_assistant_profile_config,
+    suggest_profile_from_online_inputs,
 )
 from .assistant.service import build_personal_brief_command_result, recommend_command_result, resolve_push_target
 from .assistant.training import export_dual_tower_samples, load_dual_tower_samples, train_dual_tower_baseline
@@ -227,6 +230,10 @@ def build_parser() -> argparse.ArgumentParser:
     assistant_profile_get.add_argument("--profile-file", default="", help="Optional profile json path.")
     assistant_profile_get.set_defaults(func=cmd_assistant_get_profile)
 
+    assistant_profile_confirm = assistant_subparsers.add_parser("confirm-profile", help="Confirm the current assistant profile suggestion.")
+    assistant_profile_confirm.add_argument("--profile-file", default="", help="Optional profile json path.")
+    assistant_profile_confirm.set_defaults(func=cmd_assistant_confirm_profile)
+
     assistant_build = assistant_subparsers.add_parser("build-personal-brief", help="Build personal brief from docs/access/messages/knowledge.")
     assistant_build.add_argument("--online", action="store_true", help="Collect data from Feishu APIs online in one command.")
     assistant_build.add_argument("--documents-file", default="", help="JSON file containing documents array. Required in offline mode.")
@@ -401,6 +408,7 @@ def cmd_init_token(args: argparse.Namespace) -> dict[str, Any]:
         scope=args.scope,
         token_file=get_token_file_arg(args),
     )
+    result = _attach_auth_profile_bootstrap(args, result)
     result["ok"] = True
     return result
 
@@ -408,6 +416,7 @@ def cmd_init_token(args: argparse.Namespace) -> dict[str, Any]:
 def cmd_exchange_code(args: argparse.Namespace) -> dict[str, Any]:
     prepare_env(args)
     result = exchange_code_for_token(args.code_or_url, token_file=get_token_file_arg(args))
+    result = _attach_auth_profile_bootstrap(args, result)
     result["ok"] = True
     return result
 
@@ -436,6 +445,7 @@ def cmd_auth_login(args: argparse.Namespace) -> dict[str, Any]:
             token_file=get_token_file_arg(args),
             open_browser=not bool(args.no_browser),
         )
+    result = _attach_auth_profile_bootstrap(args, result)
     result["ok"] = True
     return result
 
@@ -523,10 +533,11 @@ def _build_schedule_overrides(args: argparse.Namespace) -> dict[str, Any]:
 
 def cmd_assistant_set_profile(args: argparse.Namespace) -> dict[str, Any]:
     prepare_env(args)
-    path = Path(args.profile_file).expanduser() if str(args.profile_file or "").strip() else assistant_profile_default_path(args.output_dir)
-    path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
-        "profile": _build_profile_overrides(args),
+        "profile": {
+            **_build_profile_overrides(args),
+            "require_user_confirmation": False,
+        },
         "schedule": _build_schedule_overrides(args),
         "retrieval": build_retrieval_overrides(
             dual_tower_enabled=args.dual_tower_enabled,
@@ -536,6 +547,89 @@ def cmd_assistant_set_profile(args: argparse.Namespace) -> dict[str, Any]:
             dual_tower_min_score=args.dual_tower_min_score,
         ),
     }
+    path = save_assistant_profile_config(output_dir=args.output_dir, profile_file=args.profile_file, payload=payload)
+    return {
+        "ok": True,
+        "profile_file": str(path),
+        "profile": payload["profile"],
+        "schedule": payload["schedule"],
+        "retrieval": payload["retrieval"],
+        "questionnaire_hint": [
+            "请确认当前并行业务（可多选）",
+            "请确认最近更关注的话题关键词",
+            "是否同意用最近阅读文档建议更新画像",
+        ],
+    }
+
+
+def _attach_auth_profile_bootstrap(args: argparse.Namespace, result: dict[str, Any]) -> dict[str, Any]:
+    token_payload = result.get("token")
+    if not isinstance(token_payload, dict) or not token_payload.get("has_access_token"):
+        return result
+    token_file = get_token_file_arg(args)
+    client = FeishuClient.from_user_context(token_file=token_file, require_user_token=True)
+    identity = get_user_identity(token_file=token_file)
+    display_name = _lookup_user_display_name(client, identity)
+    existing_config = load_assistant_profile_config(output_dir=args.output_dir, profile_file="")
+    existing_profile = dict(existing_config.get("profile", {})) if isinstance(existing_config, dict) else {}
+    try:
+        online_inputs = collect_online_personal_inputs(
+            client=client,
+            target_user_id="",
+            token_file=token_file or "",
+            include_visible_chats=True,
+            max_chats=8,
+            max_messages_per_chat=30,
+            max_drive_docs=10,
+            max_knowledge=12,
+            recent_days=14,
+        )
+    except Exception:
+        online_inputs = {
+            "documents": [],
+            "messages": [],
+            "knowledge_items": [],
+            "meta": {"message_count": 0, "document_count": 0},
+        }
+    suggested_profile = suggest_profile_from_online_inputs(
+        online_inputs=online_inputs,
+        display_name=display_name,
+        existing_profile=existing_profile,
+    )
+    merged_config = dict(existing_config) if isinstance(existing_config, dict) else {}
+    merged_config["profile"] = suggested_profile
+    merged_config.setdefault("schedule", {})
+    merged_config.setdefault("retrieval", {})
+    profile_path = save_assistant_profile_config(output_dir=args.output_dir, payload=merged_config)
+    source_meta = dict(online_inputs.get("meta", {})) if isinstance(online_inputs.get("meta", {}), dict) else {}
+    source_meta.setdefault("document_count", len(online_inputs.get("documents", []) or []))
+    source_meta.setdefault("message_count", len(online_inputs.get("messages", []) or []))
+    result["profile_bootstrap"] = {
+        "profile_file": str(profile_path),
+        "pending_confirmation": True,
+        "profile": suggested_profile,
+        "card": build_profile_review_card(profile=suggested_profile, source_meta=source_meta),
+        "confirm_command": "sofree-knowledge assistant confirm-profile",
+        "edit_command": "sofree-knowledge assistant set-profile --role <角色> --persona <形象> --businesses <业务1,业务2> --interests <兴趣1,兴趣2>",
+    }
+    return result
+
+
+def _lookup_user_display_name(client: FeishuClient, identity: dict[str, Any]) -> str:
+    open_id = str(identity.get("open_id") or "").strip()
+    if not open_id:
+        return ""
+    path = f"/open-apis/contact/v3/users/{open_id}"
+    params = {"user_id_type": "open_id"}
+    try:
+        data = client.request("GET", path, params=params)
+    except Exception:
+        try:
+            data = client.request("GET", path, params=params, access_token=client.get_tenant_access_token())
+        except Exception:
+            return ""
+    user = data.get("data", {}).get("user", {}) if isinstance(data, dict) else {}
+    return str(user.get("name") or user.get("en_name") or "").strip()
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     return {
         "ok": True,
@@ -561,6 +655,22 @@ def cmd_assistant_get_profile(args: argparse.Namespace) -> dict[str, Any]:
         "profile": parsed.get("profile", {}) if isinstance(parsed, dict) else {},
         "schedule": parsed.get("schedule", {}) if isinstance(parsed, dict) else {},
         "retrieval": parsed.get("retrieval", {}) if isinstance(parsed, dict) else {},
+    }
+
+
+def cmd_assistant_confirm_profile(args: argparse.Namespace) -> dict[str, Any]:
+    prepare_env(args)
+    parsed = _load_assistant_profile_config(args)
+    profile = dict(parsed.get("profile", {})) if isinstance(parsed, dict) else {}
+    profile["require_user_confirmation"] = False
+    payload = dict(parsed) if isinstance(parsed, dict) else {}
+    payload["profile"] = profile
+    path = save_assistant_profile_config(output_dir=args.output_dir, profile_file=args.profile_file, payload=payload)
+    return {
+        "ok": True,
+        "profile_file": str(path),
+        "profile": profile,
+        "confirmed": True,
     }
 
 

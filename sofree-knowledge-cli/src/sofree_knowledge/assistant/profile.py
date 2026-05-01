@@ -1,8 +1,37 @@
 from __future__ import annotations
 
 import json
+import re
+from collections import Counter
 from pathlib import Path
 from typing import Any
+
+
+PROFILE_STOPWORDS = {
+    "今天",
+    "今晚",
+    "明天",
+    "相关",
+    "检查",
+    "确认",
+    "一起",
+    "需要",
+    "进行",
+    "安排",
+    "项目",
+    "文档",
+    "消息",
+    "讨论",
+    "功能",
+    "内容",
+    "处理",
+    "更新",
+    "please",
+    "check",
+    "today",
+    "tonight",
+    "review",
+}
 
 
 def assistant_profile_default_path(output_dir: str) -> Path:
@@ -88,3 +117,105 @@ def build_retrieval_overrides(
     if dual_tower_min_score is not None:
         payload["min_score"] = max(0.0, float(dual_tower_min_score))
     return payload
+
+
+def save_assistant_profile_config(
+    *,
+    output_dir: str,
+    profile_file: str = "",
+    payload: dict[str, Any],
+) -> Path:
+    path = Path(profile_file).expanduser() if str(profile_file or "").strip() else assistant_profile_default_path(output_dir)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return path
+
+
+def suggest_profile_from_online_inputs(
+    *,
+    online_inputs: dict[str, Any],
+    display_name: str = "",
+    existing_profile: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    existing = dict(existing_profile or {})
+    interests = list(existing.get("interests") or [])
+    businesses = list(existing.get("businesses") or [])
+    if not interests:
+        interests = _suggest_interest_terms(online_inputs)[:4]
+    if not businesses:
+        businesses = interests[:2]
+    role = str(existing.get("role") or "").strip() or "待确认角色"
+    persona = str(existing.get("persona") or "").strip()
+    if not persona:
+        focus = "、".join(interests[:2]) if interests else "协同推进"
+        prefix = f"{display_name}：" if display_name else ""
+        persona = f"{prefix}关注{focus}的务实推进型"
+    profile = {
+        "display_name": display_name,
+        "role": role,
+        "persona": persona,
+        "businesses": businesses,
+        "interests": interests,
+        "require_user_confirmation": True,
+    }
+    return profile
+
+
+def build_profile_review_card(
+    *,
+    profile: dict[str, Any],
+    source_meta: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    businesses = "、".join(profile.get("businesses", [])[:3]) or "待确认"
+    interests = "、".join(profile.get("interests", [])[:4]) or "待确认"
+    source = source_meta or {}
+    source_line = (
+        f"基于最近 {int(source.get('message_count', 0))} 条消息、"
+        f"{int(source.get('document_count', 0))} 篇文档生成"
+    )
+    content = [
+        f"- 角色：{profile.get('role') or '待确认'}",
+        f"- 形象：{profile.get('persona') or '待确认'}",
+        f"- 关注业务：{businesses}",
+        f"- 兴趣词：{interests}",
+        "",
+        f"> {source_line}",
+        "> 你可以直接同意当前画像，也可以运行 `assistant set-profile` 修改。",
+    ]
+    return {
+        "config": {"wide_screen_mode": True},
+        "header": {
+            "template": "wathet",
+            "title": {"tag": "plain_text", "content": "AI 画像初始化建议"},
+            "subtitle": {"tag": "plain_text", "content": "授权完成后请先确认画像"},
+        },
+        "elements": [{"tag": "markdown", "content": "\n".join(content)}],
+    }
+
+
+def _suggest_interest_terms(online_inputs: dict[str, Any]) -> list[str]:
+    counter: Counter[str] = Counter()
+    for item in online_inputs.get("knowledge_items", []) or []:
+        title = str(item.get("title") or "").strip()
+        if title:
+            counter[title] += 3
+    for doc in online_inputs.get("documents", []) or []:
+        for token in _extract_profile_terms(" ".join([str(doc.get("title") or ""), str(doc.get("summary") or "")])):
+            counter[token] += 2
+    for message in online_inputs.get("messages", []) or []:
+        for token in _extract_profile_terms(str(message.get("text") or message.get("content") or "")):
+            counter[token] += 1
+    return [token for token, _ in counter.most_common(8)]
+
+
+def _extract_profile_terms(text: str) -> list[str]:
+    tokens = re.findall(r"[A-Za-z][A-Za-z0-9_-]{2,}|[\u4e00-\u9fff]{2,6}", str(text or ""))
+    results: list[str] = []
+    for token in tokens:
+        normalized = token.strip()
+        if not normalized:
+            continue
+        if normalized.lower() in PROFILE_STOPWORDS:
+            continue
+        results.append(normalized)
+    return results

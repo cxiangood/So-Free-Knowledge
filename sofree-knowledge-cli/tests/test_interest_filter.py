@@ -1,6 +1,7 @@
 import json
 
 from sofree_knowledge.interest_filter import (
+    apply_interest_filter_annotations,
     build_interest_filter_prompt,
     parse_interest_filter_judgements,
 )
@@ -45,3 +46,26 @@ def test_parse_interest_filter_judgements_normalizes_fields():
     assert parsed[0]["summary"] == "发布今天截止，需要确认回滚"
     assert parsed[1]["is_garbage"] is True
     assert parsed[1]["summary"] == ""
+
+
+def test_apply_interest_filter_annotations_merges_judgement_into_messages():
+    messages = [{"message_id": "m1", "content": "发布今天截止"}]
+    annotated = apply_interest_filter_annotations(
+        messages,
+        [
+            {
+                "message_id": "m1",
+                "include_in_digest": True,
+                "is_garbage": False,
+                "importance": 0.9,
+                "summary": "发布今天截止，需确认回滚",
+                "reason": "明确时间点",
+                "score_relevance": 0.8,
+            }
+        ],
+    )
+
+    assert annotated[0]["openclaw_include_in_digest"] is True
+    assert annotated[0]["openclaw_is_garbage"] is False
+    assert annotated[0]["openclaw_importance"] == 0.9
+    assert annotated[0]["openclaw_summary"] == "发布今天截止，需确认回滚"
