@@ -8,6 +8,7 @@ from typing import Any
 import httpx
 
 from .config import get_app_credentials, get_user_access_token
+from .auth_token_store import TokenStore
 
 
 class FeishuAPIError(RuntimeError):
@@ -24,10 +25,12 @@ class FeishuClient:
         base_url: str = "https://open.feishu.cn",
         user_access_token: str | None = None,
         tenant_access_token: str | None = None,
+        token_file: str | Path | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.user_access_token = user_access_token
         self._tenant_access_token = tenant_access_token
+        self.token_file = Path(token_file).expanduser() if token_file else None
 
     @classmethod
     def from_user_context(
@@ -47,6 +50,7 @@ class FeishuClient:
             base_url=base_url,
             user_access_token=user_access_token,
             tenant_access_token=tenant_access_token,
+            token_file=token_file,
         )
 
     def list_visible_chats(self, page_size: int = 100, page_token: str = "") -> dict[str, Any]:
@@ -338,6 +342,10 @@ class FeishuClient:
         try:
             with httpx.Client(base_url=self.base_url, timeout=30) as client:
                 response = client.request(method, path, headers=headers, **kwargs)
+                if self._should_retry_with_refreshed_user_token(response, access_token):
+                    refreshed_token = self.refresh_user_access_token()
+                    headers["Authorization"] = f"Bearer {refreshed_token}"
+                    response = client.request(method, path, headers=headers, **kwargs)
         except (httpx.HTTPError, OSError) as exc:
             raise FeishuAPIError(self._format_network_error(exc)) from exc
         try:
@@ -349,6 +357,51 @@ class FeishuClient:
         if isinstance(data, dict) and data.get("code", 0) not in (0, None):
             raise FeishuAPIError(self._format_feishu_error(data))
         return data
+
+    def refresh_user_access_token(self) -> str:
+        if not self.token_file:
+            raise MissingFeishuConfigError("Missing token file for user token refresh. Re-run `sofree-knowledge auth login`.")
+        store = TokenStore(token_file=self.token_file)
+        token_data = store.load()
+        refresh_token = str(token_data.get("refresh_token") or "").strip()
+        if not refresh_token:
+            raise MissingFeishuConfigError(
+                "Missing Feishu refresh token. Re-run `sofree-knowledge auth login` to refresh authorization."
+            )
+        try:
+            response = httpx.post(
+                f"{self.base_url}/open-apis/authen/v1/refresh_access_token",
+                json={"grant_type": "refresh_token", "refresh_token": refresh_token},
+                headers={"Authorization": f"Bearer {self.get_app_access_token()}"},
+                timeout=30,
+            )
+        except (httpx.HTTPError, OSError) as exc:
+            raise FeishuAPIError(self._format_network_error(exc)) from exc
+        response.raise_for_status()
+        data = response.json()
+        if data.get("code", 0) not in (0, None):
+            raise FeishuAPIError(self._format_feishu_error(data, prefix="refresh_access_token failed"))
+        refreshed = data.get("data", data)
+        new_access_token = str(refreshed.get("access_token") or "").strip()
+        if not new_access_token:
+            raise FeishuAPIError(self._format_feishu_error(data, prefix="refresh_access_token missing access_token"))
+        merged = dict(token_data)
+        merged.update(refreshed)
+        store.save(merged)
+        self.user_access_token = new_access_token
+        return new_access_token
+
+    def _should_retry_with_refreshed_user_token(
+        self,
+        response: httpx.Response,
+        access_token: str | None,
+    ) -> bool:
+        return (
+            response.status_code == 401
+            and access_token is None
+            and bool(self.user_access_token)
+            and self.token_file is not None
+        )
 
     def _format_network_error(self, exc: Exception) -> str:
         if isinstance(exc, OSError) and getattr(exc, "winerror", None) == 10013:

@@ -61,6 +61,7 @@ def collect_online_personal_inputs(
     user_id_to_name: dict[str, str] = {}
 
     messages: list[dict[str, Any]] = []
+    all_messages: list[dict[str, Any]] = []
     for chat in chat_records:
         chat_id = str(chat.get("chat_id") or "").strip()
         if not chat_id:
@@ -98,21 +99,23 @@ def collect_online_personal_inputs(
                     continue
                 if not _is_within_recent_days(str(msg.get("create_time") or ""), recent_days):
                     continue
-                messages.append(
-                    {
-                        "message_id": msg.get("message_id", ""),
-                        "chat_id": msg.get("chat_id", chat_id),
-                        "sender_name": sender_name,
-                        "sender_id": sender_id,  # 保存发件人ID
-                        "content": text,
-                        "text": text,
-                        "create_time": msg.get("create_time", ""),
-                        "sender": sender,
-                        "message_url": _resolve_online_message_url(
-                            message=msg,
-                        ),
-                    }
-                )
+                normalized_message = {
+                    "message_id": msg.get("message_id", ""),
+                    "chat_id": msg.get("chat_id", chat_id),
+                    "sender_name": sender_name,
+                    "sender_id": sender_id,
+                    "content": text,
+                    "text": text,
+                    "create_time": msg.get("create_time", ""),
+                    "sender": sender,
+                    "message_url": _resolve_online_message_url(
+                        message=msg,
+                    ),
+                }
+                all_messages.append(normalized_message)
+                if sender_id and resolved_target and sender_id == resolved_target:
+                    continue
+                messages.append(normalized_message)
         except (FeishuAPIError, MissingFeishuConfigError):
             # 跳过无权限或配置错误的群，不影响整体流程
             continue
@@ -124,7 +127,7 @@ def collect_online_personal_inputs(
     except FeishuAPIError as exc:
         drive_error = str(exc)
 
-    linked_docs, link_access_records = extract_docs_and_access_from_messages(messages, resolved_target)
+    linked_docs, link_access_records = extract_docs_and_access_from_messages(all_messages, resolved_target)
 
     # 批量获取消息提及文档的真实标题（使用独立实现，不依赖FeishuClient内置方法）
     for doc in linked_docs:

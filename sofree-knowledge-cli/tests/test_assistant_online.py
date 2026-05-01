@@ -54,10 +54,11 @@ def test_collect_online_personal_inputs_builds_documents_and_access_records(monk
     )
 
     assert out["resolved_target_user_id"] == "ou_target"
-    assert out["meta"]["message_count"] == 1
+    assert out["meta"]["message_count"] == 0
+    assert out["messages"] == []
     assert any(item.get("doc_id") == "abc123" for item in out["documents"])
     assert out["access_records"][0]["doc_id"] == "abc123"
-    assert out["knowledge_items"]
+    assert out["knowledge_items"] == []
 
 
 def test_collect_online_personal_inputs_filters_noise_messages(monkeypatch):
@@ -78,7 +79,7 @@ def test_collect_online_personal_inputs_filters_noise_messages(monkeypatch):
                         "chat_id": chat_id,
                         "msg_type": "text",
                         "create_time": "1710000001",
-                        "sender": {"sender_id": {"open_id": "ou_target"}},
+                        "sender": {"sender_id": {"open_id": "ou_other"}},
                         "body": {"content": '{"text":"客户需求变更，今晚上线风险较高"}'},
                     },
                     {
@@ -139,6 +140,22 @@ def test_collect_online_personal_inputs_builds_message_url_when_user_chat_visibl
     class UserTokenClient(FakeClient):
         user_access_token = "u-token"
 
+        def list_chat_messages(self, chat_id, start_time="", end_time="", page_size=50, page_token="", sort="asc"):
+            return {
+                "items": [
+                    {
+                        "message_id": "m1",
+                        "chat_id": chat_id,
+                        "msg_type": "text",
+                        "create_time": "1710000000",
+                        "sender": {"sender_id": {"open_id": "ou_other"}},
+                        "body": {"content": '{"text":"请看文档 https://foo.feishu.cn/docx/abc123 今天截止"}'},
+                    }
+                ],
+                "has_more": False,
+                "page_token": "",
+            }
+
     monkeypatch.setattr("sofree_knowledge.assistant_online.get_user_identity", lambda token_file=None: {"open_id": "ou_target"})
     out = collect_online_personal_inputs(
         client=UserTokenClient(),
@@ -152,13 +169,30 @@ def test_collect_online_personal_inputs_builds_message_url_when_user_chat_visibl
     assert out["messages"]
     message_url = str(out["messages"][0].get("message_url") or "")
     assert message_url.startswith("https://applink.feishu.cn/client/chat/open?")
-    assert "openMessageId=m1" in message_url
+    assert "openChatId=oc_1" in message_url
 
 
 def test_collect_online_personal_inputs_builds_message_url_without_user_token(monkeypatch):
+    class OtherSenderClient(FakeClient):
+        def list_chat_messages(self, chat_id, start_time="", end_time="", page_size=50, page_token="", sort="asc"):
+            return {
+                "items": [
+                    {
+                        "message_id": "m1",
+                        "chat_id": chat_id,
+                        "msg_type": "text",
+                        "create_time": "1710000000",
+                        "sender": {"sender_id": {"open_id": "ou_other"}},
+                        "body": {"content": '{"text":"请看文档 https://foo.feishu.cn/docx/abc123 今天截止"}'},
+                    }
+                ],
+                "has_more": False,
+                "page_token": "",
+            }
+
     monkeypatch.setattr("sofree_knowledge.assistant_online.get_user_identity", lambda token_file=None: {"open_id": "ou_target"})
     out = collect_online_personal_inputs(
-        client=FakeClient(),
+        client=OtherSenderClient(),
         target_user_id="",
         include_visible_chats=True,
         max_chats=5,
@@ -169,4 +203,21 @@ def test_collect_online_personal_inputs_builds_message_url_without_user_token(mo
     assert out["messages"]
     message_url = str(out["messages"][0].get("message_url") or "")
     assert message_url.startswith("https://applink.feishu.cn/client/chat/open?")
-    assert "openMessageId=m1" in message_url
+    assert "openChatId=oc_1" in message_url
+
+
+def test_collect_online_personal_inputs_filters_self_messages_by_sender_id(monkeypatch):
+    monkeypatch.setattr("sofree_knowledge.assistant_online.get_user_identity", lambda token_file=None: {"open_id": "ou_target"})
+
+    out = collect_online_personal_inputs(
+        client=FakeClient(),
+        target_user_id="",
+        include_visible_chats=True,
+        max_chats=5,
+        max_messages_per_chat=20,
+        max_drive_docs=10,
+        recent_days=3650,
+    )
+
+    assert out["messages"] == []
+    assert out["access_records"]

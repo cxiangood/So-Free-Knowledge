@@ -171,9 +171,9 @@ def test_interest_card_uses_message_url_from_upstream():
     )
     items = report["interest_digest"]["items"]
     assert len(items) == 1
-    assert "openMessageId=om_123" in items[0]["message_url"]
+    assert items[0]["message_url"] == "https://applink.feishu.cn/client/chat/open?openChatId=oc_chat"
     content = report["interest_card"]["elements"][0]["content"]
-    assert "openMessageId=om_123" in content
+    assert "https://applink.feishu.cn/client/chat/open?openChatId=oc_chat" in content
 
 
 def test_interest_card_contains_no_hit_or_ref_artifacts():

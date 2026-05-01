@@ -454,21 +454,26 @@ def require_user_auth(args: argparse.Namespace, required_scopes: str | list[str]
     return ensure_user_auth(required_scopes=required_scopes, token_file=get_token_file_arg(args))
 
 
-def _instantiate_feishu_client(*, user_access_token: str | None = None) -> Any:
+def _instantiate_feishu_client(
+    *,
+    user_access_token: str | None = None,
+    token_file: str | Path | None = None,
+) -> Any:
     if user_access_token is None:
-        return FeishuClient()
+        return FeishuClient(token_file=token_file)
     try:
-        return FeishuClient(user_access_token=user_access_token)
+        return FeishuClient(user_access_token=user_access_token, token_file=token_file)
     except TypeError:
         # Tests sometimes monkeypatch FeishuClient with a zero-arg callable.
         return FeishuClient()
 
 
 def build_user_feishu_client(args: argparse.Namespace, *, require_token: bool = False) -> Any:
-    token = get_user_access_token(token_file=get_token_file_arg(args))
+    token_file = get_token_file_arg(args)
+    token = get_user_access_token(token_file=token_file)
     if require_token and not token:
         raise ValueError("Missing Feishu user access token. Run `sofree-knowledge auth login` first.")
-    return _instantiate_feishu_client(user_access_token=token)
+    return _instantiate_feishu_client(user_access_token=token, token_file=token_file)
 
 
 def load_json_file(path: str) -> Any:
