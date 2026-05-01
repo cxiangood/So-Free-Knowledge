@@ -71,6 +71,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--env-file", default="", help="Path to .env file.")
     parser.add_argument("--output-dir", default=".", help="Archive and policy root directory.")
     parser.add_argument("--token-file", default="", help="Optional user token file path.")
+    parser.add_argument("--user-open-id", default="", help="Optional user scope. Runtime state will be isolated under output-dir/users/<open_id>.")
     subparsers = parser.add_subparsers(dest="command")
 
     collect = subparsers.add_parser("collect-messages", help="Collect Feishu messages.")
@@ -453,6 +454,50 @@ def cmd_auth_login(args: argparse.Namespace) -> dict[str, Any]:
 def prepare_env(args: argparse.Namespace) -> None:
     env_file = resolve_env_file(args.env_file, output_dir=args.output_dir)
     load_env_file(env_file)
+    explicit_scope = str(getattr(args, "user_open_id", "") or "").strip()
+    inferred_scope = explicit_scope or _infer_user_scope_from_token(args)
+    if inferred_scope:
+        args.user_open_id = inferred_scope
+    scoped_output_dir = _resolve_user_scoped_output_dir(
+        output_dir=str(getattr(args, "output_dir", ".") or "."),
+        user_open_id=inferred_scope,
+    )
+    args.output_dir = str(scoped_output_dir)
+    if not str(getattr(args, "token_file", "") or "").strip():
+        scoped_token_file = _resolve_user_scoped_token_file(
+            output_dir=str(scoped_output_dir),
+            user_open_id=inferred_scope,
+        )
+        if scoped_token_file is not None:
+            args.token_file = str(scoped_token_file)
+
+
+def _sanitize_user_scope(value: str) -> str:
+    normalized = str(value or "").strip()
+    if not normalized:
+        return ""
+    return "".join(ch if ch.isalnum() or ch in {"_", "-"} else "_" for ch in normalized)
+
+
+def _resolve_user_scoped_output_dir(*, output_dir: str, user_open_id: str) -> Path:
+    root = Path(output_dir).expanduser()
+    scope = _sanitize_user_scope(user_open_id)
+    if not scope:
+        return root
+    return root / "users" / scope
+
+
+def _resolve_user_scoped_token_file(*, output_dir: str, user_open_id: str) -> Path | None:
+    scope = _sanitize_user_scope(user_open_id)
+    if not scope:
+        return None
+    return Path(output_dir).expanduser() / "token.json"
+
+
+def _infer_user_scope_from_token(args: argparse.Namespace) -> str:
+    explicit_token_file = str(getattr(args, "token_file", "") or "").strip()
+    identity = get_user_identity(token_file=explicit_token_file or None)
+    return str(identity.get("open_id") or "").strip()
 
 
 def get_token_file_arg(args: argparse.Namespace) -> str | None:
@@ -571,6 +616,23 @@ def _attach_auth_profile_bootstrap(args: argparse.Namespace, result: dict[str, A
     if not isinstance(token_payload, dict) or not token_payload.get("has_access_token"):
         return result
     token_file = get_token_file_arg(args)
+    inferred_open_id = str(token_payload.get("open_id") or "").strip() or str(get_user_identity(token_file=token_file).get("open_id") or "").strip()
+    if inferred_open_id:
+        args.user_open_id = inferred_open_id
+        args.output_dir = str(
+            _resolve_user_scoped_output_dir(
+                output_dir=str(getattr(args, "output_dir", ".") or "."),
+                user_open_id=inferred_open_id,
+            )
+        )
+        if not str(getattr(args, "token_file", "") or "").strip():
+            scoped_token_file = _resolve_user_scoped_token_file(
+                output_dir=str(args.output_dir),
+                user_open_id=inferred_open_id,
+            )
+            if scoped_token_file is not None:
+                args.token_file = str(scoped_token_file)
+                token_file = str(scoped_token_file)
     client = FeishuClient.from_user_context(token_file=token_file, require_user_token=True)
     identity = get_user_identity(token_file=token_file)
     display_name = _lookup_user_display_name(client, identity)

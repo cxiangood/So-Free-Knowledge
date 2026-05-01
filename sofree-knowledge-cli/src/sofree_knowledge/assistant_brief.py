@@ -318,6 +318,8 @@ def _normalize_message(item: dict[str, Any]) -> dict[str, Any]:
         "message_id": str(item.get("message_id") or item.get("id") or ""),
         "chat_id": str(item.get("chat_id") or ""),
         "sender_name": _extract_message_sender_name(item),
+        "sender_type": _extract_message_sender_type(item),
+        "msg_type": str(item.get("msg_type") or ""),
         "mentions_target_user": bool(item.get("mentions_target_user", False)),
         "message_url": str(
             item.get("message_url")
@@ -723,6 +725,17 @@ def _build_interest_digest(messages: list[dict[str, Any]], interests: list[str],
             and (openclaw_importance or 0.0) < 0.5
         ):
             continue
+        final_review = _final_interest_recommendation_decision(
+            message=message,
+            normalized_text=normalized_text,
+            hit_terms=hit_terms,
+            signal_hits=signal_hits,
+            urgency_hit=urgency_hit,
+            mention_signal=mention_signal,
+            openclaw_importance=openclaw_importance,
+        )
+        if not final_review["accepted"]:
+            continue
         rewritten = _rewrite_interest_summary(normalized_text, hit_terms=hit_terms)
         if not rewritten:
             continue
@@ -751,6 +764,7 @@ def _build_interest_digest(messages: list[dict[str, Any]], interests: list[str],
                 "score": score,
                 "create_time": message.get("create_time", ""),
                 "openclaw_screen_reason": openclaw_screen["reason"],
+                "final_review_reason": final_review["reason"],
             }
         )
     items.sort(key=lambda item: (int(item.get("score", 0)), str(item.get("create_time", ""))), reverse=True)
@@ -792,6 +806,13 @@ def _mention_signal_text(message: dict[str, Any], text: str) -> str:
     return ""
 
 
+def _extract_message_sender_type(item: dict[str, Any]) -> str:
+    sender = item.get("sender")
+    if isinstance(sender, dict):
+        return str(sender.get("sender_type") or "").strip()
+    return str(item.get("sender_type") or "").strip()
+
+
 def _is_low_information_mention_message(
     *,
     message: dict[str, Any],
@@ -822,6 +843,58 @@ def _is_low_information_mention_message(
     if (openclaw_importance or 0.0) >= 0.45:
         return False
     return False
+
+
+def _final_interest_recommendation_decision(
+    *,
+    message: dict[str, Any],
+    normalized_text: str,
+    hit_terms: list[str],
+    signal_hits: int,
+    urgency_hit: bool,
+    mention_signal: str,
+    openclaw_importance: float | None,
+) -> dict[str, Any]:
+    msg_type = str(message.get("msg_type") or "").strip().lower()
+    if msg_type == "system":
+        return {"accepted": False, "reason": "rejected_system_message"}
+
+    lowered = str(normalized_text or "").lower()
+    sender_type = str(message.get("sender_type") or "").strip().lower()
+    mention_count = len(re.findall(r"@\S+", str(normalized_text or "")))
+    numbered_steps = len(re.findall(r"(?:^|\s)\d+[.:：]", str(normalized_text or "")))
+    imperative_count = sum(
+        1 for marker in ("请", "please", "需要", "要求", "must", "should")
+        if marker in lowered
+    )
+    content_keywords = len([term for term in hit_terms if term not in {"@mention", "@all"}])
+    without_mentions = re.sub(r"@\S+", " ", str(normalized_text or ""))
+    compact = re.sub(r"[\s，。！？,.!?:：~～、-]+", "", without_mentions)
+
+    if sender_type == "app":
+        if signal_hits <= 0 and not urgency_hit and content_keywords <= 1 and mention_signal == "":
+            return {"accepted": False, "reason": "rejected_low_value_app_message"}
+        if numbered_steps >= 2 and imperative_count >= 2 and content_keywords <= 1 and mention_signal != "@all":
+            return {"accepted": False, "reason": "rejected_instructional_app_message"}
+
+    if mention_signal == "" and content_keywords <= 1 and signal_hits <= 0 and not urgency_hit:
+        if mention_count >= 2 and len(compact) < 40:
+            return {"accepted": False, "reason": "rejected_multi_mention_low_density"}
+
+    if mention_signal == "@mention" and content_keywords == 0 and signal_hits <= 0 and not urgency_hit and len(compact) < 12:
+        return {"accepted": False, "reason": "rejected_low_information_direct_mention"}
+
+    if (openclaw_importance or 0.0) >= 0.7:
+        return {"accepted": True, "reason": "accepted_high_openclaw_importance"}
+    if urgency_hit:
+        return {"accepted": True, "reason": "accepted_urgency_signal"}
+    if signal_hits > 0:
+        return {"accepted": True, "reason": "accepted_interest_signal_keyword"}
+    if mention_signal:
+        return {"accepted": True, "reason": "accepted_direct_mention"}
+    if content_keywords >= 1:
+        return {"accepted": True, "reason": "accepted_interest_term_match"}
+    return {"accepted": False, "reason": "rejected_no_final_value"}
 
 
 def _openclaw_interest_screen(

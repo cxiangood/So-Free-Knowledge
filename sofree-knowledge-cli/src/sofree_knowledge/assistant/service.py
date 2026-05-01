@@ -183,6 +183,8 @@ def build_personal_brief_command_result(
     }
     if online_meta:
         base_meta["online"] = online_meta
+    profile_setup_required = _should_prompt_profile_setup(user_profile)
+    base_meta["profile_required_before_recommendation"] = bool(profile_setup_required)
     if args.push:
         receive_id_type, receive_id = resolve_push_target(
             args,
@@ -199,35 +201,7 @@ def build_personal_brief_command_result(
         profile_push_result: JsonDict | None = None
         push_skips: list[dict[str, str]] = []
         push_errors: list[dict[str, str]] = []
-        if push_summary_card:
-            try:
-                summary_push_result, was_skipped = _send_message_with_dedupe(
-                    client=client,
-                    output_dir=args.output_dir,
-                    receive_id=receive_id,
-                    receive_id_type=receive_id_type,
-                    card_type="summary",
-                    content=report["card"],
-                )
-                if was_skipped:
-                    push_skips.append({"card": "summary", "reason": "duplicate_content"})
-            except Exception as exc:
-                push_errors.append({"card": "summary", "error": str(exc)})
-        if push_interest_card:
-            try:
-                interest_push_result, was_skipped = _send_message_with_dedupe(
-                    client=client,
-                    output_dir=args.output_dir,
-                    receive_id=receive_id,
-                    receive_id_type=receive_id_type,
-                    card_type="interest",
-                    content=report["interest_card"],
-                )
-                if was_skipped:
-                    push_skips.append({"card": "interest", "reason": "duplicate_content"})
-            except Exception as exc:
-                push_errors.append({"card": "interest", "error": str(exc)})
-        if _should_prompt_profile_setup(user_profile):
+        if profile_setup_required:
             try:
                 profile_push_result, was_skipped = _send_message_with_dedupe(
                     client=client,
@@ -241,6 +215,35 @@ def build_personal_brief_command_result(
                     push_skips.append({"card": "profile_setup", "reason": "duplicate_content"})
             except Exception as exc:
                 push_errors.append({"card": "profile_setup", "error": str(exc)})
+        else:
+            if push_summary_card:
+                try:
+                    summary_push_result, was_skipped = _send_message_with_dedupe(
+                        client=client,
+                        output_dir=args.output_dir,
+                        receive_id=receive_id,
+                        receive_id_type=receive_id_type,
+                        card_type="summary",
+                        content=report["card"],
+                    )
+                    if was_skipped:
+                        push_skips.append({"card": "summary", "reason": "duplicate_content"})
+                except Exception as exc:
+                    push_errors.append({"card": "summary", "error": str(exc)})
+            if push_interest_card:
+                try:
+                    interest_push_result, was_skipped = _send_message_with_dedupe(
+                        client=client,
+                        output_dir=args.output_dir,
+                        receive_id=receive_id,
+                        receive_id_type=receive_id_type,
+                        card_type="interest",
+                        content=report["interest_card"],
+                    )
+                    if was_skipped:
+                        push_skips.append({"card": "interest", "reason": "duplicate_content"})
+                except Exception as exc:
+                    push_errors.append({"card": "interest", "error": str(exc)})
         base_meta["push"] = {
             "enabled": True,
             "receive_id_type": receive_id_type,
@@ -250,12 +253,13 @@ def build_personal_brief_command_result(
             "doc_push_skipped": True,
             "docs_status": "disabled",
             "docs": [],
-            "summary_enabled": bool(push_summary_card),
+            "summary_enabled": bool(push_summary_card) and not profile_setup_required,
             "summary_message_id": (summary_push_result or {}).get("message_id", ""),
-            "interest_enabled": bool(push_interest_card),
+            "interest_enabled": bool(push_interest_card) and not profile_setup_required,
             "interest_message_id": (interest_push_result or {}).get("message_id", ""),
             "profile_setup_prompted": profile_push_result is not None,
             "profile_setup_message_id": (profile_push_result or {}).get("message_id", ""),
+            "recommendation_deferred_until_profile_confirmed": bool(profile_setup_required),
             "skipped": push_skips,
             "errors": push_errors,
         }
@@ -426,6 +430,8 @@ def recommend_command_result(
         "online": online_meta,
         "auto_retrieval": auto_train_result,
     }
+    profile_setup_required = _should_prompt_profile_setup(user_profile)
+    base_meta["profile_required_before_recommendation"] = bool(profile_setup_required)
     if args.push:
         receive_id_type, receive_id = resolve_push_target(
             args,
@@ -442,35 +448,7 @@ def recommend_command_result(
         profile_push_result: JsonDict | None = None
         push_skips: list[dict[str, str]] = []
         push_errors: list[dict[str, str]] = []
-        if push_summary_card:
-            try:
-                summary_push_result, was_skipped = _send_message_with_dedupe(
-                    client=client,
-                    output_dir=args.output_dir,
-                    receive_id=receive_id,
-                    receive_id_type=receive_id_type,
-                    card_type="summary",
-                    content=report["card"],
-                )
-                if was_skipped:
-                    push_skips.append({"card": "summary", "reason": "duplicate_content"})
-            except Exception as exc:
-                push_errors.append({"card": "summary", "error": str(exc)})
-        if push_interest_card:
-            try:
-                interest_push_result, was_skipped = _send_message_with_dedupe(
-                    client=client,
-                    output_dir=args.output_dir,
-                    receive_id=receive_id,
-                    receive_id_type=receive_id_type,
-                    card_type="interest",
-                    content=report["interest_card"],
-                )
-                if was_skipped:
-                    push_skips.append({"card": "interest", "reason": "duplicate_content"})
-            except Exception as exc:
-                push_errors.append({"card": "interest", "error": str(exc)})
-        if _should_prompt_profile_setup(user_profile):
+        if profile_setup_required:
             try:
                 profile_push_result, was_skipped = _send_message_with_dedupe(
                     client=client,
@@ -484,17 +462,47 @@ def recommend_command_result(
                     push_skips.append({"card": "profile_setup", "reason": "duplicate_content"})
             except Exception as exc:
                 push_errors.append({"card": "profile_setup", "error": str(exc)})
+        else:
+            if push_summary_card:
+                try:
+                    summary_push_result, was_skipped = _send_message_with_dedupe(
+                        client=client,
+                        output_dir=args.output_dir,
+                        receive_id=receive_id,
+                        receive_id_type=receive_id_type,
+                        card_type="summary",
+                        content=report["card"],
+                    )
+                    if was_skipped:
+                        push_skips.append({"card": "summary", "reason": "duplicate_content"})
+                except Exception as exc:
+                    push_errors.append({"card": "summary", "error": str(exc)})
+            if push_interest_card:
+                try:
+                    interest_push_result, was_skipped = _send_message_with_dedupe(
+                        client=client,
+                        output_dir=args.output_dir,
+                        receive_id=receive_id,
+                        receive_id_type=receive_id_type,
+                        card_type="interest",
+                        content=report["interest_card"],
+                    )
+                    if was_skipped:
+                        push_skips.append({"card": "interest", "reason": "duplicate_content"})
+                except Exception as exc:
+                    push_errors.append({"card": "interest", "error": str(exc)})
         base_meta["push"] = {
             "enabled": True,
             "receive_id_type": receive_id_type,
             "receive_id": receive_id,
             "chat_id": (summary_push_result or interest_push_result or {}).get("chat_id", ""),
-            "summary_enabled": bool(push_summary_card),
+            "summary_enabled": bool(push_summary_card) and not profile_setup_required,
             "summary_message_id": (summary_push_result or {}).get("message_id", ""),
-            "interest_enabled": bool(push_interest_card),
+            "interest_enabled": bool(push_interest_card) and not profile_setup_required,
             "interest_message_id": (interest_push_result or {}).get("message_id", ""),
             "profile_setup_prompted": profile_push_result is not None,
             "profile_setup_message_id": (profile_push_result or {}).get("message_id", ""),
+            "recommendation_deferred_until_profile_confirmed": bool(profile_setup_required),
             "skipped": push_skips,
             "errors": push_errors,
         }

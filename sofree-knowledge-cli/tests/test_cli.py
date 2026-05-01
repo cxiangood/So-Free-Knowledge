@@ -262,6 +262,28 @@ def test_assistant_profile_set_and_get_cli(tmp_path, capsys):
     assert out["retrieval"]["embedding_model"] == "text-embedding-3-large"
 
 
+def test_assistant_profile_uses_user_scoped_output_dir(tmp_path, capsys):
+    code = main(
+        [
+            "--output-dir",
+            str(tmp_path),
+            "--user-open-id",
+            "ou_scope_user",
+            "assistant",
+            "set-profile",
+            "--persona",
+            "专业形象",
+            "--role",
+            "产品经理",
+        ]
+    )
+    out = json.loads(capsys.readouterr().out)
+    assert code == 0
+    assert out["ok"] is True
+    assert "users" in out["profile_file"]
+    assert (tmp_path / "users" / "ou_scope_user" / "assistant_profile.json").exists()
+
+
 def test_assistant_build_personal_brief_uses_profile_file(tmp_path, capsys):
     profile_file = tmp_path / "assistant_profile.json"
     model_file = tmp_path / "dual_tower_model.json"
@@ -553,8 +575,8 @@ def test_assistant_recommend_push_uses_bot_client_and_prompts_profile_after_card
     out = json.loads(capsys.readouterr().out)
     assert code == 0
     assert out["meta"]["push"]["profile_setup_prompted"] is True
-    assert send_order[:2] == ["个人助理聚合建议", "群聊兴趣消息汇总"]
-    assert send_order[2] == "AI 画像初始化建议"
+    assert out["meta"]["push"]["recommendation_deferred_until_profile_confirmed"] is True
+    assert send_order == ["AI 画像初始化建议"]
 
 
 def test_assistant_push_defaults_to_personal_open_id(monkeypatch, tmp_path, capsys):
@@ -571,7 +593,7 @@ def test_assistant_push_defaults_to_personal_open_id(monkeypatch, tmp_path, caps
             )
             return {"message_id": "om_test", "chat_id": "oc_personal", "msg_type": msg_type}
 
-    monkeypatch.setattr(cli_module, "FeishuClient", lambda: FakeClient())
+    monkeypatch.setattr(cli_module, "build_bot_feishu_client", lambda: FakeClient())
     monkeypatch.setattr(cli_module, "get_user_identity", lambda token_file=None: {"open_id": "ou_self"})
 
     documents_file = tmp_path / "documents.json"
@@ -582,6 +604,8 @@ def test_assistant_push_defaults_to_personal_open_id(monkeypatch, tmp_path, caps
 
     code = main(
         [
+            "--output-dir",
+            str(tmp_path),
             "assistant",
             "build-personal-brief",
             "--documents-file",
@@ -599,10 +623,10 @@ def test_assistant_push_defaults_to_personal_open_id(monkeypatch, tmp_path, caps
     assert calls[0]["receive_id_type"] == "open_id"
     assert calls[0]["receive_id"] == "ou_self"
     assert out["meta"]["push"]["receive_id_type"] == "open_id"
-    assert len(calls) == 3
+    assert len(calls) == 1
     assert out["meta"]["push"]["profile_setup_prompted"] is True
-    assert out["meta"]["push"]["summary_enabled"] is True
-    assert out["meta"]["push"]["interest_enabled"] is True
+    assert out["meta"]["push"]["summary_enabled"] is False
+    assert out["meta"]["push"]["interest_enabled"] is False
     assert out["meta"]["push"]["doc_push_enabled"] is False
 
 
@@ -620,7 +644,7 @@ def test_assistant_push_explicit_chat_id_overrides_personal(monkeypatch, tmp_pat
             )
             return {"message_id": "om_test2", "chat_id": receive_id, "msg_type": msg_type}
 
-    monkeypatch.setattr(cli_module, "FeishuClient", lambda: FakeClient())
+    monkeypatch.setattr(cli_module, "build_bot_feishu_client", lambda: FakeClient())
     monkeypatch.setattr(cli_module, "get_user_identity", lambda token_file=None: {"open_id": "ou_self"})
 
     documents_file = tmp_path / "documents.json"
@@ -631,6 +655,8 @@ def test_assistant_push_explicit_chat_id_overrides_personal(monkeypatch, tmp_pat
 
     code = main(
         [
+            "--output-dir",
+            str(tmp_path),
             "assistant",
             "build-personal-brief",
             "--documents-file",
@@ -660,7 +686,7 @@ def test_assistant_push_card_also_pushes_interest_card(monkeypatch, tmp_path, ca
             calls.append({"receive_id": receive_id, "receive_id_type": receive_id_type, "msg_type": msg_type})
             return {"message_id": f"om_{len(calls)}", "chat_id": receive_id, "msg_type": msg_type}
 
-    monkeypatch.setattr(cli_module, "FeishuClient", lambda: FakeClient())
+    monkeypatch.setattr(cli_module, "build_bot_feishu_client", lambda: FakeClient())
     monkeypatch.setattr(cli_module, "get_user_identity", lambda token_file=None: {"open_id": "ou_self"})
 
     documents_file = tmp_path / "documents.json"
@@ -671,6 +697,8 @@ def test_assistant_push_card_also_pushes_interest_card(monkeypatch, tmp_path, ca
 
     code = main(
         [
+            "--output-dir",
+            str(tmp_path),
             "assistant",
             "build-personal-brief",
             "--documents-file",
@@ -684,9 +712,9 @@ def test_assistant_push_card_also_pushes_interest_card(monkeypatch, tmp_path, ca
     out = json.loads(capsys.readouterr().out)
     assert code == 0
     assert out["ok"] is True
-    assert len(calls) == 3
+    assert len(calls) == 1
     assert out["meta"]["push"]["profile_setup_prompted"] is True
-    assert out["meta"]["push"]["interest_enabled"] is True
+    assert out["meta"]["push"]["interest_enabled"] is False
 
 
 def test_assistant_push_both_cards_requested_keeps_single_card(monkeypatch, tmp_path, capsys):
@@ -697,7 +725,7 @@ def test_assistant_push_both_cards_requested_keeps_single_card(monkeypatch, tmp_
             calls.append({"receive_id": receive_id, "receive_id_type": receive_id_type, "msg_type": msg_type})
             return {"message_id": f"om_{len(calls)}", "chat_id": receive_id, "msg_type": msg_type}
 
-    monkeypatch.setattr(cli_module, "FeishuClient", lambda: FakeClient())
+    monkeypatch.setattr(cli_module, "build_bot_feishu_client", lambda: FakeClient())
     monkeypatch.setattr(cli_module, "get_user_identity", lambda token_file=None: {"open_id": "ou_self"})
 
     documents_file = tmp_path / "documents.json"
@@ -708,6 +736,8 @@ def test_assistant_push_both_cards_requested_keeps_single_card(monkeypatch, tmp_
 
     code = main(
         [
+            "--output-dir",
+            str(tmp_path),
             "assistant",
             "build-personal-brief",
             "--documents-file",
@@ -721,24 +751,18 @@ def test_assistant_push_both_cards_requested_keeps_single_card(monkeypatch, tmp_
     out = json.loads(capsys.readouterr().out)
     assert code == 0
     assert out["ok"] is True
-    assert len(calls) == 3
+    assert len(calls) == 1
     assert out["meta"]["push"]["profile_setup_prompted"] is True
-    assert out["meta"]["push"]["summary_enabled"] is True
-    assert out["meta"]["push"]["interest_enabled"] is True
+    assert out["meta"]["push"]["summary_enabled"] is False
+    assert out["meta"]["push"]["interest_enabled"] is False
 
 
-def test_assistant_push_interest_card_failure_does_not_fail_command(monkeypatch, tmp_path, capsys):
+def test_assistant_push_profile_setup_failure_does_not_fail_command(monkeypatch, tmp_path, capsys):
     class FakeClient:
-        def __init__(self):
-            self.calls = 0
-
         def send_message(self, receive_id, msg_type, content, receive_id_type="chat_id"):
-            self.calls += 1
-            if self.calls == 2:
-                raise RuntimeError("interest card push failed")
-            return {"message_id": f"om_{self.calls}", "chat_id": receive_id, "msg_type": msg_type}
+            raise RuntimeError("profile setup push failed")
 
-    monkeypatch.setattr(cli_module, "FeishuClient", lambda: FakeClient())
+    monkeypatch.setattr(cli_module, "build_bot_feishu_client", lambda: FakeClient())
     monkeypatch.setattr(cli_module, "get_user_identity", lambda token_file=None: {"open_id": "ou_self"})
 
     documents_file = tmp_path / "documents.json"
@@ -749,6 +773,8 @@ def test_assistant_push_interest_card_failure_does_not_fail_command(monkeypatch,
 
     code = main(
         [
+            "--output-dir",
+            str(tmp_path),
             "assistant",
             "build-personal-brief",
             "--documents-file",
@@ -761,7 +787,7 @@ def test_assistant_push_interest_card_failure_does_not_fail_command(monkeypatch,
     assert code == 0
     assert out["ok"] is True
     assert out["meta"]["push"]["errors"]
-    assert out["meta"]["push"]["errors"][0]["card"] == "interest"
+    assert out["meta"]["push"]["errors"][0]["card"] == "profile_setup"
 
 
 def test_lingo_upsert_list_delete_cli(tmp_path, capsys):

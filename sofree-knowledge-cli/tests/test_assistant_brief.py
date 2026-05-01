@@ -374,6 +374,22 @@ def test_interest_digest_does_not_accept_messages_that_only_mention_other_people
     assert report["interest_digest"]["items"] == []
 
 
+def test_interest_digest_final_review_rejects_instructional_app_message():
+    report = build_personal_brief(
+        documents=[{"doc_id": "d1", "title": "Any", "summary": "Any"}],
+        messages=[
+            {
+                "message_id": "m_app_template",
+                "chat_id": "oc_chat",
+                "content": "请在10分钟内完成以下任务：1. 同步飞书进度 2. 汇总结果 3. 反馈给用户",
+                "sender": {"sender_type": "app", "id": "cli_x"},
+            }
+        ],
+        user_profile={"interests": ["飞书"]},
+    )
+    assert report["interest_digest"]["items"] == []
+
+
 def test_interest_digest_accepts_at_all_without_interest_keyword_hit():
     report = build_personal_brief(
         documents=[{"doc_id": "d1", "title": "Any", "summary": "Any"}],
