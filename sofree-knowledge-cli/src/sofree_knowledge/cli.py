@@ -411,6 +411,10 @@ def cmd_init_token(args: argparse.Namespace) -> dict[str, Any]:
     )
     result = _attach_auth_profile_bootstrap(args, result)
     result["ok"] = True
+    result["profile_bootstrap"]["edit_command"] = (
+        "sofree-knowledge assistant set-profile "
+        "--role <角色> --persona <形象> --businesses <业务1,业务2> --interests <兴趣1,兴趣2>"
+    )
     return result
 
 
@@ -514,9 +518,9 @@ def _instantiate_feishu_client(
     user_access_token: str | None = None,
     token_file: str | Path | None = None,
 ) -> Any:
-    if user_access_token is None:
-        return FeishuClient(token_file=token_file)
     try:
+        if user_access_token is None:
+            return FeishuClient(token_file=token_file)
         return FeishuClient(user_access_token=user_access_token, token_file=token_file)
     except TypeError:
         # Tests sometimes monkeypatch FeishuClient with a zero-arg callable.
@@ -597,6 +601,19 @@ def cmd_assistant_set_profile(args: argparse.Namespace) -> dict[str, Any]:
         ),
     }
     path = save_assistant_profile_config(output_dir=args.output_dir, profile_file=args.profile_file, payload=payload)
+    clean_result = {
+        "ok": True,
+        "profile_file": str(path),
+        "profile": payload["profile"],
+        "schedule": payload["schedule"],
+        "retrieval": payload["retrieval"],
+        "questionnaire_hint": [
+            "请确认当前关注的业务方向（可多选）",
+            "请确认最近更关注的话题关键词",
+            "是否同意用最近阅读文档和群聊内容来更新画像",
+        ],
+    }
+    return clean_result
     return {
         "ok": True,
         "profile_file": str(path),

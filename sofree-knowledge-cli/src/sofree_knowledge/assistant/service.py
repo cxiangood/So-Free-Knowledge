@@ -12,6 +12,8 @@ from .profile import (
     build_retrieval_overrides,
     build_schedule_overrides,
     load_assistant_profile_config,
+    save_assistant_profile_config,
+    suggest_profile_from_online_inputs,
 )
 from .training import (
     append_dual_tower_samples,
@@ -53,6 +55,42 @@ def resolve_push_target(
         return "open_id", str(resolved_target_user_id).strip()
 
     raise ValueError("Push target unresolved. Provide --receive-open-id or --receive-chat-id, or init token with open_id.")
+
+
+def _resolve_effective_profile(
+    *,
+    args: argparse.Namespace,
+    profile_config: JsonDict,
+    user_profile: JsonDict,
+    schedule: JsonDict,
+    retrieval: JsonDict,
+    documents: list[JsonDict],
+    messages: list[JsonDict],
+    knowledge_items: list[JsonDict],
+    online_meta: JsonDict,
+) -> JsonDict:
+    if not _should_prompt_profile_setup(user_profile):
+        return user_profile
+    suggested_profile = suggest_profile_from_online_inputs(
+        online_inputs={
+            "documents": documents,
+            "messages": messages,
+            "knowledge_items": knowledge_items,
+            "meta": online_meta,
+        },
+        display_name=str(user_profile.get("display_name") or "").strip(),
+        existing_profile=user_profile,
+    )
+    persisted = dict(profile_config) if isinstance(profile_config, dict) else {}
+    persisted["profile"] = suggested_profile
+    persisted["schedule"] = schedule
+    persisted["retrieval"] = retrieval
+    save_assistant_profile_config(
+        output_dir=args.output_dir,
+        profile_file=getattr(args, "profile_file", ""),
+        payload=persisted,
+    )
+    return suggested_profile
 
 
 def build_personal_brief_command_result(
@@ -155,6 +193,18 @@ def build_personal_brief_command_result(
         if not resolved_target_user_id:
             identity = get_user_identity(token_file=args.token_file or None)
             resolved_target_user_id = str(identity.get("open_id") or identity.get("user_id") or "")
+
+    user_profile = _resolve_effective_profile(
+        args=args,
+        profile_config=profile_config,
+        user_profile=user_profile,
+        schedule=schedule,
+        retrieval=retrieval,
+        documents=documents,
+        messages=messages,
+        knowledge_items=knowledge_items,
+        online_meta=online_meta,
+    )
 
     report = build_personal_brief(
         documents=documents,
@@ -273,6 +323,14 @@ def build_personal_brief_command_result(
         }
 
     if args.output_format == "json":
+        if profile_setup_required and args.push:
+            return {
+                "ok": True,
+                "meta": base_meta,
+                "profile_setup_card": _build_profile_setup_card(user_profile, online_meta),
+                "profile": user_profile,
+                "report_deferred": True,
+            }
         filtered = {k: v for k, v in report.items() if k not in {"doc_markdown", "card", "interest_card"}}
         filtered["docs"] = filtered.get("documents", [])
         return {
@@ -291,11 +349,25 @@ def build_personal_brief_command_result(
             },
         }
     if args.output_format == "card":
+        if profile_setup_required and args.push:
+            return {
+                "ok": True,
+                "meta": base_meta,
+                "card": _build_profile_setup_card(user_profile, online_meta),
+            }
         return {
             "ok": True,
             "meta": base_meta,
             "card": report["card"],
             "interest_card": report["interest_card"],
+        }
+    if profile_setup_required and args.push:
+        return {
+            "ok": True,
+            "meta": base_meta,
+            "profile_setup_card": _build_profile_setup_card(user_profile, online_meta),
+            "profile": user_profile,
+            "report_deferred": True,
         }
     return {
         "ok": True,
@@ -367,6 +439,18 @@ def recommend_command_result(
     knowledge_items = [item for item in online.get("knowledge_items", []) if isinstance(item, dict)]
     resolved_target_user_id = str(online.get("resolved_target_user_id") or resolved_target_user_id)
     online_meta = online.get("meta", {}) if isinstance(online.get("meta", {}), dict) else {}
+
+    user_profile = _resolve_effective_profile(
+        args=args,
+        profile_config=profile_config,
+        user_profile=user_profile,
+        schedule=schedule,
+        retrieval=retrieval,
+        documents=documents,
+        messages=messages,
+        knowledge_items=knowledge_items,
+        online_meta=online_meta,
+    )
 
     sample_history_file = Path(args.output_dir).expanduser() / "assistant_dual_tower_samples.jsonl"
     model_file = Path(args.output_dir).expanduser() / "assistant_dual_tower_model.json"
@@ -510,6 +594,14 @@ def recommend_command_result(
         base_meta["push"] = {"enabled": False}
 
     if args.output_format == "json":
+        if profile_setup_required and args.push:
+            return {
+                "ok": True,
+                "meta": base_meta,
+                "profile_setup_card": _build_profile_setup_card(user_profile, online_meta),
+                "profile": user_profile,
+                "report_deferred": True,
+            }
         filtered = {k: v for k, v in report.items() if k not in {"doc_markdown", "card", "interest_card"}}
         filtered["docs"] = filtered.get("documents", [])
         return {"ok": True, "meta": base_meta, "report": filtered}
@@ -524,7 +616,21 @@ def recommend_command_result(
             },
         }
     if args.output_format == "card":
+        if profile_setup_required and args.push:
+            return {
+                "ok": True,
+                "meta": base_meta,
+                "card": _build_profile_setup_card(user_profile, online_meta),
+            }
         return {"ok": True, "meta": base_meta, "card": report["card"], "interest_card": report["interest_card"]}
+    if profile_setup_required and args.push:
+        return {
+            "ok": True,
+            "meta": base_meta,
+            "profile_setup_card": _build_profile_setup_card(user_profile, online_meta),
+            "profile": user_profile,
+            "report_deferred": True,
+        }
     return {
         "ok": True,
         "meta": base_meta,
@@ -543,6 +649,19 @@ def _should_prompt_profile_setup(user_profile: JsonDict) -> bool:
 def _build_profile_setup_card(user_profile: JsonDict, online_meta: JsonDict) -> JsonDict:
     interests = user_profile.get("interests") or []
     businesses = user_profile.get("businesses") or []
+    clean_profile_payload = {
+        "role": str(user_profile.get("role") or "待确认角色"),
+        "persona": str(user_profile.get("persona") or "待确认形象"),
+        "businesses": [str(item) for item in businesses if str(item).strip()],
+        "interests": [str(item) for item in interests if str(item).strip()],
+    }
+    clean_source_meta = {
+        "message_count": int(online_meta.get("message_count", 0) or 0),
+        "document_count": int(online_meta.get("document_count", 0) or 0),
+    }
+    clean_card = build_profile_review_card(profile=clean_profile_payload, source_meta=clean_source_meta)
+    clean_card["header"]["subtitle"]["content"] = "推荐前请先确认画像"
+    return clean_card
     profile_payload = {
         "role": str(user_profile.get("role") or "待确认角色"),
         "persona": str(user_profile.get("persona") or "待确认形象"),
@@ -555,6 +674,10 @@ def _build_profile_setup_card(user_profile: JsonDict, online_meta: JsonDict) -> 
     }
     card = build_profile_review_card(profile=profile_payload, source_meta=source_meta)
     card["header"]["subtitle"]["content"] = "推荐卡片已推送，请确认是否设置画像"
+    profile_payload["role"] = str(user_profile.get("role") or "待确认角色")
+    profile_payload["persona"] = str(user_profile.get("persona") or "待确认形象")
+    card = build_profile_review_card(profile=profile_payload, source_meta=source_meta)
+    card["header"]["subtitle"]["content"] = "推荐前请先确认画像"
     return card
 
 
@@ -568,6 +691,7 @@ def _send_message_with_dedupe(
     content: JsonDict,
 ) -> tuple[JsonDict | None, bool]:
     state_file = Path(output_dir).expanduser() / "assistant_push_state.json"
+    state_file.parent.mkdir(parents=True, exist_ok=True)
     state = _load_push_state(state_file)
     cache_key = f"{receive_id_type}:{receive_id}:{card_type}"
     payload_text = json.dumps(content, ensure_ascii=False, sort_keys=True)

@@ -1,6 +1,9 @@
 ﻿import json
 
+from pathlib import Path
+
 import sofree_knowledge.cli as cli_module
+from sofree_knowledge.assistant.profile import load_assistant_profile_config
 from sofree_knowledge.cli import main
 
 
@@ -82,6 +85,8 @@ def test_auth_login_bootstraps_profile_after_token(monkeypatch, tmp_path, capsys
     assert out["ok"] is True
     assert out["profile_bootstrap"]["pending_confirmation"] is True
     assert out["profile_bootstrap"]["profile"]["interests"]
+    assert out["profile_bootstrap"]["profile"]["role"] != "待确认角色"
+    assert out["profile_bootstrap"]["profile"]["persona"] != "待确认形象"
     assert "AI 画像初始化建议" == out["profile_bootstrap"]["card"]["header"]["title"]["content"]
 
 
@@ -282,6 +287,40 @@ def test_assistant_profile_uses_user_scoped_output_dir(tmp_path, capsys):
     assert out["ok"] is True
     assert "users" in out["profile_file"]
     assert (tmp_path / "users" / "ou_scope_user" / "assistant_profile.json").exists()
+
+
+def test_assistant_profile_auto_uses_user_scope_from_token(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(cli_module, "get_user_identity", lambda token_file=None: {"open_id": "ou_auto_scope"})
+
+    code = main(
+        [
+            "--output-dir",
+            str(tmp_path),
+            "assistant",
+            "set-profile",
+            "--persona",
+            "自动隔离画像",
+        ]
+    )
+    out = json.loads(capsys.readouterr().out)
+    assert code == 0
+    assert out["ok"] is True
+    assert (tmp_path / "users" / "ou_auto_scope" / "assistant_profile.json").exists()
+
+
+def test_scoped_profile_loads_from_legacy_root_file(tmp_path):
+    legacy_profile = tmp_path / "assistant_profile.json"
+    legacy_profile.write_text(
+        json.dumps({"profile": {"persona": "旧画像", "interests": ["飞书"]}}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    parsed = load_assistant_profile_config(
+        output_dir=str(tmp_path / "users" / "ou_legacy"),
+        profile_file="",
+    )
+
+    assert parsed["profile"]["persona"] == "旧画像"
 
 
 def test_assistant_build_personal_brief_uses_profile_file(tmp_path, capsys):
@@ -529,7 +568,7 @@ def test_assistant_recommend_trains_and_uses_dual_tower_when_samples_sufficient(
     assert out["ok"] is True
     assert out["report"]["retrieval_plan"]["strategy"] == "dual_tower_trained"
     assert out["meta"]["auto_retrieval"]["enough_data"] is True
-    assert (tmp_path / "assistant_dual_tower_model.json").exists()
+    assert Path(out["meta"]["auto_retrieval"]["model_file"]).exists()
 
 
 def test_assistant_recommend_push_uses_bot_client_and_prompts_profile_after_cards(monkeypatch, tmp_path, capsys):
@@ -576,6 +615,8 @@ def test_assistant_recommend_push_uses_bot_client_and_prompts_profile_after_card
     assert code == 0
     assert out["meta"]["push"]["profile_setup_prompted"] is True
     assert out["meta"]["push"]["recommendation_deferred_until_profile_confirmed"] is True
+    assert out["report_deferred"] is True
+    assert "profile_setup_card" in out
     assert send_order == ["AI 画像初始化建议"]
 
 
@@ -625,6 +666,7 @@ def test_assistant_push_defaults_to_personal_open_id(monkeypatch, tmp_path, caps
     assert out["meta"]["push"]["receive_id_type"] == "open_id"
     assert len(calls) == 1
     assert out["meta"]["push"]["profile_setup_prompted"] is True
+    assert out["report_deferred"] is True
     assert out["meta"]["push"]["summary_enabled"] is False
     assert out["meta"]["push"]["interest_enabled"] is False
     assert out["meta"]["push"]["doc_push_enabled"] is False

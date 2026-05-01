@@ -45,7 +45,10 @@ def load_assistant_profile_config(
 ) -> dict[str, Any]:
     path = Path(profile_file).expanduser() if str(profile_file or "").strip() else assistant_profile_default_path(output_dir)
     if not path.exists():
-        return {}
+        legacy_path = _legacy_profile_path(path)
+        if legacy_path is None or not legacy_path.exists():
+            return {}
+        path = legacy_path
     try:
         parsed = json.loads(path.read_text(encoding="utf-8-sig"))
     except json.JSONDecodeError:
@@ -138,19 +141,29 @@ def suggest_profile_from_online_inputs(
     existing_profile: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     existing = dict(existing_profile or {})
-    interests = list(existing.get("interests") or [])
-    businesses = list(existing.get("businesses") or [])
+    interests = [str(item).strip() for item in existing.get("interests", []) or [] if str(item).strip()]
+    businesses = [str(item).strip() for item in existing.get("businesses", []) or [] if str(item).strip()]
+
     if not interests:
         interests = _suggest_interest_terms(online_inputs)[:4]
+    if not interests:
+        interests = ["知识协同", "项目推进"]
+
     if not businesses:
         businesses = interests[:2]
-    role = str(existing.get("role") or "").strip() or "待确认角色"
+    if not businesses:
+        businesses = ["通用协同"]
+
+    role = str(existing.get("role") or "").strip() or "知识协同用户"
     persona = str(existing.get("persona") or "").strip()
     if not persona:
         focus = "、".join(interests[:2]) if interests else "协同推进"
-        prefix = f"{display_name}：" if display_name else ""
-        persona = f"{prefix}关注{focus}的务实推进型"
-    profile = {
+        if display_name:
+            persona = f"{display_name}，近期关注{focus}的务实推进型"
+        else:
+            persona = f"近期关注{focus}的务实推进型"
+
+    return {
         "display_name": display_name,
         "role": role,
         "persona": persona,
@@ -158,7 +171,6 @@ def suggest_profile_from_online_inputs(
         "interests": interests,
         "require_user_confirmation": True,
     }
-    return profile
 
 
 def build_profile_review_card(
@@ -166,16 +178,16 @@ def build_profile_review_card(
     profile: dict[str, Any],
     source_meta: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    businesses = "、".join(profile.get("businesses", [])[:3]) or "待确认"
-    interests = "、".join(profile.get("interests", [])[:4]) or "待确认"
+    businesses = "、".join(str(item) for item in profile.get("businesses", [])[:3] if str(item).strip()) or "待确认"
+    interests = "、".join(str(item) for item in profile.get("interests", [])[:4] if str(item).strip()) or "待确认"
     source = source_meta or {}
     source_line = (
         f"基于最近 {int(source.get('message_count', 0))} 条消息、"
         f"{int(source.get('document_count', 0))} 篇文档生成"
     )
     content = [
-        f"- 角色：{profile.get('role') or '待确认'}",
-        f"- 形象：{profile.get('persona') or '待确认'}",
+        f"- 角色：{profile.get('role') or '待确认角色'}",
+        f"- 形象：{profile.get('persona') or '待确认形象'}",
         f"- 关注业务：{businesses}",
         f"- 兴趣词：{interests}",
         "",
@@ -219,3 +231,11 @@ def _extract_profile_terms(text: str) -> list[str]:
             continue
         results.append(normalized)
     return results
+
+
+def _legacy_profile_path(path: Path) -> Path | None:
+    if path.name != "assistant_profile.json":
+        return None
+    if path.parent.parent.name != "users":
+        return None
+    return path.parent.parent.parent / "assistant_profile.json"
