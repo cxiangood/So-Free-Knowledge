@@ -25,7 +25,12 @@ def is_question_by_rule(*, summary: str, problem: str, content: str) -> bool:
 
 def is_question_with_llm(*, summary: str, problem: str, content: str) -> bool:
     rule_guess = is_question_by_rule(summary=summary, problem=problem, content=content)
-    config = llm_client.LLMConfig.from_env(max_tokens=64, temperature=0.0, top_p=0.1)
+    config = llm_client.LLMConfig.from_env(
+        max_tokens=64,
+        temperature=0.0,
+        top_p=0.1,
+        extra_body={"thinking": {"type": "disabled"}},
+    )
     if config.missing_fields():
         return rule_guess
     try:

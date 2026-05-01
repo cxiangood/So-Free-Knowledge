@@ -11,12 +11,17 @@ from ..shared.models import LiftedCard, RouteDecision
 def _route_by_rule(card: LiftedCard, *, knowledge_threshold: float, task_threshold: float) -> tuple[str, list[str]]:
     reason_codes: list[str] = []
     target = "observe"
+    actionability_score = float((card.decision_signals or {}).get("actionability_score", 0.0))
+    role = str(card.message_role or "").strip().lower()
     if card.suggested_target == "knowledge" and card.confidence >= knowledge_threshold:
         target = "knowledge"
         reason_codes.extend(["suggested-knowledge", "confidence-pass"])
     elif card.suggested_target == "task" and card.confidence >= task_threshold:
         target = "task"
         reason_codes.extend(["suggested-task", "confidence-pass"])
+    elif role in {"followup", "update", "confirm"} and card.confidence >= task_threshold and actionability_score >= 0.50:
+        target = "task"
+        reason_codes.extend(["context-followup-task", "actionability-pass"])
     elif card.confidence >= task_threshold and ("actionable-signal" in card.tags):
         target = "task"
         reason_codes.extend(["rule-task", "actionable-tag"])
@@ -35,7 +40,12 @@ def _route_by_llm(
     task_threshold: float,
 ) -> tuple[str, list[str]] | None:
     # 路由判断任务：三选一输出，非常简单，使用最快参数
-    config = llm_client.LLMConfig.from_env(max_tokens=64, temperature=0.0, top_p=0.1)
+    config = llm_client.LLMConfig.from_env(
+        max_tokens=96,
+        temperature=0.0,
+        top_p=0.1,
+        extra_body={"thinking": {"type": "disabled"}},
+    )
     if config.missing_fields():
         return None
     try:

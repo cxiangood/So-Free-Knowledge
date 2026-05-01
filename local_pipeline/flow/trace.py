@@ -64,7 +64,7 @@ def _render_progress() -> None:
             current_step = task["current_step"]
             status = "完成" if task["completed"] else "执行中"
             rows.append(f"[{status}] {content}")
-            rows.append(f"当前步骤: {current_step}")
+            rows.append(f"{current_step}")
             rows.append("")
 
         _clear_screen()

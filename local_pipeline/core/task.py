@@ -61,6 +61,12 @@ def enhance_task_card_with_rag(card: LiftedCard, hits: list[RagHit], max_hits: i
         confidence=card.confidence,
         suggested_target=card.suggested_target,
         source_message_ids=card.source_message_ids,
+        topic_focus=card.topic_focus,
+        message_role=card.message_role,
+        context_relation=card.context_relation,
+        context_evidence=list(card.context_evidence),
+        decision_signals=dict(card.decision_signals),
+        missing_fields=list(card.missing_fields),
     )
 
 

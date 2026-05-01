@@ -40,12 +40,34 @@ def _build_default_parts(candidate: InspirationCandidate, current_message: Messa
         problem = "存在未决问题，需要明确答复或行动。"
     names = []
     summary = content
+    has_question = ("?" in content or "？" in content)
+    message_role = "question" if has_question else "new"
+    decision_signals = {
+        "novelty_score": float(candidate.score_breakdown.get("novelty", 0.0)),
+        "actionability_score": float(candidate.score_breakdown.get("actionability", 0.0)),
+        "impact_score": float(candidate.score_breakdown.get("impact", 0.0)),
+        "emotion_score": float(candidate.score_breakdown.get("emotion", 0.0)),
+        "has_question": 1.0 if has_question else 0.0,
+        "has_action_hint": 1.0 if any(term in content for term in ACTION_HINTS) else 0.0,
+    }
+    missing_fields: list[str] = []
+    if decision_signals["actionability_score"] >= 0.55:
+        if not any(token in content for token in ("今天", "明天", "本周", "下午", "上午", "点", "截止")):
+            missing_fields.append("time")
+        if not any(token in content for token in ("负责", "@", "同学", "团队")):
+            missing_fields.append("owner")
     return {
         "title": title,
         "summary": summary,
         "suggestion": suggestion,
         "problem": problem,
         "names": names,
+        "topic_focus": title,
+        "message_role": message_role,
+        "context_relation": "当前消息触发新信号",
+        "context_evidence": [content] if content else [],
+        "decision_signals": decision_signals,
+        "missing_fields": missing_fields,
     }
 
 
@@ -55,15 +77,16 @@ def _try_llm_parts(
     context_lines: list[str],
 ) -> dict[str, Any] | None:
     # 语义提升任务：输出固定JSON格式，包含几个短文本字段，使用较快参数
-    config = llm_client.LLMConfig.from_env(max_tokens=256, temperature=0.1, top_p=0.2)
+    config = llm_client.LLMConfig.from_env(max_tokens=768, temperature=0.1, top_p=0.2)
     if config.missing_fields():
         return None
     try:
         system_prompt = get_prompt("lift.system_prompt")
+        context_text = _format_context_lines(context_lines)
         user_prompt = get_prompt("lift.user_prompt").format(
             candidate_score_breakdown=json.dumps(candidate.score_breakdown, ensure_ascii=False),
-            current_line=current_line,
-            context_lines=context_lines
+            current_line=(current_line or ""),
+            context_lines=context_text,
         )
     except Exception:
         return None
@@ -80,6 +103,15 @@ def _try_llm_parts(
     suggestion = payload.suggestion
     problem = payload.problem
     names = payload.names
+    topic_focus = str(getattr(payload, "topic_focus", "") or "")
+    message_role = str(getattr(payload, "message_role", "") or "")
+    context_relation = str(getattr(payload, "context_relation", "") or "")
+    context_evidence = [str(x).strip() for x in (getattr(payload, "context_evidence", []) or []) if str(x).strip()]
+    raw_signals = getattr(payload, "decision_signals", {}) or {}
+    if not isinstance(raw_signals, dict):
+        raw_signals = {}
+    decision_signals = {str(k): float(v) for k, v in raw_signals.items() if isinstance(v, (int, float))}
+    missing_fields = [str(x).strip() for x in (getattr(payload, "missing_fields", []) or []) if str(x).strip()]
     if not all([title, summary, suggestion, problem]):
         return None
     return {
@@ -88,7 +120,23 @@ def _try_llm_parts(
         "suggestion": suggestion,
         "problem": problem,
         "names": names,
+        "topic_focus": topic_focus,
+        "message_role": message_role,
+        "context_relation": context_relation,
+        "context_evidence": context_evidence,
+        "decision_signals": decision_signals,
+        "missing_fields": missing_fields,
     }
+
+
+def _format_context_lines(context_lines: list[str]) -> str:
+    if not context_lines:
+        return "(empty)"
+    rows: list[str] = []
+    for idx, line in enumerate(context_lines, start=1):
+        text = str(line).replace("\n", " ").strip()
+        rows.append(f"{idx}. {text}")
+    return "\n".join(rows)
 
 
 def _build_card_with_llm_fallback(
@@ -138,6 +186,20 @@ def _build_card_with_llm_fallback(
         confidence=candidate.score_total,
         suggested_target=_suggest_target(candidate, content),  # type: ignore[arg-type]
         source_message_ids=list(candidate.source_message_ids),
+        topic_focus=str(parts.get("topic_focus", defaults["topic_focus"])),
+        message_role=str(parts.get("message_role", defaults["message_role"])),
+        context_relation=str(parts.get("context_relation", defaults["context_relation"])),
+        context_evidence=[str(x) for x in parts.get("context_evidence", defaults["context_evidence"]) if str(x).strip()],
+        decision_signals={
+            str(k): float(v)
+            for k, v in (
+                parts.get("decision_signals", defaults["decision_signals"])
+                if isinstance(parts.get("decision_signals", defaults["decision_signals"]), dict)
+                else defaults["decision_signals"]
+            ).items()
+            if isinstance(v, (int, float))
+        },
+        missing_fields=[str(x) for x in parts.get("missing_fields", defaults["missing_fields"]) if str(x).strip()],
     )
     return card, warning
 

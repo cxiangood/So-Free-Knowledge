@@ -86,112 +86,69 @@ prompts:
     {context_lines}
 
   lift.system_prompt: |
-    你是知识升维器。你的任务是结合current_line，context_lines，candidate_score_breakdown，将原始对话升维为结构化知识单元。
+    你是知识升维器。你的任务是结合 current_line、context_lines、candidate_score_breakdown，将原始对话升维为结构化知识单元。
 
-    # 输入包括：
+    # 任务目标
+    - 先做话题识别：从 context_lines 中找出与 current_line 同话题、直接相关的上下文。
+    - 再做升维总结：只基于“相关上下文 + 当前消息”输出结构化结果。
+    - 对无关话题进行去噪，不要把无关内容混入 summary/problem/suggestion。
+
+    # 输入
     - current_line：当前消息
-    - context_lines：上下文消息
+    - context_lines：带编号的历史上下文（可能包含多个不相关话题）
     - candidate_score_breakdown：四维评分（novelty, actionability, impact, emotion）
 
-    # 你需要输出 JSON，包含：
+    # 推理步骤（在心中执行，不要输出步骤）
+    1) 判定 current_line 的核心话题。
+    2) 在 context_lines 中筛选同话题语句，忽略其他话题。
+    3) 判断 current_line 在该话题中的关系：
+       - 新增信息
+       - 延续/补充
+       - 变更/澄清
+       - 提问/求助
+    4) 仅基于同话题内容完成结构化输出。
+
+    # 输出 JSON 字段
     - title
     - summary
     - suggestion
     - problem
     - names
+    - topic_focus
+    - message_role
+    - context_relation
+    - context_evidence
+    - decision_signals
+    - missing_fields
 
-    # 字段定义
+    # 字段要求
+    - title：20字内，优先“动词+目标”，不写空泛短语。
+    - summary：1-2句，体现“当前句在该话题中的含义 + 与上下文关系”。
+    - suggestion：给出下一步动作。若 actionability 低，可写“无需行动”。
+    - problem：提炼待解决问题或风险。若无明确问题，写“无明显问题”。
+    - names：输出该话题下的关键人物，排除无关话题人物。
+    - topic_focus：当前消息所属话题的短语（8-20字）。
+    - message_role：当前消息在该话题中的角色，取值限于
+      new / followup / update / confirm / question / cancel / chitchat。
+    - context_relation：一句话描述当前消息与同话题上下文关系。
+    - context_evidence：只保留同话题证据片段（短句列表，不超过3条）。
+    - decision_signals：给后续决策的数值信号，包含：
+      novelty_score/actionability_score/impact_score/emotion_score（0-1）、
+      has_question（0或1）、has_action_hint（0或1）。
+    - missing_fields：若是任务相关但信息缺失，列出缺失项，如 owner/time/location/deadline。
 
-    ## title
-    - 简洁表达核心事件/问题/任务（不超过20字）
-    - 优先使用“动词 + 目标”结构（如：安排下周会议 / 修复线上故障）
+    # 结合评分
+    - novelty 高：突出新增信息和变化点。
+    - actionability 高：suggestion 必须可执行、具体。
+    - impact 高：problem 要体现影响面。
+    - emotion 高：summary 可体现紧急性或情绪强度。
+    - 四维整体低：保守输出，不要过度推断。
 
-    ## summary
-    - 1~2句话总结上下文和当前消息
-    - 包含关键背景 + 当前变化
-
-    ## suggestion
-    - 给出明确、可执行的下一步行动
-    - 如果 actionability < 40，可给“可选建议”或“无需行动”
-
-    ## problem
-    - 提炼潜在问题 / 风险 / 需求
-    - 如果不存在明确问题，填“无明显问题”
-
-    ## names
-    - 知识单元相关的主要人物
-    - 需要结合语境和上下文分析主要人物，不一定为发言人，也不一定为被@的人
-
-    # 利用评分的规则
-
-    - novelty 高 → 强调“新信息”
-    - actionability 高 → suggestion 必须具体
-    - impact 高 → problem 要突出重要性
-    - emotion 高 → summary 可体现情绪或紧急性
-
-    - 如果四维评分整体较低（如都 < 30）：
-      → 输出应更保守，避免过度解读
-
-    # 约束
-
-    - 不要编造不存在的信息
-    - 不要扩展超出上下文的事实
-    - 保持客观，不加主观推测
-    - 只输出 JSON，不要解释
-    - 所有字段必须存在
-
-    # 示例
-
-    ## 示例1：
-    context_lines:
-    ["[Bob] 需要安排会议"]
-    current_line:
-    "[Alice] 我来负责安排下周会议时间"
-    candidate_score_breakdown:
-    {"novelty": 70, "actionability": 85, "impact": 60, "emotion": 10}
-
-    输出：
-    {
-      "title": "安排下周会议",
-      "summary": "团队讨论需要安排会议，Alice主动承担安排下周会议时间的任务。",
-      "suggestion": "由Alice确认参会人员并发起日程邀请。",
-      "problem": "会议时间尚未确定",
-      "names": ["Alice"]
-    }
-
-    ## 示例2：
-    context_lines:
-    ["[Dev] 系统有点慢"]
-    current_line:
-    "[Ops] 这个问题很严重，需要尽快修复！"
-    candidate_score_breakdown:
-    {"novelty": 75, "actionability": 90, "impact": 95, "emotion": 85}
-
-    输出：
-    {
-      "title": "修复系统性能问题",
-      "summary": "系统已出现性能问题，Ops判断问题严重，需要尽快处理。",
-      "suggestion": "立即定位性能瓶颈并安排人员修复。",
-      "problem": "系统性能问题严重，可能影响服务可用性",
-      "names": ["Dev", "Ops"]
-    }
-
-    ## 示例3：
-    context_lines:
-    ["[Alice] 大家好"]
-    current_line:
-    "[Bob] 大家好"
-    candidate_score_breakdown:
-    {"novelty": 5, "actionability": 5, "impact": 5, "emotion": 5}
-
-    输出：
-    {
-      "title": "群聊寒暄",
-      "summary": "成员之间进行简单问候。",
-      "suggestion": "无需行动",
-      "problem": "无明显问题",
-      "names": ["Alice", "Bob"]
-    }
+    # 硬约束
+    - 不编造事实，不补充上下文外信息。
+    - 不把无关话题写入结果。
+    - 只输出合法 JSON，不要解释。
+    - 所有字段必须存在。
 
     # 输出格式
     {
@@ -199,13 +156,26 @@ prompts:
       "summary": "",
       "suggestion": "",
       "problem": "",
-      "names": []
+      "names": [],
+      "topic_focus": "",
+      "message_role": "new",
+      "context_relation": "",
+      "context_evidence": [],
+      "decision_signals": {
+        "novelty_score": 0.0,
+        "actionability_score": 0.0,
+        "impact_score": 0.0,
+        "emotion_score": 0.0,
+        "has_question": 0.0,
+        "has_action_hint": 0.0
+      },
+      "missing_fields": []
     }
 
   lift.user_prompt: |
     对以下聊天内容进行知识升维：
 
-    context_lines:
+    context_lines(带编号):
     {context_lines}
 
     current_line:
@@ -323,6 +293,17 @@ prompts:
     你是卡片路由决策器。根据升维后的card_json、knowledge_threshold、task_threshold，将卡片精确分配到三个池之一：knowledge、task、observe。
     必须严格遵守规则，输出合法JSON，不允许任何解释性文字。
 
+    # 新增字段说明（必须使用）
+    card_json 中除了基础字段外，还包含以下决策维度：
+    - topic_focus：当前卡片聚焦的话题
+    - message_role：消息在话题中的角色（new/followup/update/confirm/question/cancel/chitchat）
+    - context_relation：当前消息与上下文关系说明
+    - context_evidence：同话题证据片段
+    - decision_signals：数值信号，至少包含
+      novelty_score/actionability_score/impact_score/emotion_score（0~1），
+      has_question/has_action_hint（0或1）
+    - missing_fields：任务信息缺失项（如 owner/time/location/deadline）
+
     # 三个池的明确定义
     ## knowledge：沉淀可复用的结构化知识
     适用场景：
@@ -347,13 +328,17 @@ prompts:
 
     # 决策优先级（从高到低）
     1. 优先尊重卡片自带的suggested_target，若其置信度满足对应阈值，直接采纳
-    2. 其次根据卡片标签判断：
+    2. 其次根据“新维度”判断：
+       - message_role 属于 followup/update/confirm，且 actionability_score ≥ 0.5，且 confidence ≥ task_threshold → task
+       - message_role 属于 question，且 has_question=1，且 actionability_score ≥ 0.5，且 confidence ≥ task_threshold → task
+       - message_role 属于 chitchat，且四维信号整体较低 → observe
+    3. 根据卡片标签判断：
        - 包含actionable-signal标签 + 置信度≥task_threshold → task
        - 包含novel-content标签 + 置信度≥knowledge_threshold → knowledge
-    3. 再根据卡片四维评分（score_breakdown）判断：
-       - actionability ≥ 60分 + 置信度≥task_threshold → task
-       - novelty ≥ 60分 + 置信度≥knowledge_threshold → knowledge
-    4. 以上都不满足 → observe
+    4. 再根据四维评分判断：
+       - actionability_score ≥ 0.6 + 置信度≥task_threshold → task
+       - novelty_score ≥ 0.6 + 置信度≥knowledge_threshold → knowledge
+    5. 以上都不满足 → observe
 
     # 标准化reason_codes（必须从以下列表选择，可多选）
     - "suggested-knowledge-pass"：卡片推荐knowledge且置信度达标
@@ -362,6 +347,9 @@ prompts:
     - "novel-tag-pass"：含novel-content标签且达标
     - "high-actionability-score"：actionability评分≥60且达标
     - "high-novelty-score"：novelty评分≥60且达标
+    - "context-followup-task"：上下文角色为跟进/更新且任务信号达标
+    - "context-question-task"：上下文角色为提问且任务信号达标
+    - "context-chitchat-observe"：上下文角色为闲聊且信号弱
     - "below-knowledge-threshold"：低于知识池阈值
     - "below-task-threshold"：低于任务池阈值
     - "insufficient-information"：信息不足无法判断
@@ -416,6 +404,21 @@ prompts:
     knowledge_threshold: 0.6, task_threshold: 0.5
     输出：
     {"target_pool":"observe","reason_codes":["below-knowledge-threshold","below-task-threshold","insufficient-information","fallback-observe"]}
+
+    ## 示例4：
+    输入卡片：
+    {
+      "title": "补充参会人员",
+      "summary": "在既有汇报安排中补充参会人李四",
+      "suggested_target": "observe",
+      "confidence": 0.68,
+      "message_role": "followup",
+      "decision_signals": {"actionability_score": 0.72, "has_action_hint": 1},
+      "tags": ["actionable-signal"]
+    }
+    knowledge_threshold: 0.6, task_threshold: 0.5
+    输出：
+    {"target_pool":"task","reason_codes":["context-followup-task","actionable-tag-pass"]}
 
     # 输出格式（严格遵守）
     {

@@ -87,7 +87,12 @@ def _score_total(score_breakdown: dict[str, float]) -> float:
 
 def _score_with_llm(*, context_lines: list[str], current_line: str) -> dict[str, float] | None:
     # 信号检测任务：输出固定JSON格式，只需4个数值，使用最快参数
-    config = llm_client.LLMConfig.from_env(max_tokens=128, temperature=0.0, top_p=0.1)
+    config = llm_client.LLMConfig.from_env(
+        max_tokens=96,
+        temperature=0.0,
+        top_p=0.1,
+        extra_body={"thinking": {"type": "disabled"}},
+    )
     if config.missing_fields():
         return None
     try:
@@ -95,7 +100,6 @@ def _score_with_llm(*, context_lines: list[str], current_line: str) -> dict[str,
         user_prompt = get_prompt("detect.user_prompt").format(current_line=current_line, context_lines="\n".join(context_lines))
     except Exception:
         return None
-
     payload = llm_client.invoke_structured(
         config=config,
         system_prompt=system_prompt,
@@ -126,10 +130,8 @@ def detect_candidates(messages: list[str], *, candidate_threshold: float = 0.45)
         return DetectionResult(messages=[], candidates=[])
 
     current_content = _message_content(filtered[-1])
-    
 
     context_raw = filtered[:-1]
-
     scored = _score_with_llm(context_lines=context_raw, current_line=current_content)
     if scored is None:
         score_breakdown, _ = _score_message_rule(current_content, 0)
