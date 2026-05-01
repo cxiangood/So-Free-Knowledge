@@ -76,6 +76,8 @@ def collect_online_personal_inputs(
                 page_size=min(50, max_messages_per_chat),
             )
             for msg in chat_messages:
+                if _should_skip_message(msg):
+                    continue
                 # 收集发件人信息
                 sender = msg.get("sender", {})
                 sender_name = _extract_sender_name(sender)
@@ -457,6 +459,13 @@ def _message_mentions_target_user(raw_content: Any, target_aliases: set[str]) ->
             return True
         if normalized_alias.startswith("ou_") and normalized_alias.lower() in lowered:
             return True
+    return False
+
+
+def _should_skip_message(message: dict[str, Any]) -> bool:
+    msg_type = str(message.get("msg_type") or "").strip().lower()
+    if msg_type == "system":
+        return True
     return False
 
 
