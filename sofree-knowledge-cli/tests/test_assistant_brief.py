@@ -304,6 +304,23 @@ def test_interest_digest_accepts_at_user_without_interest_keyword_hit():
     assert items[0]["message_id"] == "om_at_user"
 
 
+def test_interest_digest_accepts_single_interest_hit_without_mention():
+    report = build_personal_brief(
+        documents=[{"doc_id": "d1", "title": "Any", "summary": "Any"}],
+        messages=[
+            {
+                "message_id": "om_interest_single",
+                "chat_id": "oc_chat",
+                "content": "今天晚上需要完成 openclaw 的知识推送整合工作",
+            }
+        ],
+        user_profile={"interests": ["知识推送"]},
+    )
+    items = report["interest_digest"]["items"]
+    assert len(items) == 1
+    assert items[0]["message_id"] == "om_interest_single"
+
+
 def test_interest_digest_filters_low_information_placeholder_mentions():
     report = build_personal_brief(
         documents=[{"doc_id": "d1", "title": "Any", "summary": "Any"}],

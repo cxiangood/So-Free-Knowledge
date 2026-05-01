@@ -717,7 +717,7 @@ def _build_interest_digest(messages: list[dict[str, Any]], interests: list[str],
             continue
         if (
             mention_signal == ""
-            and len(hit_terms) < 2
+            and len(hit_terms) < 1
             and signal_hits <= 0
             and not urgency_hit
             and (openclaw_importance or 0.0) < 0.5
@@ -869,7 +869,7 @@ def _openclaw_interest_screen(
         return {"accepted": True, "reason": "accepted_by_openclaw_relevant_true"}
 
     # Fallback rule path when OpenClaw metadata is absent.
-    if signal_hits > 0 or urgency_hit or hit_term_count >= 2 or bool(mention_signal):
+    if signal_hits > 0 or urgency_hit or hit_term_count >= 1 or bool(mention_signal):
         return {"accepted": True, "reason": "accepted_by_rule_fallback"}
     return {"accepted": False, "reason": "blocked_by_rule_fallback"}
 
