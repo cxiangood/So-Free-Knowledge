@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import atexit
+import logging
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 from ..comm.listen import MessageEventBus, OpenAPIMessageListener, TOPIC_MESSAGE_RECEIVED, resolve_listener_credentials
 from .engine import Engine, EngineConfig
+
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -63,7 +68,28 @@ def start(config: OnlineConfig | None = None) -> None:
             observe_force_non_observe_on_pop=cfg.observe_force_non_observe_on_pop,
         )
     )
-    bus.subscribe(TOPIC_MESSAGE_RECEIVED, lambda evt: engine.run(evt, context={"mode": "online"}))
+
+    # 初始化线程池实现异步消息处理，避免阻塞WebSocket线程
+    executor = ThreadPoolExecutor(max_workers=8, thread_name_prefix="msg-worker")
+
+    # 注册进程退出钩子，平滑关闭线程池，等待任务完成
+    def _shutdown_executor():
+        LOGGER.info("Shutting down message worker thread pool, waiting for pending tasks...")
+        executor.shutdown(wait=True, cancel_futures=False)
+        LOGGER.info("Message worker thread pool shutdown complete.")
+    atexit.register(_shutdown_executor)
+
+    # 异步消息处理函数
+    def async_handle_message(evt):
+        try:
+            engine.run(evt, context={"mode": "online"})
+        except Exception as e:
+            LOGGER.exception("Async message handling failed: message_id=%s, chat_id=%s",
+                           evt.message_id, evt.chat_id)
+
+    # 订阅消息，提交到线程池异步执行
+    bus.subscribe(TOPIC_MESSAGE_RECEIVED, lambda evt: executor.submit(async_handle_message, evt))
+
     app_id, app_secret = resolve_listener_credentials(cfg.env_file)
     listener = OpenAPIMessageListener(
         app_id=app_id,
@@ -71,6 +97,7 @@ def start(config: OnlineConfig | None = None) -> None:
         bus=bus,
         compact=cfg.compact,
     )
+    LOGGER.info("Online pipeline started with async message processing (8 workers)")
     listener.start()
 
 

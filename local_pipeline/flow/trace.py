@@ -1,21 +1,81 @@
 from __future__ import annotations
 
 import logging
+import os
+import sys
 from threading import Lock
+from collections import OrderedDict
 
 
 LOGGER = logging.getLogger(__name__)
 _TRACE_LOCK = Lock()
 _TRACE_STATE: dict[str, dict[str, str | list[str]]] = {}
 
+# 动态表格状态追踪
+_TRACKING_TASKS: OrderedDict[str, dict] = OrderedDict()
+_MAX_DISPLAY_TASKS = 10  # 最多同时显示10个任务
+
+
+def _clear_screen() -> None:
+    """清屏，兼容Windows和Unix系统"""
+    os.system('cls' if sys.platform == 'win32' else 'clear')
+
+
+def _render_table() -> None:
+    """渲染当前所有任务的进度表格"""
+    with _TRACE_LOCK:
+        if not _TRACKING_TASKS:
+            return
+
+        # 表格标题
+        header = f"{'消息内容':<32} | {'当前步骤':<20} | {'状态':<8}"
+        separator = "-" * 32 + "|" + "-" * 21 + "|" + "-" * 9
+
+        # 表格行
+        rows = []
+        for task in reversed(_TRACKING_TASKS.values()):
+            # 消息内容保持截断
+            content = task["content"]
+            # 当前步骤不截断，完整显示
+            current_step = task["current_step"]
+            status = "✅ 完成" if task["completed"] else "⌛ 执行中"
+            rows.append(f"{content:<32} | {current_step:<20} | {status:<8}")
+
+        # 输出表格
+        _clear_screen()
+        print("📊 实时任务进度")
+        print(header)
+        print(separator)
+        for row in rows:
+            print(row)
+        print(flush=True)
+
 
 def trace_start(*, message_id: str, chat_id: str, content: str) -> None:
     with _TRACE_LOCK:
+        full_content = (content or "").replace("\r", " ").replace("\n", " ").strip()
+        short_content = full_content[:27] + "..." if len(full_content) > 30 else full_content
         _TRACE_STATE[message_id] = {
             "chat_id": chat_id,
-            "content": (content or "").replace("\r", " ").replace("\n", " ").strip(),
+            "content": short_content,
             "nodes": [],
         }
+
+        # 加入任务追踪
+        _TRACKING_TASKS[message_id] = {
+            "content": short_content,
+            "current_step": "消息缓存",
+            "completed": False
+        }
+
+        # 限制最多显示任务数
+        if len(_TRACKING_TASKS) > _MAX_DISPLAY_TASKS:
+            _TRACKING_TASKS.popitem(last=False)
+
+        LOGGER.info(f"[{short_content}] trace started")
+
+    # 刷新表格
+    _render_table()
 
 
 def trace_node(*, message_id: str, node_name: str) -> None:
@@ -26,32 +86,76 @@ def trace_node(*, message_id: str, node_name: str) -> None:
         nodes = state.get("nodes")
         if isinstance(nodes, list):
             nodes.append(node_name)
-            # 实时输出当前执行进度（单行覆盖式，避免刷屏）
-            content = str(state.get("content", ""))
             path = "→".join(nodes)
-            line = f"[{content}] 执行中: {path}"
-            LOGGER.info(line)  # 日志仍然保留完整历史
-            # 控制台使用回车符覆盖上一行，左对齐填充空格避免残留字符
-            print(f"{line:<100}", end='\r', flush=True)
+            content = str(state.get("content", ""))
+            LOGGER.info(f"[{content}] 执行中: {path}")
+
+            # 把英文节点名转为中文显示更友好
+            step_names = {
+                "message_cache": "消息缓存",
+                "deduplicate": "去重判断",
+                "context_extract": "上下文提取",
+                "signal_detect": "信号检测",
+                "semantic_lift": "语义升维",
+                "route": "路由判断",
+                "knowledge_store": "知识存储",
+                "task_store": "任务存储",
+                "observe_store": "观察存储",
+                "observe_logic1_check": "观察逻辑1",
+                "observe_logic2_check": "观察逻辑2",
+                "observe_logic3_check": "观察逻辑3",
+                "rag_retrieve_task": "任务RAG检索",
+                "rag_retrieve_observe": "观察RAG检索",
+                "observe_reply": "观察自动回复",
+                "task_push": "任务推送",
+                "observe_pop_route": "观察弹出路由",
+                "done": "处理完成"
+            }
+            current_step = step_names.get(node_name, node_name)
+
+            # 更新任务追踪中的当前步骤
+            if message_id in _TRACKING_TASKS:
+                _TRACKING_TASKS[message_id]["current_step"] = current_step
+
+    # 刷新表格
+    _render_table()
 
 
 def trace_finish(*, message_id: str, suffix_status: str = "ok") -> None:
     with _TRACE_LOCK:
         state = _TRACE_STATE.pop(message_id, None)
-    if not state:
-        return
-    content = str(state.get("content", ""))
-    nodes = state.get("nodes", [])
-    if not isinstance(nodes, list):
-        nodes = []
-    if suffix_status and suffix_status != "ok" and nodes:
-        nodes[-1] = f"{nodes[-1]}({suffix_status})"
-    path = "→".join(nodes) if nodes else "无节点"
-    line = f"[{content}] 执行完成: {path}"
-    LOGGER.info(line)
-    # 先输出换行，结束之前的覆盖式输出，再显示最终结果
-    print()
-    print(f"{line:<100}", flush=True)
+        if not state:
+            return
+        content = str(state.get("content", ""))
+        nodes = state.get("nodes", [])
+        if not isinstance(nodes, list):
+            nodes = []
+
+        # 去除重复的连续节点（解决context_extract出现两次的问题）
+        unique_nodes = []
+        prev_node = None
+        for node in nodes:
+            if node != prev_node:
+                unique_nodes.append(node)
+                prev_node = node
+
+        if suffix_status and suffix_status != "ok" and unique_nodes:
+            unique_nodes[-1] = f"{unique_nodes[-1]}({suffix_status})"
+
+        path = "→".join(unique_nodes) if unique_nodes else "无节点"
+        line = f"[{content}] 完成: {path}"
+        LOGGER.info(line)
+
+        # 更新任务状态为已完成
+        if message_id in _TRACKING_TASKS:
+            _TRACKING_TASKS[message_id]["completed"] = True
+            _TRACKING_TASKS[message_id]["current_step"] = "处理完成"
+
+    # 刷新表格显示最终状态
+    _render_table()
+
+    # 刷新表格
+    _render_table()
 
 
 __all__ = ["trace_start", "trace_node", "trace_finish"]

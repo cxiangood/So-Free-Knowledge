@@ -15,6 +15,7 @@ class LLMConfig:
     base_url: str
     temperature: float = 0.2
     max_tokens: int = 512
+    top_p: float = 1.0
 
     @classmethod
     def from_env(
@@ -25,6 +26,7 @@ class LLMConfig:
         base_url: str = "",
         temperature: float = 0.2,
         max_tokens: int = 512,
+        top_p: float = 1.0,
     ) -> "LLMConfig":
         return cls(
             api_key=(api_key or getenv("LLM_API_KEY", "")).strip(),
@@ -32,6 +34,7 @@ class LLMConfig:
             base_url=(base_url or getenv("LLM_BASE_URL", "")).strip(),
             temperature=temperature,
             max_tokens=max_tokens,
+            top_p=top_p,
         )
     def missing_fields(self) -> list[str]:
         missing = []
@@ -62,6 +65,7 @@ class LLMClient:
             ],
             "temperature": self.config.temperature,
             "max_tokens": self.config.max_tokens,
+            "top_p": self.config.top_p,
         }
         headers = {
             "Authorization": f"Bearer {self.config.api_key}",

@@ -150,20 +150,23 @@ class Engine:
         del config
         result = EngineResult(message_id=message.message_id, chat_id=message.chat_id)
         trace_status = "ok"
-        if self.config.step_trace_enabled:
-            trace_start(message_id=message.message_id, chat_id=message.chat_id, content=message.content_text)
+
+        # 第一步就做去重，完全避免重复消息产生不必要的输出和处理
+        if self.runtime_state.contains(message.message_id):
+            result.skipped = True
+            self._append_result(result)
+            return result
+
         try:
+            if self.config.step_trace_enabled:
+                trace_start(message_id=message.message_id, chat_id=message.chat_id, content=message.content_text)
+
             if self.config.step_trace_enabled:
                 trace_node(message_id=message.message_id, node_name="message_cache")
             self.chat_store.append(message)
 
             if self.config.step_trace_enabled:
-                trace_node(message_id=message.message_id, node_name="deduplicate")
-            if self.runtime_state.contains(message.message_id):
-                result.skipped = True
-                trace_status = "skipped"
-                self._append_result(result)
-                return result
+                trace_node(message_id=message.message_id, node_name="context_extract")
 
             if self.config.step_trace_enabled:
                 trace_node(message_id=message.message_id, node_name="context_extract")

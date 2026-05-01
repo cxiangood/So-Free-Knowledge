@@ -53,7 +53,8 @@ def _route_by_llm(
     knowledge_threshold: float,
     task_threshold: float,
 ) -> tuple[str, list[str]] | None:
-    config = LLMConfig.from_env(max_tokens=180, temperature=0.0)
+    # 路由判断任务：三选一输出，非常简单，使用最快参数
+    config = LLMConfig.from_env(max_tokens=64, temperature=0.0, top_p=0.1)
     if config.missing_fields():
         return None
     try:

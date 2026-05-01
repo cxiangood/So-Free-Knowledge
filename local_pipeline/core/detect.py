@@ -98,7 +98,8 @@ def _score_total(score_breakdown: dict[str, float]) -> float:
 
 
 def _score_with_llm(*, context_lines: list[str], current_line: str) -> dict[str, float] | None:
-    config = LLMConfig.from_env(max_tokens=280, temperature=0.1)
+    # 信号检测任务：输出固定JSON格式，只需4个数值，使用最快参数
+    config = LLMConfig.from_env(max_tokens=128, temperature=0.0, top_p=0.1)
     if config.missing_fields():
         return None
     client = LLMClient(config)

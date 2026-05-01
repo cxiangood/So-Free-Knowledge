@@ -45,7 +45,8 @@ def _extract_json(text: str) -> dict[str, Any] | None:
 
 def is_question_with_llm(*, summary: str, problem: str, content: str) -> bool:
     rule_guess = is_question_by_rule(summary=summary, problem=problem, content=content)
-    config = LLMConfig.from_env(max_tokens=120, temperature=0.0)
+    # 问题判断任务：仅需输出true/false，使用最快参数
+    config = LLMConfig.from_env(max_tokens=64, temperature=0.0, top_p=0.1)
     if config.missing_fields():
         return rule_guess
     try:

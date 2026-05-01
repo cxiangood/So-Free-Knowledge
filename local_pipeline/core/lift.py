@@ -73,7 +73,8 @@ def _try_llm_parts(
     current_line: str | None,
     context_lines: list[str],
 ) -> dict[str, Any] | None:
-    config = LLMConfig.from_env(max_tokens=300, temperature=0.2)
+    # 语义提升任务：输出固定JSON格式，包含几个短文本字段，使用较快参数
+    config = LLMConfig.from_env(max_tokens=256, temperature=0.1, top_p=0.2)
     if config.missing_fields():
         return None
     try:
