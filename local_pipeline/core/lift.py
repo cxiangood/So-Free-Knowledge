@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 import json
-import re
 from dataclasses import dataclass
 from typing import Any
 
-from llm.client import LLMClient, LLMConfig
+import llm.client as llm_client
 
 from ..msg.types import MessageEvent
 from ..prompt import get_prompt
@@ -28,24 +27,6 @@ def _suggest_target(candidate: InspirationCandidate, content: str) -> str:
     if candidate.score_breakdown.get("novelty", 0.0) >= 0.85 and candidate.score_breakdown.get("impact", 0.0) >= 0.3:
         return "knowledge"
     return "observe"
-
-
-def _extract_json(text: str) -> dict[str, Any] | None:
-    text = text.strip()
-    try:
-        payload = json.loads(text)
-        if isinstance(payload, dict):
-            return payload
-    except json.JSONDecodeError:
-        pass
-    match = re.search(r"\{.*\}", text, re.DOTALL)
-    if not match:
-        return None
-    try:
-        payload = json.loads(match.group(0))
-    except json.JSONDecodeError:
-        return None
-    return payload if isinstance(payload, dict) else None
 
 
 def _build_default_parts(candidate: InspirationCandidate, current_message: MessageEvent | None) -> dict[str, Any]:
@@ -74,7 +55,7 @@ def _try_llm_parts(
     context_lines: list[str],
 ) -> dict[str, Any] | None:
     # 语义提升任务：输出固定JSON格式，包含几个短文本字段，使用较快参数
-    config = LLMConfig.from_env(max_tokens=256, temperature=0.1, top_p=0.2)
+    config = llm_client.LLMConfig.from_env(max_tokens=256, temperature=0.1, top_p=0.2)
     if config.missing_fields():
         return None
     try:
@@ -86,20 +67,20 @@ def _try_llm_parts(
         )
     except Exception:
         return None
-    response = LLMClient(config).build_reply(system_prompt, user_prompt)
-    if response.startswith("LLM "):
+    payload = llm_client.invoke_structured(
+        config=config,
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+        schema=llm_client.LiftParts,
+    )
+    if payload is None:
         return None
-    payload = _extract_json(response)
-    if not payload:
-        return None
-    title = payload.get("title", "")
-    summary = payload.get("summary", "")
-    suggestion = payload.get("suggestion", "")
-    problem = payload.get("problem", "")
-    names = payload.get("names", [])
+    title = payload.title
+    summary = payload.summary
+    suggestion = payload.suggestion
+    problem = payload.problem
+    names = payload.names
     if not all([title, summary, suggestion, problem]):
-        return None
-    if not isinstance(names, list):
         return None
     return {
         "title": title,

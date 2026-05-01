@@ -2,26 +2,22 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
 
-from ..msg.types import MessageEvent
+from langgraph.graph import END, StateGraph
+
 from ..comm.send import TaskPushAttempt, TaskPushConfig, push_text_message, queue_failed_pushes
-from ..core.denoise import denoise_messages
 from ..core.detect import detect_candidates
-from ..core.observe_ferment import (
-    apply_logic1_on_observe_add,
-    apply_logic2_on_knowledge,
-    apply_logic3_on_task,
-    pop_ready_items,
-)
-from ..core.observe_qa import is_question_with_llm, try_answer_with_rag
 from ..core.kb import save_knowledge
 from ..core.lift import lift_candidates
 from ..core.obs import save_observe
+from ..core.observe_ferment import apply_logic1_on_observe_add, apply_logic2_on_knowledge, apply_logic3_on_task, pop_ready_items
+from ..core.observe_qa import is_question_with_llm, try_answer_with_rag
 from ..core.route import route_cards
 from ..core.task import enhance_task_card_with_rag, save_task
 from ..msg.cache import ChatMessageStore
 from ..msg.parse import event_row_to_message_event
+from ..msg.types import MessageEvent
 from ..rag.index import VectorKnowledgeStore
 from ..rag.retriever import retrieve
 from ..shared.models import LiftedCard, ObservePopItem, ObserveReplyEvent
@@ -48,7 +44,7 @@ class EngineConfig:
     rag_enabled: bool = True
     rag_top_k: int = 5
     rag_min_score: float = 0.35
-    rag_embed_model: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+    rag_embed_model: str = "BAAI/bge-large-zh"
     observe_auto_reply_enabled: bool = True
     observe_ferment_threshold: float = 4.0
     observe_logic1_base: float = 1.0
@@ -103,6 +99,19 @@ class EngineResult:
         }
 
 
+class EngineGraphState(TypedDict, total=False):
+    message: MessageEvent
+    result: EngineResult
+    simple_messages: list[str]
+    current_candidates: list[Any]
+    cards: list[LiftedCard]
+    decisions: list[Any]
+    decision_index: int
+    failed_attempts: list[TaskPushAttempt]
+    trace_status: str
+    trace_started: bool
+
+
 class RuntimeState:
     def __init__(self, path: str | Path, max_processed_ids: int = 2000) -> None:
         self.path = Path(path)
@@ -144,210 +153,316 @@ class Engine:
                 self.vector_store = VectorKnowledgeStore(Path(config.state_dir) / "vector_kb", embed_model=self.config.rag_embed_model)
             except Exception:
                 self.vector_store = None
+        self._graph = self._build_graph()
 
     def run(self, message: MessageEvent, context: dict[str, Any] | None = None, config: dict[str, Any] | None = None) -> EngineResult:
         del context
         del config
         result = EngineResult(message_id=message.message_id, chat_id=message.chat_id)
-        trace_status = "ok"
+        try:
+            final_state = self._graph.invoke(
+                {
+                    "message": message,
+                    "result": result,
+                    "simple_messages": [],
+                    "current_candidates": [],
+                    "cards": [],
+                    "decisions": [],
+                    "decision_index": 0,
+                    "failed_attempts": [],
+                    "trace_status": "ok",
+                    "trace_started": False,
+                }
+            )
+        except Exception:
+            if self.config.step_trace_enabled:
+                trace_finish(message_id=message.message_id, suffix_status="failed")
+            raise
+        return final_state["result"]
 
-        # 第一步就做去重，完全避免重复消息产生不必要的输出和处理
+    def _build_graph(self):
+        graph = StateGraph(EngineGraphState)
+        graph.add_node("deduplicate", self._node_deduplicate)
+        graph.add_node("message_cache", self._node_message_cache)
+        graph.add_node("context_extract", self._node_context_extract)
+        graph.add_node("signal_detect", self._node_signal_detect)
+        graph.add_node("semantic_lift", self._node_semantic_lift)
+        graph.add_node("route", self._node_route)
+        graph.add_node("select_decision", self._node_select_decision)
+        graph.add_node("knowledge_store", self._node_knowledge_store)
+        graph.add_node("task_store", self._node_task_store)
+        graph.add_node("observe_handle", self._node_observe_handle)
+        graph.add_node("finalize", self._node_finalize)
+
+        graph.set_entry_point("deduplicate")
+        graph.add_conditional_edges("deduplicate", self._after_deduplicate, {"finalize": "finalize", "message_cache": "message_cache"})
+        graph.add_edge("message_cache", "context_extract")
+        graph.add_edge("context_extract", "signal_detect")
+        graph.add_conditional_edges("signal_detect", self._after_signal_detect, {"finalize": "finalize", "semantic_lift": "semantic_lift"})
+        graph.add_edge("semantic_lift", "route")
+        graph.add_edge("route", "select_decision")
+        graph.add_conditional_edges(
+            "select_decision",
+            self._next_decision_target,
+            {
+                "knowledge_store": "knowledge_store",
+                "task_store": "task_store",
+                "observe_handle": "observe_handle",
+                "finalize": "finalize",
+            },
+        )
+        graph.add_edge("knowledge_store", "select_decision")
+        graph.add_edge("task_store", "select_decision")
+        graph.add_edge("observe_handle", "select_decision")
+        graph.add_edge("finalize", END)
+        return graph.compile()
+
+    def _node_deduplicate(self, state: EngineGraphState) -> dict[str, Any]:
+        message = state["message"]
+        result = state["result"]
         if self.runtime_state.contains(message.message_id):
             result.skipped = True
-            self._append_result(result)
-            return result
+            return {"result": result}
+        if self.config.step_trace_enabled:
+            trace_start(message_id=message.message_id, chat_id=message.chat_id, content=message.content_text)
+            return {"trace_started": True}
+        return {}
 
-        try:
-            if self.config.step_trace_enabled:
-                trace_start(message_id=message.message_id, chat_id=message.chat_id, content=message.content_text)
+    @staticmethod
+    def _after_deduplicate(state: EngineGraphState) -> str:
+        return "finalize" if state["result"].skipped else "message_cache"
 
-            if self.config.step_trace_enabled:
-                trace_node(message_id=message.message_id, node_name="message_cache")
-            self.chat_store.append(message)
+    def _node_message_cache(self, state: EngineGraphState) -> dict[str, Any]:
+        message = state["message"]
+        if self.config.step_trace_enabled:
+            trace_node(message_id=message.message_id, node_name="message_cache")
+        self.chat_store.append(message)
+        return {}
 
-            if self.config.step_trace_enabled:
-                trace_node(message_id=message.message_id, node_name="context_extract")
+    def _node_context_extract(self, state: EngineGraphState) -> dict[str, Any]:
+        message = state["message"]
+        if self.config.step_trace_enabled:
+            trace_node(message_id=message.message_id, node_name="context_extract")
+        context_rows = self.chat_store.get_chat_messages(message.chat_id)[-max(1, int(self.config.context_window_size)) :]
+        message_events = [item for item in (event_row_to_message_event(row) for row in context_rows) if item is not None]
+        return {"simple_messages": [item.get_simple_message() for item in message_events]}
 
-            if self.config.step_trace_enabled:
-                trace_node(message_id=message.message_id, node_name="context_extract")
-            context_rows = self.chat_store.get_chat_messages(message.chat_id)[-max(1, int(self.config.context_window_size)) :]
-            message_events = [item for item in (event_row_to_message_event(row) for row in context_rows) if item is not None]
-            
-            # message_events, dropped = denoise_messages(message_events)
-            # result.denoise_filtered_count = int(dropped)
-            # if self.config.step_trace_enabled:
-            #     trace_node(message_id=message.message_id, node_name="message_denoise")
-            
-            simple_messages = [message.get_simple_message() for message in message_events]
-            if self.config.step_trace_enabled:
-                trace_node(message_id=message.message_id, node_name="signal_detect")
-            detection = detect_candidates(simple_messages, candidate_threshold=self.config.candidate_threshold)
-            current_candidates = list(detection.candidates)
-            result.candidate_count = len(current_candidates)
-            if not current_candidates:
-                self.runtime_state.add(message.message_id)
-                self._append_result(result)
-                return result
+    def _node_signal_detect(self, state: EngineGraphState) -> dict[str, Any]:
+        message = state["message"]
+        result = state["result"]
+        if self.config.step_trace_enabled:
+            trace_node(message_id=message.message_id, node_name="signal_detect")
+        detection = detect_candidates(state.get("simple_messages", []), candidate_threshold=self.config.candidate_threshold)
+        candidates = list(detection.candidates)
+        result.candidate_count = len(candidates)
+        return {"result": result, "current_candidates": candidates}
 
-            if self.config.step_trace_enabled:
-                trace_node(message_id=message.message_id, node_name="semantic_lift")
-            lift_result = lift_candidates(current_candidates, simple_messages)
-            result.warnings.extend(lift_result.warnings)
+    @staticmethod
+    def _after_signal_detect(state: EngineGraphState) -> str:
+        return "semantic_lift" if state.get("current_candidates") else "finalize"
 
+    def _node_semantic_lift(self, state: EngineGraphState) -> dict[str, Any]:
+        message = state["message"]
+        result = state["result"]
+        if self.config.step_trace_enabled:
+            trace_node(message_id=message.message_id, node_name="semantic_lift")
+        lift_result = lift_candidates(list(state.get("current_candidates", [])), state.get("simple_messages", []))
+        result.warnings.extend(lift_result.warnings)
+        return {"result": result, "cards": lift_result.cards}
+
+    def _node_route(self, state: EngineGraphState) -> dict[str, Any]:
+        message = state["message"]
+        result = state["result"]
+        if self.config.step_trace_enabled:
+            trace_node(message_id=message.message_id, node_name="route")
+        decisions = route_cards(state.get("cards", []), knowledge_threshold=self.config.knowledge_threshold, task_threshold=self.config.task_threshold)
+        for decision in decisions:
+            result.routed_counts[decision.target_pool] = result.routed_counts.get(decision.target_pool, 0) + 1
+        return {"result": result, "decisions": decisions, "decision_index": 0}
+
+    @staticmethod
+    def _node_select_decision(state: EngineGraphState) -> dict[str, Any]:
+        del state
+        return {}
+
+    @staticmethod
+    def _next_decision_target(state: EngineGraphState) -> str:
+        decisions = state.get("decisions", [])
+        index = int(state.get("decision_index", 0))
+        if index >= len(decisions):
+            return "finalize"
+        target = decisions[index].target_pool
+        if target == "knowledge":
+            return "knowledge_store"
+        if target == "task":
+            return "task_store"
+        return "observe_handle"
+
+    def _current_decision_and_card(self, state: EngineGraphState) -> tuple[Any | None, LiftedCard | None]:
+        decisions = state.get("decisions", [])
+        index = int(state.get("decision_index", 0))
+        if index >= len(decisions):
+            return None, None
+        decision = decisions[index]
+        card = next((item for item in state.get("cards", []) if item.card_id == decision.card_id), None)
+        return decision, card
+
+    def _node_knowledge_store(self, state: EngineGraphState) -> dict[str, Any]:
+        message = state["message"]
+        result = state["result"]
+        decision, card = self._current_decision_and_card(state)
+        if decision is not None and card is not None:
             if self.config.step_trace_enabled:
-                trace_node(message_id=message.message_id, node_name="route")
-            decisions = route_cards(
-                lift_result.cards,
-                knowledge_threshold=self.config.knowledge_threshold,
-                task_threshold=self.config.task_threshold,
+                trace_node(message_id=message.message_id, node_name="knowledge_store")
+            decision.stored_id = save_knowledge(self.state_store, card, vector_store=self.vector_store)
+            if self.config.step_trace_enabled:
+                trace_node(message_id=message.message_id, node_name="observe_logic2_check")
+            for item in apply_logic2_on_knowledge(
+                card=card,
+                state_store=self.state_store,
+                threshold=self.config.observe_ferment_threshold,
+                base_score=self.config.observe_logic2_base,
+            ):
+                self._append_observe_ferment_event(message.message_id, card.card_id, item.to_dict())
+            self._process_observe_pop(message=message, result=result)
+        return {"result": result, "decision_index": int(state.get("decision_index", 0)) + 1}
+
+    def _node_task_store(self, state: EngineGraphState) -> dict[str, Any]:
+        message = state["message"]
+        result = state["result"]
+        failed_attempts = list(state.get("failed_attempts", []))
+        trace_status = str(state.get("trace_status", "ok"))
+        decision, card = self._current_decision_and_card(state)
+        if decision is not None and card is not None:
+            task_card = card
+            if self.config.rag_enabled:
+                if self.config.step_trace_enabled:
+                    trace_node(message_id=message.message_id, node_name="rag_retrieve_task")
+                query = f"{card.summary} {card.problem} {card.suggestion}".strip()
+                try:
+                    hits = retrieve(self.vector_store, query=query, top_k=self.config.rag_top_k, min_score=self.config.rag_min_score)
+                except Exception as exc:
+                    hits = []
+                    result.warnings.append(f"task rag retrieval failed: {exc}")
+                if hits:
+                    result.rag_retrieval_count += 1
+                    task_card = enhance_task_card_with_rag(card, hits)
+            if self.config.step_trace_enabled:
+                trace_node(message_id=message.message_id, node_name="task_store")
+            task_result = save_task(
+                store=self.state_store,
+                card=task_card,
+                run_id=self._build_run_id(message),
+                push_config=TaskPushConfig(enabled=self.config.task_push_enabled, chat_id=self.config.task_push_chat_id, env_file=self.config.env_file),
             )
-            for decision in decisions:
-                result.routed_counts[decision.target_pool] = result.routed_counts.get(decision.target_pool, 0) + 1
+            decision.stored_id = task_result.task_id
+            if self.config.step_trace_enabled:
+                trace_node(message_id=message.message_id, node_name="observe_logic3_check")
+            for item in apply_logic3_on_task(
+                card=task_card,
+                state_store=self.state_store,
+                threshold=self.config.observe_ferment_threshold,
+                base_score=self.config.observe_logic3_base,
+            ):
+                self._append_observe_ferment_event(message.message_id, task_card.card_id, item.to_dict())
+            self._process_observe_pop(message=message, result=result)
+            result.task_push_attempted += 1
+            if task_result.push_attempt is not None:
+                if self.config.step_trace_enabled:
+                    trace_node(message_id=message.message_id, node_name="task_push")
+                if task_result.push_attempt.status == "sent":
+                    result.task_push_sent += 1
+                elif task_result.push_attempt.status == "failed":
+                    result.task_push_failed += 1
+                    trace_status = "failed"
+                    result.errors.append(task_result.push_attempt.error)
+                    failed_attempts.append(task_result.push_attempt)
+        return {
+            "result": result,
+            "failed_attempts": failed_attempts,
+            "trace_status": trace_status,
+            "decision_index": int(state.get("decision_index", 0)) + 1,
+        }
 
-            push_cfg = TaskPushConfig(
-                enabled=self.config.task_push_enabled,
-                chat_id=self.config.task_push_chat_id,
-                env_file=self.config.env_file,
-            )
-            failed_attempts: list[TaskPushAttempt] = []
-            for decision in decisions:
-                card = next((item for item in lift_result.cards if item.card_id == decision.card_id), None)
-                if card is None:
-                    continue
-                if decision.target_pool == "knowledge":
+    def _node_observe_handle(self, state: EngineGraphState) -> dict[str, Any]:
+        message = state["message"]
+        result = state["result"]
+        trace_status = str(state.get("trace_status", "ok"))
+        decision, card = self._current_decision_and_card(state)
+        if decision is not None and card is not None:
+            answered_this_decision = False
+            should_question = is_question_with_llm(summary=card.summary, problem=card.problem, content=message.content_text)
+            if should_question:
+                result.observe_question_count += 1
+            if should_question and self.config.observe_auto_reply_enabled and self.config.rag_enabled:
+                if self.config.step_trace_enabled:
+                    trace_node(message_id=message.message_id, node_name="rag_retrieve_observe")
+                observe_query = f"{card.summary} {card.problem} {message.content_text}".strip()
+                try:
+                    hits = retrieve(self.vector_store, query=observe_query, top_k=self.config.rag_top_k, min_score=self.config.rag_min_score)
+                except Exception as exc:
+                    hits = []
+                    result.warnings.append(f"observe rag retrieval failed: {exc}")
+                if hits:
+                    result.rag_retrieval_count += 1
+                answer_result = try_answer_with_rag(observe_query, hits)
+                if answer_result.can_answer:
                     if self.config.step_trace_enabled:
-                        trace_node(message_id=message.message_id, node_name="knowledge_store")
-                    decision.stored_id = save_knowledge(self.state_store, card, vector_store=self.vector_store)
-                    if self.config.step_trace_enabled:
-                        trace_node(message_id=message.message_id, node_name="observe_logic2_check")
-                    ferment_results = apply_logic2_on_knowledge(
-                        card=card,
-                        state_store=self.state_store,
-                        threshold=self.config.observe_ferment_threshold,
-                        base_score=self.config.observe_logic2_base,
-                    )
-                    for item in ferment_results:
-                        self._append_observe_ferment_event(message.message_id, card.card_id, item.to_dict())
-                    self._process_observe_pop(message=message, result=result)
-                elif decision.target_pool == "task":
-                    task_card = card
-                    if self.config.rag_enabled:
-                        if self.config.step_trace_enabled:
-                            trace_node(message_id=message.message_id, node_name="rag_retrieve_task")
-                        query = f"{card.summary} {card.problem} {card.suggestion}".strip()
-                        try:
-                            hits = retrieve(
-                                self.vector_store,
-                                query=query,
-                                top_k=self.config.rag_top_k,
-                                min_score=self.config.rag_min_score,
-                            )
-                        except Exception as exc:
-                            hits = []
-                            result.warnings.append(f"task rag retrieval failed: {exc}")
-                        if hits:
-                            result.rag_retrieval_count += 1
-                            task_card = enhance_task_card_with_rag(card, hits)
-                    if self.config.step_trace_enabled:
-                        trace_node(message_id=message.message_id, node_name="task_store")
-                    task_result = save_task(store=self.state_store, card=task_card, run_id=self._build_run_id(message), push_config=push_cfg)
-                    decision.stored_id = task_result.task_id
-                    if self.config.step_trace_enabled:
-                        trace_node(message_id=message.message_id, node_name="observe_logic3_check")
-                    ferment_results = apply_logic3_on_task(
-                        card=task_card,
-                        state_store=self.state_store,
-                        threshold=self.config.observe_ferment_threshold,
-                        base_score=self.config.observe_logic3_base,
-                    )
-                    for item in ferment_results:
-                        self._append_observe_ferment_event(message.message_id, task_card.card_id, item.to_dict())
-                    self._process_observe_pop(message=message, result=result)
-                    result.task_push_attempted += 1
-                    if task_result.push_attempt is not None:
-                        if self.config.step_trace_enabled:
-                            trace_node(message_id=message.message_id, node_name="task_push")
-                        if task_result.push_attempt.status == "sent":
-                            result.task_push_sent += 1
-                        elif task_result.push_attempt.status == "failed":
-                            result.task_push_failed += 1
-                            trace_status = "failed"
-                            result.errors.append(task_result.push_attempt.error)
-                            failed_attempts.append(task_result.push_attempt)
-                else:
-                    answered_this_decision = False
-                    should_question = is_question_with_llm(summary=card.summary, problem=card.problem, content=message.content_text)
-                    if should_question:
-                        result.observe_question_count += 1
-                    if should_question and self.config.observe_auto_reply_enabled and self.config.rag_enabled:
-                        if self.config.step_trace_enabled:
-                            trace_node(message_id=message.message_id, node_name="rag_retrieve_observe")
-                        observe_query = f"{card.summary} {card.problem} {message.content_text}".strip()
-                        try:
-                            hits = retrieve(
-                                self.vector_store,
-                                query=observe_query,
-                                top_k=self.config.rag_top_k,
-                                min_score=self.config.rag_min_score,
-                            )
-                        except Exception as exc:
-                            hits = []
-                            result.warnings.append(f"observe rag retrieval failed: {exc}")
-                        if hits:
-                            result.rag_retrieval_count += 1
-                        answer_result = try_answer_with_rag(observe_query, hits)
-                        if answer_result.can_answer:
-                            if self.config.step_trace_enabled:
-                                trace_node(message_id=message.message_id, node_name="observe_reply")
-                            sent = push_text_message(chat_id=message.chat_id, text=answer_result.answer, env_file=self.config.env_file)
-                            self._append_observe_reply_event(
-                                ObserveReplyEvent(
-                                    message_id=message.message_id,
-                                    chat_id=message.chat_id,
-                                    query=observe_query,
-                                    status=sent.status,
-                                    answer=answer_result.answer,
-                                    error=sent.error,
-                                    hit_count=len(answer_result.hits or []),
-                                )
-                            )
-                            if sent.status == "sent":
-                                result.observe_answered_count += 1
-                                answered_this_decision = True
-                            else:
-                                result.errors.append(sent.error)
-                                trace_status = "failed"
-                        else:
-                            result.observe_fallback_count += 1
-                    if (not answered_this_decision) or (not should_question):
-                        if should_question and not answered_this_decision:
-                            result.observe_fallback_count += 1
-                        if self.config.step_trace_enabled:
-                            trace_node(message_id=message.message_id, node_name="observe_store")
-                        decision.stored_id = save_observe(self.state_store, card)
-                        if self.config.step_trace_enabled:
-                            trace_node(message_id=message.message_id, node_name="observe_logic1_check")
-                        ferment_result = apply_logic1_on_observe_add(
-                            card=card,
-                            message=message,
-                            state_store=self.state_store,
-                            threshold=self.config.observe_ferment_threshold,
-                            base_score=self.config.observe_logic1_base,
+                        trace_node(message_id=message.message_id, node_name="observe_reply")
+                    sent = push_text_message(chat_id=message.chat_id, text=answer_result.answer, env_file=self.config.env_file)
+                    self._append_observe_reply_event(
+                        ObserveReplyEvent(
+                            message_id=message.message_id,
+                            chat_id=message.chat_id,
+                            query=observe_query,
+                            status=sent.status,
+                            answer=answer_result.answer,
+                            error=sent.error,
+                            hit_count=len(answer_result.hits or []),
                         )
-                        if ferment_result is not None:
-                            self._append_observe_ferment_event(message.message_id, card.card_id, ferment_result.to_dict())
-                        self._process_observe_pop(message=message, result=result)
-            if failed_attempts:
-                queue_failed_pushes(self.config.state_dir, failed_attempts)
+                    )
+                    if sent.status == "sent":
+                        result.observe_answered_count += 1
+                        answered_this_decision = True
+                    else:
+                        result.errors.append(sent.error)
+                        trace_status = "failed"
+                else:
+                    result.observe_fallback_count += 1
+            if (not answered_this_decision) or (not should_question):
+                if should_question and not answered_this_decision:
+                    result.observe_fallback_count += 1
+                if self.config.step_trace_enabled:
+                    trace_node(message_id=message.message_id, node_name="observe_store")
+                decision.stored_id = save_observe(self.state_store, card)
+                if self.config.step_trace_enabled:
+                    trace_node(message_id=message.message_id, node_name="observe_logic1_check")
+                ferment_result = apply_logic1_on_observe_add(
+                    card=card,
+                    message=message,
+                    state_store=self.state_store,
+                    threshold=self.config.observe_ferment_threshold,
+                    base_score=self.config.observe_logic1_base,
+                )
+                if ferment_result is not None:
+                    self._append_observe_ferment_event(message.message_id, card.card_id, ferment_result.to_dict())
+                self._process_observe_pop(message=message, result=result)
+        return {"result": result, "trace_status": trace_status, "decision_index": int(state.get("decision_index", 0)) + 1}
 
+    def _node_finalize(self, state: EngineGraphState) -> dict[str, Any]:
+        message = state["message"]
+        result = state["result"]
+        failed_attempts = list(state.get("failed_attempts", []))
+        if failed_attempts:
+            queue_failed_pushes(self.config.state_dir, failed_attempts)
+        if not result.skipped:
             self.runtime_state.add(message.message_id)
-            self._append_result(result)
-            if self.config.step_trace_enabled:
+        self._append_result(result)
+        if self.config.step_trace_enabled and state.get("trace_started"):
+            if not result.skipped:
                 trace_node(message_id=message.message_id, node_name="done")
-            return result
-        finally:
-            if self.config.step_trace_enabled:
-                trace_finish(message_id=message.message_id, suffix_status=trace_status)
+            trace_finish(message_id=message.message_id, suffix_status=str(state.get("trace_status", "ok")))
+        return {"result": result}
 
     def _append_result(self, result: EngineResult) -> None:
         append_jsonl(self.events_path, [result.to_dict()])
@@ -377,11 +492,7 @@ class Engine:
             if self.config.step_trace_enabled:
                 trace_node(message_id=message.message_id, node_name="observe_pop_route")
             observe_card = self._build_observe_card(item)
-            decisions = route_cards(
-                [observe_card],
-                knowledge_threshold=self.config.knowledge_threshold,
-                task_threshold=self.config.task_threshold,
-            )
+            decisions = route_cards([observe_card], knowledge_threshold=self.config.knowledge_threshold, task_threshold=self.config.task_threshold)
             if not decisions:
                 continue
             decision = decisions[0]

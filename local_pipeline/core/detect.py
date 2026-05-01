@@ -1,12 +1,10 @@
 ﻿from __future__ import annotations
 
 import hashlib
-import json
 import re
 from dataclasses import dataclass
-from typing import Any
 
-from llm.client import LLMClient, LLMConfig
+import llm.client as llm_client
 
 from ..shared.models import InspirationCandidate
 from ..prompt import get_prompt
@@ -41,6 +39,13 @@ def _is_noise(text: str) -> bool:
     return False
 
 
+def _message_content(text: str) -> str:
+    match = _SIMPLE_MSG_RE.match(text)
+    if match:
+        return match.group("content").strip()
+    return text.strip()
+
+
 def _score_message_rule(content: str, duplicate_count: int) -> tuple[dict[str, float], list[str]]:
     novelty = 1.0 / float(1 + max(0, duplicate_count))
     action_hits = sum(1 for term in ACTION_TERMS if term in content)
@@ -71,23 +76,6 @@ def _score_message_rule(content: str, duplicate_count: int) -> tuple[dict[str, f
     }, reasons
 
 
-def _extract_json(text: str) -> dict[str, Any] | None:
-    stripped = text.strip()
-    try:
-        payload = json.loads(stripped)
-        return payload if isinstance(payload, dict) else None
-    except json.JSONDecodeError:
-        pass
-    match = re.search(r"\{.*\}", stripped, re.DOTALL)
-    if not match:
-        return None
-    try:
-        payload = json.loads(match.group(0))
-    except json.JSONDecodeError:
-        return None
-    return payload if isinstance(payload, dict) else None
-
-
 def _score_total(score_breakdown: dict[str, float]) -> float:
     return (
         0.25 * score_breakdown["novelty"]
@@ -99,27 +87,35 @@ def _score_total(score_breakdown: dict[str, float]) -> float:
 
 def _score_with_llm(*, context_lines: list[str], current_line: str) -> dict[str, float] | None:
     # 信号检测任务：输出固定JSON格式，只需4个数值，使用最快参数
-    config = LLMConfig.from_env(max_tokens=128, temperature=0.0, top_p=0.1)
+    config = llm_client.LLMConfig.from_env(max_tokens=128, temperature=0.0, top_p=0.1)
     if config.missing_fields():
         return None
-    client = LLMClient(config)
     try:
         system_prompt = get_prompt("detect.system_prompt")
         user_prompt = get_prompt("detect.user_prompt").format(current_line=current_line, context_lines="\n".join(context_lines))
     except Exception:
         return None
-    
-    response = client.build_reply(system_prompt, user_prompt)
-    if response.startswith("LLM "):
+
+    payload = llm_client.invoke_structured(
+        config=config,
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+        schema=llm_client.DetectScores,
+    )
+    if payload is None:
         return None
-    payload = _extract_json(response)
-    if not payload:
-        return None
+    raw_scores = {
+        "novelty": float(payload.novelty),
+        "actionability": float(payload.actionability),
+        "impact": float(payload.impact),
+        "emotion": float(payload.emotion),
+    }
+    scale = 1.0 if max(raw_scores.values(), default=0.0) <= 1.0 else 100.0
     score_breakdown = {
-        "novelty": payload.get("novelty")/100,
-        "actionability": payload.get("actionability")/100,
-        "impact": payload.get("impact")/100,
-        "emotion": payload.get("emotion")/100,
+        "novelty": round(raw_scores["novelty"] / scale, 4),
+        "actionability": round(raw_scores["actionability"] / scale, 4),
+        "impact": round(raw_scores["impact"] / scale, 4),
+        "emotion": round(raw_scores["emotion"] / scale, 4),
     }
     return score_breakdown
 
@@ -129,7 +125,7 @@ def detect_candidates(messages: list[str], *, candidate_threshold: float = 0.45)
     if not filtered:
         return DetectionResult(messages=[], candidates=[])
 
-    current_content = filtered[-1]
+    current_content = _message_content(filtered[-1])
     
 
     context_raw = filtered[:-1]

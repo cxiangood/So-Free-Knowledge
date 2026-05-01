@@ -1,10 +1,8 @@
 from __future__ import annotations
 
 import json
-import re
-from typing import Any
 
-from llm.client import LLMClient, LLMConfig
+import llm.client as llm_client
 
 from ..prompt import get_prompt
 from ..shared.models import LiftedCard, RouteDecision
@@ -30,23 +28,6 @@ def _route_by_rule(card: LiftedCard, *, knowledge_threshold: float, task_thresho
     return target, reason_codes
 
 
-def _extract_json(text: str) -> dict[str, Any] | None:
-    stripped = text.strip()
-    try:
-        payload = json.loads(stripped)
-        return payload if isinstance(payload, dict) else None
-    except json.JSONDecodeError:
-        pass
-    match = re.search(r"\{.*\}", stripped, re.DOTALL)
-    if not match:
-        return None
-    try:
-        payload = json.loads(match.group(0))
-    except json.JSONDecodeError:
-        return None
-    return payload if isinstance(payload, dict) else None
-
-
 def _route_by_llm(
     card: LiftedCard,
     *,
@@ -54,7 +35,7 @@ def _route_by_llm(
     task_threshold: float,
 ) -> tuple[str, list[str]] | None:
     # 路由判断任务：三选一输出，非常简单，使用最快参数
-    config = LLMConfig.from_env(max_tokens=64, temperature=0.0, top_p=0.1)
+    config = llm_client.LLMConfig.from_env(max_tokens=64, temperature=0.0, top_p=0.1)
     if config.missing_fields():
         return None
     try:
@@ -66,17 +47,18 @@ def _route_by_llm(
         )
     except Exception:
         return None
-    response = LLMClient(config).build_reply(system_prompt, user_prompt)
-    if response.startswith("LLM "):
+    payload = llm_client.invoke_structured(
+        config=config,
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+        schema=llm_client.RouteOutput,
+    )
+    if payload is None:
         return None
-    payload = _extract_json(response)
-    if not payload:
-        return None
-    target = str(payload.get("target_pool", "")).strip().lower()
+    target = str(payload.target_pool).strip().lower()
     if target not in {"knowledge", "task", "observe"}:
         return None
-    reasons_raw = payload.get("reason_codes", [])
-    reasons = [str(x).strip() for x in reasons_raw if str(x).strip()] if isinstance(reasons_raw, list) else []
+    reasons = [str(x).strip() for x in payload.reason_codes if str(x).strip()]
     return target, (reasons or ["llm-route"])
 
 
