@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 from pathlib import Path
 from typing import Any, Callable
 
@@ -25,6 +27,7 @@ ClientFactory = Callable[[], Any]
 CollectorFn = Callable[..., JsonDict]
 BuilderFn = Callable[..., JsonDict]
 IdentityFn = Callable[..., JsonDict]
+PUSH_DEDUPE_WINDOW_SECONDS = 6 * 3600
 
 
 def resolve_push_target(
@@ -194,35 +197,48 @@ def build_personal_brief_command_result(
         summary_push_result: JsonDict | None = None
         interest_push_result: JsonDict | None = None
         profile_push_result: JsonDict | None = None
+        push_skips: list[dict[str, str]] = []
         push_errors: list[dict[str, str]] = []
         if push_summary_card:
             try:
-                summary_push_result = client.send_message(
+                summary_push_result, was_skipped = _send_message_with_dedupe(
+                    client=client,
+                    output_dir=args.output_dir,
                     receive_id=receive_id,
                     receive_id_type=receive_id_type,
-                    msg_type="interactive",
+                    card_type="summary",
                     content=report["card"],
                 )
+                if was_skipped:
+                    push_skips.append({"card": "summary", "reason": "duplicate_content"})
             except Exception as exc:
                 push_errors.append({"card": "summary", "error": str(exc)})
         if push_interest_card:
             try:
-                interest_push_result = client.send_message(
+                interest_push_result, was_skipped = _send_message_with_dedupe(
+                    client=client,
+                    output_dir=args.output_dir,
                     receive_id=receive_id,
                     receive_id_type=receive_id_type,
-                    msg_type="interactive",
+                    card_type="interest",
                     content=report["interest_card"],
                 )
+                if was_skipped:
+                    push_skips.append({"card": "interest", "reason": "duplicate_content"})
             except Exception as exc:
                 push_errors.append({"card": "interest", "error": str(exc)})
         if _should_prompt_profile_setup(user_profile):
             try:
-                profile_push_result = client.send_message(
+                profile_push_result, was_skipped = _send_message_with_dedupe(
+                    client=client,
+                    output_dir=args.output_dir,
                     receive_id=receive_id,
                     receive_id_type=receive_id_type,
-                    msg_type="interactive",
+                    card_type="profile_setup",
                     content=_build_profile_setup_card(user_profile, online_meta),
                 )
+                if was_skipped:
+                    push_skips.append({"card": "profile_setup", "reason": "duplicate_content"})
             except Exception as exc:
                 push_errors.append({"card": "profile_setup", "error": str(exc)})
         base_meta["push"] = {
@@ -240,6 +256,7 @@ def build_personal_brief_command_result(
             "interest_message_id": (interest_push_result or {}).get("message_id", ""),
             "profile_setup_prompted": profile_push_result is not None,
             "profile_setup_message_id": (profile_push_result or {}).get("message_id", ""),
+            "skipped": push_skips,
             "errors": push_errors,
         }
     else:
@@ -423,35 +440,48 @@ def recommend_command_result(
         summary_push_result: JsonDict | None = None
         interest_push_result: JsonDict | None = None
         profile_push_result: JsonDict | None = None
+        push_skips: list[dict[str, str]] = []
         push_errors: list[dict[str, str]] = []
         if push_summary_card:
             try:
-                summary_push_result = client.send_message(
+                summary_push_result, was_skipped = _send_message_with_dedupe(
+                    client=client,
+                    output_dir=args.output_dir,
                     receive_id=receive_id,
                     receive_id_type=receive_id_type,
-                    msg_type="interactive",
+                    card_type="summary",
                     content=report["card"],
                 )
+                if was_skipped:
+                    push_skips.append({"card": "summary", "reason": "duplicate_content"})
             except Exception as exc:
                 push_errors.append({"card": "summary", "error": str(exc)})
         if push_interest_card:
             try:
-                interest_push_result = client.send_message(
+                interest_push_result, was_skipped = _send_message_with_dedupe(
+                    client=client,
+                    output_dir=args.output_dir,
                     receive_id=receive_id,
                     receive_id_type=receive_id_type,
-                    msg_type="interactive",
+                    card_type="interest",
                     content=report["interest_card"],
                 )
+                if was_skipped:
+                    push_skips.append({"card": "interest", "reason": "duplicate_content"})
             except Exception as exc:
                 push_errors.append({"card": "interest", "error": str(exc)})
         if _should_prompt_profile_setup(user_profile):
             try:
-                profile_push_result = client.send_message(
+                profile_push_result, was_skipped = _send_message_with_dedupe(
+                    client=client,
+                    output_dir=args.output_dir,
                     receive_id=receive_id,
                     receive_id_type=receive_id_type,
-                    msg_type="interactive",
+                    card_type="profile_setup",
                     content=_build_profile_setup_card(user_profile, online_meta),
                 )
+                if was_skipped:
+                    push_skips.append({"card": "profile_setup", "reason": "duplicate_content"})
             except Exception as exc:
                 push_errors.append({"card": "profile_setup", "error": str(exc)})
         base_meta["push"] = {
@@ -465,6 +495,7 @@ def recommend_command_result(
             "interest_message_id": (interest_push_result or {}).get("message_id", ""),
             "profile_setup_prompted": profile_push_result is not None,
             "profile_setup_message_id": (profile_push_result or {}).get("message_id", ""),
+            "skipped": push_skips,
             "errors": push_errors,
         }
     else:
@@ -517,3 +548,47 @@ def _build_profile_setup_card(user_profile: JsonDict, online_meta: JsonDict) -> 
     card = build_profile_review_card(profile=profile_payload, source_meta=source_meta)
     card["header"]["subtitle"]["content"] = "推荐卡片已推送，请确认是否设置画像"
     return card
+
+
+def _send_message_with_dedupe(
+    *,
+    client: Any,
+    output_dir: str,
+    receive_id: str,
+    receive_id_type: str,
+    card_type: str,
+    content: JsonDict,
+) -> tuple[JsonDict | None, bool]:
+    state_file = Path(output_dir).expanduser() / "assistant_push_state.json"
+    state = _load_push_state(state_file)
+    cache_key = f"{receive_id_type}:{receive_id}:{card_type}"
+    payload_text = json.dumps(content, ensure_ascii=False, sort_keys=True)
+    payload_hash = hashlib.sha256(payload_text.encode("utf-8")).hexdigest()
+    current_bucket = state.get(cache_key, {})
+    last_hash = str(current_bucket.get("payload_hash") or "")
+    last_sent_at = int(current_bucket.get("sent_at") or 0)
+    if last_hash == payload_hash and last_sent_at > 0:
+        return None, True
+    result = client.send_message(
+        receive_id=receive_id,
+        receive_id_type=receive_id_type,
+        msg_type="interactive",
+        content=content,
+    )
+    state[cache_key] = {
+        "payload_hash": payload_hash,
+        "sent_at": 1,
+        "message_id": str((result or {}).get("message_id") or ""),
+    }
+    state_file.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+    return result, False
+
+
+def _load_push_state(state_file: Path) -> dict[str, Any]:
+    if not state_file.exists():
+        return {}
+    try:
+        data = json.loads(state_file.read_text(encoding="utf-8-sig"))
+    except json.JSONDecodeError:
+        return {}
+    return data if isinstance(data, dict) else {}

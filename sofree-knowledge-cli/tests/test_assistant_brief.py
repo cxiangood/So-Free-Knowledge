@@ -277,6 +277,7 @@ def test_interest_card_keeps_user_mentions_in_summary():
                 "message_id": "om_m1",
                 "chat_id": "oc_chat",
                 "content": "@Alice please confirm rollback plan today",
+                "mentions_target_user": True,
             }
         ],
         user_profile={"interests": ["发布", "回滚"]},
@@ -293,6 +294,7 @@ def test_interest_digest_accepts_at_user_without_interest_keyword_hit():
                 "message_id": "om_at_user",
                 "chat_id": "oc_chat",
                 "content": "@Bob please confirm this today",
+                "mentions_target_user": True,
             }
         ],
         user_profile={"interests": ["release", "risk"]},
@@ -321,6 +323,40 @@ def test_interest_digest_filters_low_information_placeholder_mentions():
     assert report["interest_digest"]["items"] == []
 
 
+def test_interest_digest_does_not_accept_messages_that_only_mention_other_people():
+    report = build_personal_brief(
+        documents=[{"doc_id": "d1", "title": "Any", "summary": "Any"}],
+        messages=[
+            {
+                "message_id": "m_relay_1",
+                "chat_id": "oc_chat",
+                "content": "@1 和 SoFree 说，让他生成一下午饭吃什么的计划",
+                "sender_name": "聂铭浚",
+                "openclaw_importance": 0.8,
+                "mentions_target_user": False,
+            },
+            {
+                "message_id": "m_relay_2",
+                "chat_id": "oc_chat",
+                "content": "为了有效协调@1和@2的交流，请提供以下关键信息：1. 交流主题",
+                "sender_name": "cli_a960422c68f81cc8",
+                "openclaw_importance": 0.9,
+                "mentions_target_user": False,
+            },
+            {
+                "message_id": "m_relay_3",
+                "chat_id": "oc_chat",
+                "content": "Task Assignment & Coordination Instructions 1. @1: Please share your food preferences",
+                "sender_name": "cli_a960422c68f81cc8",
+                "openclaw_importance": 0.9,
+                "mentions_target_user": False,
+            },
+        ],
+        user_profile={"interests": ["LLM", "产品设计", "飞书"]},
+    )
+    assert report["interest_digest"]["items"] == []
+
+
 def test_interest_digest_accepts_at_all_without_interest_keyword_hit():
     report = build_personal_brief(
         documents=[{"doc_id": "d1", "title": "Any", "summary": "Any"}],
@@ -336,4 +372,20 @@ def test_interest_digest_accepts_at_all_without_interest_keyword_hit():
     items = report["interest_digest"]["items"]
     assert len(items) == 1
     assert items[0]["message_id"] == "om_at_all"
+
+
+def test_interest_digest_does_not_accept_irrelevant_mentions_when_not_targeted():
+    report = build_personal_brief(
+        documents=[{"doc_id": "d1", "title": "Any", "summary": "Any"}],
+        messages=[
+            {
+                "message_id": "om_not_me",
+                "chat_id": "oc_chat",
+                "content": "@Bob please confirm this today",
+                "mentions_target_user": False,
+            }
+        ],
+        user_profile={"interests": ["release", "risk"]},
+    )
+    assert report["interest_digest"]["items"] == []
 import json

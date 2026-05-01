@@ -318,6 +318,7 @@ def _normalize_message(item: dict[str, Any]) -> dict[str, Any]:
         "message_id": str(item.get("message_id") or item.get("id") or ""),
         "chat_id": str(item.get("chat_id") or ""),
         "sender_name": _extract_message_sender_name(item),
+        "mentions_target_user": bool(item.get("mentions_target_user", False)),
         "message_url": str(
             item.get("message_url")
             or item.get("open_message_url")
@@ -686,7 +687,7 @@ def _build_interest_digest(messages: list[dict[str, Any]], interests: list[str],
             continue
         if _is_noise_interest_text(normalized_text):
             continue
-        mention_signal = _mention_signal_text(raw_text or base_text)
+        mention_signal = _mention_signal_text(message, raw_text or base_text)
         hit_terms = [term for term in interest_terms if term in normalized_text.lower()]
         if mention_signal:
             hit_terms.append(mention_signal)
@@ -781,12 +782,12 @@ def _contains_interest_negative_context(text: str) -> bool:
     return any(pattern in lowered for pattern in INTEREST_NEGATIVE_CONTEXT_PATTERNS)
 
 
-def _mention_signal_text(text: str) -> str:
+def _mention_signal_text(message: dict[str, Any], text: str) -> str:
     value = str(text or "").strip()
     lowered = value.lower()
     if any(token in lowered for token in AT_ALL_KEYWORDS):
         return "@all"
-    if re.search(r"@\S+", value):
+    if bool(message.get("mentions_target_user")):
         return "@mention"
     return ""
 
@@ -809,8 +810,6 @@ def _is_low_information_mention_message(
         return False
     if signal_hits > 0 or urgency_hit:
         return False
-    if (openclaw_importance or 0.0) >= 0.45:
-        return False
 
     without_mentions = re.sub(r"@\S+", " ", str(normalized_text or ""))
     compact = re.sub(r"[\s，。！？,.!?:：~～、-]+", "", without_mentions)
@@ -820,8 +819,8 @@ def _is_low_information_mention_message(
         return True
     if hit_term_count <= 1 and len(compact) < 10:
         return True
-    if re.fullmatch(r"(和)?(讨论一下)?项目形态", compact):
-        return True
+    if (openclaw_importance or 0.0) >= 0.45:
+        return False
     return False
 
 

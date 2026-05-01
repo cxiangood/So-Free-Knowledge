@@ -60,6 +60,7 @@ def collect_online_personal_inputs(
 
     # 收集用户ID到昵称的映射
     user_id_to_name: dict[str, str] = {}
+    target_aliases = _build_target_aliases(client, resolved_target, user_id_to_name)
 
     messages: list[dict[str, Any]] = []
     all_messages: list[dict[str, Any]] = []
@@ -105,6 +106,7 @@ def collect_online_personal_inputs(
                     "chat_id": msg.get("chat_id", chat_id),
                     "sender_name": sender_name,
                     "sender_id": sender_id,
+                    "mentions_target_user": _message_mentions_target_user(msg.get("content", ""), target_aliases),
                     "content": text,
                     "text": text,
                     "create_time": msg.get("create_time", ""),
@@ -418,6 +420,44 @@ def _normalize_message_text(
             normalized = normalized.replace(uid, name)
 
     return normalized
+
+
+def _build_target_aliases(
+    client: FeishuClient,
+    resolved_target: str,
+    user_id_to_name: dict[str, str],
+) -> set[str]:
+    aliases: set[str] = set()
+    normalized_target = str(resolved_target or "").strip()
+    if not normalized_target:
+        return aliases
+    aliases.add(normalized_target)
+    if normalized_target.startswith("ou_"):
+        aliases.add(normalized_target.removeprefix("ou_"))
+        user_info = _get_user_info(client, normalized_target)
+        display_name = str(user_info.get("name") or "").strip()
+        if display_name:
+            aliases.add(display_name)
+            user_id_to_name[normalized_target] = display_name
+    return {alias for alias in aliases if alias}
+
+
+def _message_mentions_target_user(raw_content: Any, target_aliases: set[str]) -> bool:
+    if not target_aliases:
+        return False
+    raw = str(raw_content or "")
+    lowered = raw.lower()
+    for alias in target_aliases:
+        normalized_alias = str(alias).strip()
+        if not normalized_alias:
+            continue
+        if f"@{normalized_alias}".lower() in lowered:
+            return True
+        if f"_user_{normalized_alias}".lower() in lowered:
+            return True
+        if normalized_alias.startswith("ou_") and normalized_alias.lower() in lowered:
+            return True
+    return False
 
 
 def _is_noise_message_text(text: str) -> bool:

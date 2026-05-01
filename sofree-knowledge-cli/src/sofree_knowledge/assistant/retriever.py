@@ -135,7 +135,7 @@ def _filter_messages_by_openclaw(messages: list[dict[str, Any]]) -> list[dict[st
         signal_hits = sum(1 for keyword in legacy.INTEREST_SIGNAL_KEYWORDS if keyword in lowered)
         urgency_hit = any(keyword in lowered for keyword in legacy.URGENCY_KEYWORDS)
         hit_term_count = max(1, signal_hits) if signal_hits > 0 else 0
-        mention_signal = legacy._mention_signal_text(signal_text)
+        mention_signal = legacy._mention_signal_text(message, signal_text)
         screen = legacy._openclaw_interest_screen(
             message=message,
             signal_hits=signal_hits,

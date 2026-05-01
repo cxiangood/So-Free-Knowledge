@@ -324,3 +324,47 @@ def test_collect_online_personal_inputs_resolves_wiki_title_from_get_node(monkey
     wiki_docs = [item for item in out["documents"] if item.get("doc_id") == "TZn0wSoSabc123"]
     assert wiki_docs
     assert wiki_docs[0]["title"] == "关键词提取排期"
+
+
+def test_collect_online_personal_inputs_marks_only_targeted_mentions(monkeypatch):
+    class MentionClient(FakeClient):
+        def list_chat_messages(self, chat_id, start_time="", end_time="", page_size=50, page_token="", sort="asc"):
+            return {
+                "items": [
+                    {
+                        "message_id": "m_target",
+                        "chat_id": chat_id,
+                        "msg_type": "text",
+                        "create_time": "1710000000",
+                        "sender": {"sender_id": {"open_id": "ou_other"}},
+                        "content": "@ou_target 请确认一下",
+                        "body": {"content": '{"text":"@ou_target 请确认一下"}'},
+                    },
+                    {
+                        "message_id": "m_other",
+                        "chat_id": chat_id,
+                        "msg_type": "text",
+                        "create_time": "1710000001",
+                        "sender": {"sender_id": {"open_id": "ou_other"}},
+                        "content": "@ou_someone_else 请确认一下",
+                        "body": {"content": '{"text":"@ou_someone_else 请确认一下"}'},
+                    },
+                ],
+                "has_more": False,
+                "page_token": "",
+            }
+
+    monkeypatch.setattr("sofree_knowledge.assistant_online.get_user_identity", lambda token_file=None: {"open_id": "ou_target"})
+    out = collect_online_personal_inputs(
+        client=MentionClient(),
+        target_user_id="",
+        include_visible_chats=True,
+        max_chats=5,
+        max_messages_per_chat=20,
+        max_drive_docs=10,
+        recent_days=3650,
+    )
+
+    by_id = {item["message_id"]: item for item in out["messages"]}
+    assert by_id["m_target"]["mentions_target_user"] is True
+    assert by_id["m_other"]["mentions_target_user"] is False
