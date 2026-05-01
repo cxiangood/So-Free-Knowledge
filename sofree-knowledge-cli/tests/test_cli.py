@@ -510,6 +510,53 @@ def test_assistant_recommend_trains_and_uses_dual_tower_when_samples_sufficient(
     assert (tmp_path / "assistant_dual_tower_model.json").exists()
 
 
+def test_assistant_recommend_push_uses_bot_client_and_prompts_profile_after_cards(monkeypatch, tmp_path, capsys):
+    send_order: list[str] = []
+
+    class FakeUserClient:
+        pass
+
+    class FakeBotClient:
+        def send_message(self, receive_id, msg_type, content, receive_id_type="chat_id"):
+            title = content.get("header", {}).get("title", {}).get("content", "")
+            send_order.append(title)
+            return {"message_id": f"msg_{len(send_order)}", "chat_id": "oc_push", "msg_type": msg_type}
+
+    monkeypatch.setattr(cli_module, "build_user_feishu_client", lambda args, require_token=False: FakeUserClient())
+    monkeypatch.setattr(cli_module, "build_bot_feishu_client", lambda: FakeBotClient())
+    monkeypatch.setattr(cli_module, "get_user_identity", lambda token_file=None: {"open_id": "ou_test"})
+    monkeypatch.setattr(
+        cli_module,
+        "collect_online_personal_inputs",
+        lambda **kwargs: {
+            "documents": [{"doc_id": "d1", "title": "发布流程", "summary": "今晚发布", "url": "", "updated_at": ""}],
+            "access_records": [],
+            "messages": [{"message_id": "m1", "chat_id": "oc_x", "text": "发布今天截止", "create_time": ""}],
+            "knowledge_items": [],
+            "resolved_target_user_id": "ou_test",
+            "meta": {"message_count": 1, "document_count": 1},
+        },
+    )
+
+    code = main(
+        [
+            "--output-dir",
+            str(tmp_path),
+            "assistant",
+            "recommend",
+            "--push",
+            "--output-format",
+            "json",
+        ]
+    )
+
+    out = json.loads(capsys.readouterr().out)
+    assert code == 0
+    assert out["meta"]["push"]["profile_setup_prompted"] is True
+    assert send_order[:2] == ["个人助理聚合建议", "群聊兴趣消息汇总"]
+    assert send_order[2] == "AI 画像初始化建议"
+
+
 def test_assistant_push_defaults_to_personal_open_id(monkeypatch, tmp_path, capsys):
     calls: list[dict[str, str]] = []
 
@@ -552,7 +599,8 @@ def test_assistant_push_defaults_to_personal_open_id(monkeypatch, tmp_path, caps
     assert calls[0]["receive_id_type"] == "open_id"
     assert calls[0]["receive_id"] == "ou_self"
     assert out["meta"]["push"]["receive_id_type"] == "open_id"
-    assert len(calls) == 2
+    assert len(calls) == 3
+    assert out["meta"]["push"]["profile_setup_prompted"] is True
     assert out["meta"]["push"]["summary_enabled"] is True
     assert out["meta"]["push"]["interest_enabled"] is True
     assert out["meta"]["push"]["doc_push_enabled"] is False
@@ -636,7 +684,8 @@ def test_assistant_push_card_also_pushes_interest_card(monkeypatch, tmp_path, ca
     out = json.loads(capsys.readouterr().out)
     assert code == 0
     assert out["ok"] is True
-    assert len(calls) == 2
+    assert len(calls) == 3
+    assert out["meta"]["push"]["profile_setup_prompted"] is True
     assert out["meta"]["push"]["interest_enabled"] is True
 
 
@@ -672,7 +721,8 @@ def test_assistant_push_both_cards_requested_keeps_single_card(monkeypatch, tmp_
     out = json.loads(capsys.readouterr().out)
     assert code == 0
     assert out["ok"] is True
-    assert len(calls) == 2
+    assert len(calls) == 3
+    assert out["meta"]["push"]["profile_setup_prompted"] is True
     assert out["meta"]["push"]["summary_enabled"] is True
     assert out["meta"]["push"]["interest_enabled"] is True
 

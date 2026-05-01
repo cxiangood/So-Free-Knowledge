@@ -122,6 +122,15 @@ INTEREST_NOISE_PATTERNS = (
 )
 
 AT_ALL_KEYWORDS = ("@所有人", "@all", "@everyone")
+GENERIC_MENTION_FOLLOWUPS = (
+    "回答一下",
+    "回复一下",
+    "讨论一下",
+    "看一下",
+    "确认一下",
+    "你好呀",
+    "有什么需要我帮忙的吗",
+)
 
 
 def build_personal_brief(
@@ -695,6 +704,16 @@ def _build_interest_digest(messages: list[dict[str, Any]], interests: list[str],
         if not openclaw_screen["accepted"]:
             continue
         openclaw_importance = _coerce_float(message.get("openclaw_importance"))
+        if _is_low_information_mention_message(
+            message=message,
+            normalized_text=normalized_text,
+            signal_hits=signal_hits,
+            urgency_hit=urgency_hit,
+            hit_term_count=len(hit_terms),
+            mention_signal=mention_signal,
+            openclaw_importance=openclaw_importance,
+        ):
+            continue
         if (
             mention_signal == ""
             and len(hit_terms) < 2
@@ -770,6 +789,40 @@ def _mention_signal_text(text: str) -> str:
     if re.search(r"@\S+", value):
         return "@mention"
     return ""
+
+
+def _is_low_information_mention_message(
+    *,
+    message: dict[str, Any],
+    normalized_text: str,
+    signal_hits: int,
+    urgency_hit: bool,
+    hit_term_count: int,
+    mention_signal: str,
+    openclaw_importance: float | None,
+) -> bool:
+    lowered = str(normalized_text or "").lower()
+    sender_name = str(message.get("sender_name") or "").strip().lower()
+    if sender_name.startswith("cli_") and "有什么需要我帮忙的吗" in lowered:
+        return True
+    if mention_signal != "@mention":
+        return False
+    if signal_hits > 0 or urgency_hit:
+        return False
+    if (openclaw_importance or 0.0) >= 0.45:
+        return False
+
+    without_mentions = re.sub(r"@\S+", " ", str(normalized_text or ""))
+    compact = re.sub(r"[\s，。！？,.!?:：~～、-]+", "", without_mentions)
+    if not compact:
+        return True
+    if any(phrase in compact for phrase in GENERIC_MENTION_FOLLOWUPS):
+        return True
+    if hit_term_count <= 1 and len(compact) < 10:
+        return True
+    if re.fullmatch(r"(和)?(讨论一下)?项目形态", compact):
+        return True
+    return False
 
 
 def _openclaw_interest_screen(

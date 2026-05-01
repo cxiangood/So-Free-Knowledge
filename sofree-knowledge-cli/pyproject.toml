@@ -15,6 +15,7 @@ dev = ["pytest>=8"]
 
 [project.scripts]
 sofree-knowledge = "sofree_knowledge.cli:main"
+sofree-knowledge-app = "sofree_knowledge.app.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/sofree_knowledge"]

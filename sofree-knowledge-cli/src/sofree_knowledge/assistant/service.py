@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .profile import (
+    build_profile_review_card,
     build_profile_overrides,
     build_retrieval_overrides,
     build_schedule_overrides,
@@ -59,6 +60,7 @@ def build_personal_brief_command_result(
     build_personal_brief: BuilderFn,
     get_user_identity: IdentityFn,
     client_factory: ClientFactory,
+    push_client_factory: ClientFactory | None = None,
 ) -> JsonDict:
     documents: list[JsonDict] = []
     access_records: list[JsonDict] = []
@@ -184,13 +186,14 @@ def build_personal_brief_command_result(
             resolved_target_user_id=resolved_target_user_id,
             get_user_identity=get_user_identity,
         )
-        client = client_factory()
+        client = push_client_factory() if push_client_factory is not None else client_factory()
         push_summary_card = bool(args.push_summary_card)
         push_interest_card = bool(args.push_interest_card)
         if not push_summary_card and not push_interest_card:
             push_interest_card = True
         summary_push_result: JsonDict | None = None
         interest_push_result: JsonDict | None = None
+        profile_push_result: JsonDict | None = None
         push_errors: list[dict[str, str]] = []
         if push_summary_card:
             try:
@@ -212,6 +215,16 @@ def build_personal_brief_command_result(
                 )
             except Exception as exc:
                 push_errors.append({"card": "interest", "error": str(exc)})
+        if _should_prompt_profile_setup(user_profile):
+            try:
+                profile_push_result = client.send_message(
+                    receive_id=receive_id,
+                    receive_id_type=receive_id_type,
+                    msg_type="interactive",
+                    content=_build_profile_setup_card(user_profile, online_meta),
+                )
+            except Exception as exc:
+                push_errors.append({"card": "profile_setup", "error": str(exc)})
         base_meta["push"] = {
             "enabled": True,
             "receive_id_type": receive_id_type,
@@ -225,6 +238,8 @@ def build_personal_brief_command_result(
             "summary_message_id": (summary_push_result or {}).get("message_id", ""),
             "interest_enabled": bool(push_interest_card),
             "interest_message_id": (interest_push_result or {}).get("message_id", ""),
+            "profile_setup_prompted": profile_push_result is not None,
+            "profile_setup_message_id": (profile_push_result or {}).get("message_id", ""),
             "errors": push_errors,
         }
     else:
@@ -278,6 +293,7 @@ def recommend_command_result(
     build_personal_brief: BuilderFn,
     get_user_identity: IdentityFn,
     client_factory: ClientFactory,
+    push_client_factory: ClientFactory | None = None,
 ) -> JsonDict:
     profile_config = load_assistant_profile_config(output_dir=args.output_dir, profile_file=args.profile_file)
     user_profile = dict(profile_config.get("profile", {})) if isinstance(profile_config, dict) else {}
@@ -399,13 +415,14 @@ def recommend_command_result(
             resolved_target_user_id=resolved_target_user_id,
             get_user_identity=get_user_identity,
         )
-        client = client_factory()
+        client = push_client_factory() if push_client_factory is not None else client_factory()
         push_summary_card = bool(args.push_summary_card)
         push_interest_card = bool(args.push_interest_card)
         if not push_summary_card and not push_interest_card:
             push_interest_card = True
         summary_push_result: JsonDict | None = None
         interest_push_result: JsonDict | None = None
+        profile_push_result: JsonDict | None = None
         push_errors: list[dict[str, str]] = []
         if push_summary_card:
             try:
@@ -427,6 +444,16 @@ def recommend_command_result(
                 )
             except Exception as exc:
                 push_errors.append({"card": "interest", "error": str(exc)})
+        if _should_prompt_profile_setup(user_profile):
+            try:
+                profile_push_result = client.send_message(
+                    receive_id=receive_id,
+                    receive_id_type=receive_id_type,
+                    msg_type="interactive",
+                    content=_build_profile_setup_card(user_profile, online_meta),
+                )
+            except Exception as exc:
+                push_errors.append({"card": "profile_setup", "error": str(exc)})
         base_meta["push"] = {
             "enabled": True,
             "receive_id_type": receive_id_type,
@@ -436,6 +463,8 @@ def recommend_command_result(
             "summary_message_id": (summary_push_result or {}).get("message_id", ""),
             "interest_enabled": bool(push_interest_card),
             "interest_message_id": (interest_push_result or {}).get("message_id", ""),
+            "profile_setup_prompted": profile_push_result is not None,
+            "profile_setup_message_id": (profile_push_result or {}).get("message_id", ""),
             "errors": push_errors,
         }
     else:
@@ -462,3 +491,29 @@ def recommend_command_result(
         "meta": base_meta,
         "report": {**{k: v for k, v in report.items() if k != "doc_markdown"}, "docs": report.get("documents", [])},
     }
+
+
+def _should_prompt_profile_setup(user_profile: JsonDict) -> bool:
+    if bool(user_profile.get("require_user_confirmation")):
+        return True
+    interests = user_profile.get("interests")
+    businesses = user_profile.get("businesses")
+    return not interests or not businesses
+
+
+def _build_profile_setup_card(user_profile: JsonDict, online_meta: JsonDict) -> JsonDict:
+    interests = user_profile.get("interests") or []
+    businesses = user_profile.get("businesses") or []
+    profile_payload = {
+        "role": str(user_profile.get("role") or "待确认角色"),
+        "persona": str(user_profile.get("persona") or "待确认形象"),
+        "businesses": [str(item) for item in businesses if str(item).strip()],
+        "interests": [str(item) for item in interests if str(item).strip()],
+    }
+    source_meta = {
+        "message_count": int(online_meta.get("message_count", 0) or 0),
+        "document_count": int(online_meta.get("document_count", 0) or 0),
+    }
+    card = build_profile_review_card(profile=profile_payload, source_meta=source_meta)
+    card["header"]["subtitle"]["content"] = "推荐卡片已推送，请确认是否设置画像"
+    return card

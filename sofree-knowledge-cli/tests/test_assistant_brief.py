@@ -302,6 +302,25 @@ def test_interest_digest_accepts_at_user_without_interest_keyword_hit():
     assert items[0]["message_id"] == "om_at_user"
 
 
+def test_interest_digest_filters_low_information_placeholder_mentions():
+    report = build_personal_brief(
+        documents=[{"doc_id": "d1", "title": "Any", "summary": "Any"}],
+        messages=[
+            {"message_id": "m1", "chat_id": "oc_chat", "content": "@1 回答一下", "sender_name": "聂铭浚"},
+            {"message_id": "m2", "chat_id": "oc_chat", "content": "@1 你要@2 ，@3 你要@4", "sender_name": "聂铭浚"},
+            {"message_id": "m3", "chat_id": "oc_chat", "content": "和@1 讨论一下项目形态", "sender_name": "聂铭浚"},
+            {
+                "message_id": "m4",
+                "chat_id": "oc_chat",
+                "content": "@1 你好呀～有什么需要我帮忙的吗",
+                "sender_name": "cli_a960422c68f81cc8",
+            },
+        ],
+        user_profile={"interests": ["release", "risk"]},
+    )
+    assert report["interest_digest"]["items"] == []
+
+
 def test_interest_digest_accepts_at_all_without_interest_keyword_hit():
     report = build_personal_brief(
         documents=[{"doc_id": "d1", "title": "Any", "summary": "Any"}],

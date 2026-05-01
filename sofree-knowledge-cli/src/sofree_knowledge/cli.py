@@ -486,6 +486,10 @@ def build_user_feishu_client(args: argparse.Namespace, *, require_token: bool = 
     return _instantiate_feishu_client(user_access_token=token, token_file=token_file)
 
 
+def build_bot_feishu_client() -> Any:
+    return FeishuClient()
+
+
 def load_json_file(path: str) -> Any:
     with open(path, "r", encoding="utf-8-sig") as f:
         return json.load(f)
@@ -1047,6 +1051,7 @@ def cmd_assistant_build_personal_brief(args: argparse.Namespace) -> dict[str, An
         build_personal_brief=build_personal_brief,
         get_user_identity=get_user_identity,
         client_factory=lambda: build_user_feishu_client(args, require_token=False),
+        push_client_factory=build_bot_feishu_client,
     )
 
 
@@ -1058,6 +1063,7 @@ def cmd_assistant_recommend(args: argparse.Namespace) -> dict[str, Any]:
         build_personal_brief=build_personal_brief,
         get_user_identity=get_user_identity,
         client_factory=lambda: build_user_feishu_client(args, require_token=False),
+        push_client_factory=build_bot_feishu_client,
     )
 
 
