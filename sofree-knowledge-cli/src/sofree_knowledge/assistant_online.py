@@ -80,7 +80,7 @@ def collect_online_personal_inputs(
                 sender_id = _extract_sender_id(msg)
 
                 # 确保发件人名称是真实昵称，不是ID
-                if sender_id and (not sender_name or sender_name.startswith("ou_")):
+                if sender_id and (not sender_name or _looks_like_principal_id(sender_name)):
                     # 先查缓存
                     if sender_id in user_id_to_name:
                         sender_name = user_id_to_name[sender_id]
@@ -91,7 +91,7 @@ def collect_online_personal_inputs(
                             sender_name = user_info["name"]
                             user_id_to_name[sender_id] = sender_name
 
-                if sender_id and sender_name and not sender_name.startswith("ou_"):
+                if sender_id and sender_name and not _looks_like_principal_id(sender_name):
                     user_id_to_name[sender_id] = sender_name
 
                 text = _normalize_message_text(msg.get("content", ""), user_id_to_name, client)
@@ -306,7 +306,11 @@ def _looks_like_doc_url(url: str) -> bool:
 
 def _doc_key_from_url(url: str) -> str:
     parsed = urlparse(url)
-    parts = [part for part in (parsed.path or "").split("/") if part]
+    path = parsed.path or ""
+    match = re.search(r"/(?:docx|wiki|base|sheet|slides|file)/([^/?#]+)", path, flags=re.IGNORECASE)
+    if match:
+        return match.group(1)
+    parts = [part for part in path.split("/") if part]
     if not parts:
         return url
     return parts[-1]
@@ -486,6 +490,12 @@ def _get_user_info(client: FeishuClient, user_id: str) -> dict[str, str]:
     try:
         path = f"/open-apis/contact/v3/users/{user_id}?user_id_type=open_id"
         data = client.request("GET", path)
+    except Exception:
+        try:
+            data = client.request("GET", path, access_token=client.get_tenant_access_token())
+        except Exception:
+            return {}
+    try:
         user = data.get("data", {}).get("user", {})
         return {
             "name": user.get("name", ""),
@@ -495,56 +505,65 @@ def _get_user_info(client: FeishuClient, user_id: str) -> dict[str, str]:
         return {}
 
 
+def _looks_like_principal_id(value: str) -> bool:
+    normalized = str(value or "").strip().lower()
+    if not normalized:
+        return False
+    return bool(re.fullmatch(r"(ou|cli)_[a-z0-9]+", normalized))
+
+
 def _get_doc_meta(client: FeishuClient, doc_token: str, doc_type: str = "docx") -> dict[str, Any]:
     """独立的文档元数据查询功能，不依赖FeishuClient的内置方法"""
-    doc_type_map = {
-        "docx": "docx",
-        "wiki": "wiki",
-        "base": "base",
-        "sheet": "sheet",
-        "slides": "slides",
-        "file": "file",
-    }
-    api_doc_type = doc_type_map.get(doc_type, "docx")
-
-    # 优先使用drive v2 API查询所有类型文档的元数据，兼容性更好
-    path = f"/open-apis/drive/v2/files/{doc_token}"
+    def _request_with_fallback(path: str, *, params: dict[str, Any] | None = None) -> dict[str, Any]:
+        try:
+            return client.request("GET", path, params=params)
+        except (FeishuAPIError, MissingFeishuConfigError):
+            return client.request("GET", path, params=params, access_token=client.get_tenant_access_token())
 
     try:
-        # 使用用户token查询
-        data = client.request("GET", path)
-    except (FeishuAPIError, MissingFeishuConfigError):
-        try:
-            # 失败则用租户token重试
-            data = client.request(
-                "GET",
-                path,
-                access_token=client.get_tenant_access_token(),
+        if doc_type == "wiki":
+            data = _request_with_fallback(
+                "/open-apis/wiki/v2/spaces/get_node",
+                params={"token": doc_token},
             )
-        except Exception:
-            # 最终fallback到各类型专属API
-            try:
-                type_path_map = {
-                    "docx": f"/open-apis/docx/v1/documents/{doc_token}",
-                    "wiki": f"/open-apis/wiki/v2/spaces/{doc_token}",
-                    "base": f"/open-apis/bitable/v1/apps/{doc_token}",
-                    "sheet": f"/open-apis/sheet/v2/spreadsheets/{doc_token}",
-                    "slides": f"/open-apis/slides/v1/presentations/{doc_token}",
-                }
-                if api_doc_type in type_path_map:
-                    path = type_path_map[api_doc_type]
-                    data = client.request("GET", path)
-                else:
-                    return {}
-            except Exception:
-                return {}
+            node = data.get("data", {}).get("node", {})
+            return {
+                "title": str(node.get("title") or node.get("name") or ""),
+                "url": str(node.get("url") or ""),
+                "updated_at": str(node.get("obj_edit_time") or node.get("updated_time") or ""),
+            }
 
-    body = data.get("data", data)
-    return {
-        "title": body.get("name", body.get("title", "")),
-        "url": body.get("url", ""),
-        "updated_at": body.get("modified_time", body.get("edit_time", "")),
-    }
+        drive_data = _request_with_fallback(f"/open-apis/drive/v1/files/{doc_token}")
+        body = drive_data.get("data", drive_data)
+        title = str(body.get("name") or body.get("title") or "").strip()
+        if title:
+            return {
+                "title": title,
+                "url": str(body.get("url") or ""),
+                "updated_at": str(body.get("modified_time") or body.get("edit_time") or ""),
+            }
+    except Exception:
+        pass
+
+    try:
+        type_path_map = {
+            "docx": f"/open-apis/docx/v1/documents/{doc_token}",
+            "base": f"/open-apis/bitable/v1/apps/{doc_token}",
+            "sheet": f"/open-apis/sheets/v3/spreadsheets/{doc_token}",
+            "slides": f"/open-apis/slides/v1/presentations/{doc_token}",
+        }
+        path = type_path_map.get(doc_type)
+        if not path:
+            return {}
+        data = _request_with_fallback(path)
+        body = data.get("data", data)
+        return {
+            "title": str(body.get("name") or body.get("title") or ""),
+            "url": str(body.get("url") or ""),
+            "updated_at": str(body.get("modified_time") or body.get("edit_time") or ""),
+        }
+    except Exception:
+        return {}
 
 
 def _extract_sender_name(sender: Any) -> str:

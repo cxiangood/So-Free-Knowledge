@@ -1,6 +1,9 @@
 ﻿from sofree_knowledge.assistant_online import collect_online_personal_inputs
 
 
+from sofree_knowledge.feishu_client import FeishuAPIError
+
+
 class FakeClient:
     def list_visible_chats(self, page_size=100, page_token=""):
         return {
@@ -221,3 +224,103 @@ def test_collect_online_personal_inputs_filters_self_messages_by_sender_id(monke
 
     assert out["messages"] == []
     assert out["access_records"]
+
+
+def test_collect_online_personal_inputs_resolves_sender_name_with_tenant_fallback(monkeypatch):
+    class TenantFallbackClient(FakeClient):
+        def list_chat_messages(self, chat_id, start_time="", end_time="", page_size=50, page_token="", sort="asc"):
+            return {
+                "items": [
+                    {
+                        "message_id": "m_sender",
+                        "chat_id": chat_id,
+                        "msg_type": "text",
+                        "create_time": "1710000000",
+                        "sender": {"sender_id": {"open_id": "ou_other"}},
+                        "body": {"content": '{"text":"请尽快确认发布排期"}'},
+                    }
+                ],
+                "has_more": False,
+                "page_token": "",
+            }
+
+        def get_tenant_access_token(self):
+            return "tenant_token"
+
+        def request(self, method, path, access_token=None, **kwargs):
+            if access_token is None:
+                raise FeishuAPIError("401")
+            return {
+                "data": {
+                    "user": {
+                        "name": "曹林江",
+                        "avatar": {"avatar_72": "https://example/avatar.png"},
+                    }
+                }
+            }
+
+    monkeypatch.setattr("sofree_knowledge.assistant_online.get_user_identity", lambda token_file=None: {"open_id": "ou_target"})
+
+    out = collect_online_personal_inputs(
+        client=TenantFallbackClient(),
+        target_user_id="",
+        include_visible_chats=True,
+        max_chats=5,
+        max_messages_per_chat=20,
+        max_drive_docs=10,
+        recent_days=3650,
+    )
+
+    assert out["messages"]
+    assert out["messages"][0]["sender_name"] == "曹林江"
+
+
+def test_collect_online_personal_inputs_resolves_wiki_title_from_get_node(monkeypatch):
+    class WikiClient(FakeClient):
+        def list_chat_messages(self, chat_id, start_time="", end_time="", page_size=50, page_token="", sort="asc"):
+            return {
+                "items": [
+                    {
+                        "message_id": "m_wiki",
+                        "chat_id": chat_id,
+                        "msg_type": "text",
+                        "create_time": "1710000000",
+                        "sender": {"sender_id": {"open_id": "ou_other"}},
+                        "body": {"content": '{"text":"请查看 https://foo.feishu.cn/wiki/TZn0wSoSabc123"}'},
+                    }
+                ],
+                "has_more": False,
+                "page_token": "",
+            }
+
+        def list_drive_files(self, page_size=50, page_token=""):
+            return {"items": [], "has_more": False, "page_token": ""}
+
+        def request(self, method, path, access_token=None, params=None, **kwargs):
+            if path == "/open-apis/wiki/v2/spaces/get_node":
+                assert params == {"token": "TZn0wSoSabc123"}
+                return {
+                    "data": {
+                        "node": {
+                            "title": "关键词提取排期",
+                            "url": "https://foo.feishu.cn/wiki/TZn0wSoSabc123",
+                        }
+                    }
+                }
+            raise FeishuAPIError(f"unexpected path: {path}")
+
+    monkeypatch.setattr("sofree_knowledge.assistant_online.get_user_identity", lambda token_file=None: {"open_id": "ou_target"})
+
+    out = collect_online_personal_inputs(
+        client=WikiClient(),
+        target_user_id="",
+        include_visible_chats=True,
+        max_chats=5,
+        max_messages_per_chat=20,
+        max_drive_docs=10,
+        recent_days=3650,
+    )
+
+    wiki_docs = [item for item in out["documents"] if item.get("doc_id") == "TZn0wSoSabc123"]
+    assert wiki_docs
+    assert wiki_docs[0]["title"] == "关键词提取排期"
