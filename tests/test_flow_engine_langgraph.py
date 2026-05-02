@@ -43,8 +43,6 @@ def _engine(tmp_path: Path, **overrides) -> Engine:
         chat_history_path=tmp_path / "state" / "chat_message_store.json",
         step_trace_enabled=False,
         rag_enabled=False,
-        candidate_threshold=0.45,
-        task_threshold=0.40,
         **overrides,
     )
     return Engine(config)

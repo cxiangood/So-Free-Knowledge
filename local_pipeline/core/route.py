@@ -8,36 +8,58 @@ from ..prompt import get_prompt
 from ..shared.models import LiftedCard, RouteDecision
 
 
-def _route_by_rule(card: LiftedCard, *, knowledge_threshold: float, task_threshold: float) -> tuple[str, list[str]]:
+def _route_by_rule(card: LiftedCard) -> tuple[str, list[str]]:
     reason_codes: list[str] = []
     target = "observe"
-    actionability_score = float((card.decision_signals or {}).get("actionability_score", 0.0))
+    signals = card.decision_signals or {}
+    actionability_score = float(signals.get("actionability_score", 0.0) or 0.0)
+    novelty_score = float(signals.get("novelty_score", 0.0) or 0.0)
+    impact_score = float(signals.get("impact_score", 0.0) or 0.0)
+    confidence = float(card.confidence or 0.0)
+    has_question = float(signals.get("has_question", 0.0) or 0.0) >= 0.5
+    has_action_hint = float(signals.get("has_action_hint", 0.0) or 0.0) >= 0.5
     role = str(card.message_role or "").strip().lower()
-    if card.suggested_target == "knowledge" and card.confidence >= knowledge_threshold:
+    missing_fields = [str(x).strip().lower() for x in (card.missing_fields or []) if str(x).strip()]
+    is_task_like = any(field in {"owner", "time", "location", "deadline"} for field in missing_fields)
+
+    # 1) Respect lifted target first.
+    if card.suggested_target == "knowledge":
         target = "knowledge"
-        reason_codes.extend(["suggested-knowledge", "confidence-pass"])
-    elif card.suggested_target == "task" and card.confidence >= task_threshold:
+        reason_codes.append("suggested-knowledge")
+    elif card.suggested_target == "task":
         target = "task"
-        reason_codes.extend(["suggested-task", "confidence-pass"])
-    elif role in {"followup", "update", "confirm"} and card.confidence >= task_threshold and actionability_score >= 0.50:
+        reason_codes.append("suggested-task")
+    # 2) Context role and action semantics.
+    elif role in {"followup", "update", "confirm"} and (actionability_score >= 0.5 or has_action_hint):
         target = "task"
-        reason_codes.extend(["context-followup-task", "actionability-pass"])
-    elif card.confidence >= task_threshold and ("actionable-signal" in card.tags):
+        reason_codes.extend(["context-followup-task", "action-signal"])
+    elif role == "question" and (has_question or actionability_score >= 0.5):
         target = "task"
-        reason_codes.extend(["rule-task", "actionable-tag"])
-    elif card.confidence >= knowledge_threshold and ("novel-content" in card.tags):
+        reason_codes.extend(["context-question-task", "question-signal"])
+    # 3) Tags and explicit task incompleteness.
+    elif "actionable-signal" in card.tags or is_task_like:
+        target = "task"
+        reason_codes.append("task-semantic-signal")
+    elif "novel-content" in card.tags or novelty_score >= 0.6:
         target = "knowledge"
-        reason_codes.extend(["rule-knowledge", "novel-tag"])
+        reason_codes.append("knowledge-semantic-signal")
     else:
-        reason_codes.append("fallback-observe")
+        # Soft score reference (not hard threshold gating): use score tendency as tie-breaker.
+        task_score = actionability_score + (0.15 if has_action_hint else 0.0) + (0.1 if has_question else 0.0) + (0.1 if confidence >= 0.7 else 0.0)
+        knowledge_score = novelty_score + (impact_score * 0.4) + (0.1 if confidence >= 0.7 else 0.0)
+        if task_score >= 0.85 and task_score >= knowledge_score:
+            target = "task"
+            reason_codes.append("score-lean-task")
+        elif knowledge_score >= 0.85 and knowledge_score > task_score:
+            target = "knowledge"
+            reason_codes.append("score-lean-knowledge")
+        else:
+            reason_codes.append("fallback-observe")
     return target, reason_codes
 
 
 def _route_by_llm(
     card: LiftedCard,
-    *,
-    knowledge_threshold: float,
-    task_threshold: float,
 ) -> tuple[str, list[str]] | None:
     # 路由判断任务：三选一输出，非常简单，使用最快参数
     config = llm_client.LLMConfig.from_env(
@@ -49,11 +71,9 @@ def _route_by_llm(
     if config.missing_fields():
         return None
     try:
-        system_prompt = get_prompt("route.system_prompt")
-        user_prompt = get_prompt("route.user_prompt").format(
+        system_prompt = get_prompt("route_v2.system_prompt")
+        user_prompt = get_prompt("route_v2.user_prompt").format(
             card_json=json.dumps(card.to_dict(), ensure_ascii=False),
-            knowledge_threshold=knowledge_threshold,
-            task_threshold=task_threshold,
         )
     except Exception:
         return None
@@ -74,19 +94,13 @@ def _route_by_llm(
 
 def route_cards(
     cards: list[LiftedCard],
-    *,
-    knowledge_threshold: float = 0.60,
-    task_threshold: float = 0.50,
 ) -> list[RouteDecision]:
     decisions: list[RouteDecision] = []
-    snapshot = {
-        "knowledge_threshold": knowledge_threshold,
-        "task_threshold": task_threshold,
-    }
+    snapshot = {"routing_mode": "semantic_with_score_reference"}
     for card in cards:
-        llm_decision = _route_by_llm(card, knowledge_threshold=knowledge_threshold, task_threshold=task_threshold)
+        llm_decision = _route_by_llm(card)
         if llm_decision is None:
-            target, reason_codes = _route_by_rule(card, knowledge_threshold=knowledge_threshold, task_threshold=task_threshold)
+            target, reason_codes = _route_by_rule(card)
         else:
             target, reason_codes = llm_decision
         decisions.append(

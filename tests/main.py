@@ -10,9 +10,6 @@ start(
         chat_history_path="outputs/local_pipeline/state/chat_message_store.json",
         chat_history_limit=100,
         context_window_size=10,
-        candidate_threshold=0.1,
-        knowledge_threshold=0.60,
-        task_threshold=0.50,
         task_push_enabled=True,
         task_push_chat_id="oc_9663f97db577d40181f3ccc9a4ef4b03",
         step_trace_enabled=True,  # print message path

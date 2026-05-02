@@ -16,7 +16,11 @@ class Embedder:
         if self._model is None:
             from sentence_transformers import SentenceTransformer
 
-            self._model = SentenceTransformer(self.model_name)
+            # Prefer local HuggingFace cache first, then fall back to remote download.
+            try:
+                self._model = SentenceTransformer(self.model_name, local_files_only=True)
+            except Exception:
+                self._model = SentenceTransformer(self.model_name)
         return self._model
 
     def encode(self, texts: list[str]) -> np.ndarray:

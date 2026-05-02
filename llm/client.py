@@ -43,6 +43,14 @@ class DetectScores(BaseModel):
     emotion: float = Field(ge=0.0, le=100.0)
 
 
+class DetectMeaningful(BaseModel):
+    meaningful: bool
+
+
+class DetectValueScore(BaseModel):
+    value_score: float = Field(ge=0.0, le=100.0)
+
+
 class LiftParts(BaseModel):
     title: str
     summary: str
