@@ -1,17 +1,59 @@
 # local_pipeline
 
-Local closed-loop simulation modules (no CLI entrypoints in this package):
+Local silent knowledge Agent modules:
+
+- `agent`: silent knowledge push Agent runtime, memory, tools, and reports
+- `flow`: LangGraph decision kernel + online/offline orchestration
 
 - `comm`: listen/send/feishu communication layer
 - `core`: detect/lift/route/kb/obs/task main business logic
 - `msg`: message types/cache/parse layer
-- `flow`: unified engine + online/offline orchestration
 - `store`: state/io/report layer
 - `shared`: shared models/utils
 
-Root legacy scripts have been removed. Implementation now lives only in the layered folders above.
+The key product shape is no longer a command-triggered bot. `SilentKnowledgeAgent`
+observes Feishu messages without requiring `@bot` or slash commands, routes weak
+signals through the LangGraph engine, and only pushes knowledge/tasks when the
+configured thresholds or observe-fermentation rules are met.
 
 ## Python API
+
+Agent mode:
+
+```python
+from local_pipeline.agent import SilentKnowledgeAgent, SilentKnowledgeAgentConfig
+from local_pipeline.flow.engine import EngineConfig
+
+agent = SilentKnowledgeAgent(
+    SilentKnowledgeAgentConfig(
+        engine=EngineConfig(
+            env_file=".env",
+            output_dir="outputs/local_pipeline",
+            state_dir="outputs/local_pipeline/state",
+            chat_history_path="outputs/local_pipeline/state/chat_message_store.json",
+            task_push_enabled=True,
+            task_push_chat_id="oc_xxx",
+        )
+    )
+)
+
+# Called by the Feishu listener. No user command is required.
+report = agent.handle_message(event)
+print(report.to_dict())
+```
+
+Agent tool definitions are explicit and inspectable:
+
+```python
+for tool in agent.tool_definitions():
+    print(tool["name"], tool["parameters"])
+```
+
+The next-step policy lives in `local_pipeline.agent.planner.SilentKnowledgePlanner`:
+
+- `plan_message_observation(...)` decides which tool to call when a silent Feishu message arrives.
+- `decide_after_observation(...)` converts the engine result into Agent decisions such as `store`, `push`, `wait`, or `retry`.
+- `plan_direct_question(...)` handles explicit question paths through memory retrieval.
 
 Offline mode (fixed archive input by default):
 
@@ -74,6 +116,8 @@ start(
 ```
 
 Unified downstream flow (online/offline): `cache -> detect -> lift -> route -> knowledge/observe/task -> task push`.
+
+Agent boundary: `silent message trigger -> Agent runtime -> Agent tools/memory -> LangGraph engine -> knowledge/task/observe push`.
 
 Message payload format inside `local_pipeline` is:
 

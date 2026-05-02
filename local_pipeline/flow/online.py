@@ -5,8 +5,9 @@ import logging
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
+from ..agent import SilentKnowledgeAgent, SilentKnowledgeAgentConfig
 from ..comm.listen import MessageEventBus, OpenAPIMessageListener, TOPIC_MESSAGE_RECEIVED, resolve_listener_credentials
-from .engine import Engine, EngineConfig
+from .engine import EngineConfig
 
 LOGGER = logging.getLogger(__name__)
 
@@ -42,30 +43,32 @@ class OnlineConfig:
 def start(config: OnlineConfig | None = None) -> None:
     cfg = config or OnlineConfig()
     bus = MessageEventBus()
-    engine = Engine(
-        EngineConfig(
-            output_dir=cfg.output_dir,
-            state_dir=cfg.state_dir,
-            chat_history_path=cfg.chat_history_path,
-            chat_history_limit=cfg.chat_history_limit,
-            context_window_size=cfg.context_window_size,
-            candidate_threshold=cfg.candidate_threshold,
-            knowledge_threshold=cfg.knowledge_threshold,
-            task_threshold=cfg.task_threshold,
-            task_push_enabled=cfg.task_push_enabled,
-            task_push_chat_id=cfg.task_push_chat_id,
-            env_file=cfg.env_file,
-            step_trace_enabled=cfg.step_trace_enabled,
-            rag_enabled=cfg.rag_enabled,
-            rag_top_k=cfg.rag_top_k,
-            rag_min_score=cfg.rag_min_score,
-            rag_embed_model=cfg.rag_embed_model,
-            observe_auto_reply_enabled=cfg.observe_auto_reply_enabled,
-            observe_ferment_threshold=cfg.observe_ferment_threshold,
-            observe_logic1_base=cfg.observe_logic1_base,
-            observe_logic2_base=cfg.observe_logic2_base,
-            observe_logic3_base=cfg.observe_logic3_base,
-            observe_force_non_observe_on_pop=cfg.observe_force_non_observe_on_pop,
+    agent = SilentKnowledgeAgent(
+        SilentKnowledgeAgentConfig(
+            engine=EngineConfig(
+                output_dir=cfg.output_dir,
+                state_dir=cfg.state_dir,
+                chat_history_path=cfg.chat_history_path,
+                chat_history_limit=cfg.chat_history_limit,
+                context_window_size=cfg.context_window_size,
+                candidate_threshold=cfg.candidate_threshold,
+                knowledge_threshold=cfg.knowledge_threshold,
+                task_threshold=cfg.task_threshold,
+                task_push_enabled=cfg.task_push_enabled,
+                task_push_chat_id=cfg.task_push_chat_id,
+                env_file=cfg.env_file,
+                step_trace_enabled=cfg.step_trace_enabled,
+                rag_enabled=cfg.rag_enabled,
+                rag_top_k=cfg.rag_top_k,
+                rag_min_score=cfg.rag_min_score,
+                rag_embed_model=cfg.rag_embed_model,
+                observe_auto_reply_enabled=cfg.observe_auto_reply_enabled,
+                observe_ferment_threshold=cfg.observe_ferment_threshold,
+                observe_logic1_base=cfg.observe_logic1_base,
+                observe_logic2_base=cfg.observe_logic2_base,
+                observe_logic3_base=cfg.observe_logic3_base,
+                observe_force_non_observe_on_pop=cfg.observe_force_non_observe_on_pop,
+            )
         )
     )
 
@@ -82,7 +85,7 @@ def start(config: OnlineConfig | None = None) -> None:
     # 异步消息处理函数
     def async_handle_message(evt):
         try:
-            engine.run(evt, context={"mode": "online"})
+            agent.handle_message(evt, source="feishu_websocket", trigger="silent_message", context={"mode": "online"})
         except Exception as e:
             LOGGER.exception("Async message handling failed: message_id=%s, chat_id=%s",
                            evt.message_id, evt.chat_id)
@@ -97,7 +100,7 @@ def start(config: OnlineConfig | None = None) -> None:
         bus=bus,
         compact=cfg.compact,
     )
-    LOGGER.info("Online pipeline started with async message processing (8 workers)")
+    LOGGER.info("Silent knowledge agent started with async message processing (8 workers)")
     listener.start()
 
 

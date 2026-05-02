@@ -1,6 +1,4 @@
 from .engine import Engine, EngineConfig, EngineResult
-from .offline import DEFAULT_MESSAGES_FILE, OfflineConfig, run
-from .online import OnlineConfig, start
 
 __all__ = [
     "Engine",
@@ -12,4 +10,16 @@ __all__ = [
     "run",
     "DEFAULT_MESSAGES_FILE",
 ]
+
+
+def __getattr__(name: str):
+    if name in {"DEFAULT_MESSAGES_FILE", "OfflineConfig", "run"}:
+        from . import offline
+
+        return getattr(offline, name)
+    if name in {"OnlineConfig", "start"}:
+        from . import online
+
+        return getattr(online, name)
+    raise AttributeError(name)
 
