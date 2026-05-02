@@ -75,6 +75,18 @@ sofree-knowledge auth-status
 
 Tokens are saved to `~/.feishu/token.json` by default. CLI output redacts token values.
 
+### Token Lifecycle
+
+- `user_access_token` is short-lived, typically around 2 hours.
+- If a valid `refresh_token` is present, the CLI refreshes `user_access_token` automatically.
+- The current client refreshes proactively before expiry and also retries once on `401`.
+- Re-authentication is only needed when refresh itself fails, for example:
+  - `refresh_token` is missing or expired
+  - the user revoked authorization
+  - required scopes changed after an upgrade
+
+In other words: expired access token should normally be handled by refresh, not by forcing the user through OAuth again.
+
 ## Message Collection
 
 Collect messages from bot-visible chats:
@@ -222,6 +234,40 @@ Only when `--receive-chat-id` is explicitly provided will push go to group chat:
 ```bash
 sofree-knowledge assistant build-personal-brief --online --push --receive-chat-id oc_xxx --output-format card
 ```
+
+### Assistant Output And Push Behavior
+
+`assistant build-personal-brief` and `assistant recommend` always return JSON envelopes at the CLI layer. The difference is in which fields are included:
+
+- `--output-format json`
+  - returns structured metadata and report fields
+  - intentionally omits rendered card payloads
+- `--output-format card`
+  - returns `card` and `interest_card` payloads in JSON
+- `--output-format all`
+  - returns report plus card payloads
+- `--output-format doc`
+  - returns markdown only and is deprecated
+
+This means "I got JSON instead of a pushed card" is not necessarily a bug. Common cases are:
+
+1. `--push` was not enabled.
+2. `--output-format json` was used, so the command returned report JSON instead of card payloads.
+3. profile setup is still required; in that case recommendation push is deferred and the command returns or pushes `profile_setup_card` first.
+4. push was deduplicated because the same card content was already sent recently; check `meta.push.skipped`.
+5. push failed but the command still returned JSON successfully; check `meta.push.errors`.
+6. no explicit `--push-summary-card` or `--push-interest-card` was set; current default push behavior sends the interest card path, not every card type.
+
+When debugging recommendation runs, check these fields first:
+
+- `meta.push.enabled`
+- `meta.push.summary_enabled`
+- `meta.push.interest_enabled`
+- `meta.push.profile_setup_prompted`
+- `meta.push.recommendation_deferred_until_profile_confirmed`
+- `meta.push.skipped`
+- `meta.push.errors`
+- `report.retrieval_plan.strategy`
 
 ## Permissions
 

@@ -314,6 +314,8 @@ def _normalize_message(item: dict[str, Any]) -> dict[str, Any]:
         or item.get("summary")
         or ""
     )
+    normalized_text = _replace_message_mentions(str(text or ""), item)
+    normalized_summary_text = _replace_message_mentions(str(summary_text or ""), item)
     return {
         "message_id": str(item.get("message_id") or item.get("id") or ""),
         "chat_id": str(item.get("chat_id") or ""),
@@ -328,8 +330,8 @@ def _normalize_message(item: dict[str, Any]) -> dict[str, Any]:
             or item.get("link")
             or ""
         ),
-        "text": str(text or ""),
-        "summary_text": str(summary_text or ""),
+        "text": normalized_text,
+        "summary_text": normalized_summary_text,
         "create_time": str(item.get("create_time") or item.get("timestamp") or ""),
         "openclaw_interest_relevant": item.get("openclaw_interest_relevant", item.get("interest_relevant")),
         "openclaw_interest_score": item.get("openclaw_interest_score", item.get("interest_score")),
@@ -370,6 +372,22 @@ def _extract_message_sender_name(item: dict[str, Any]) -> str:
             if value:
                 return value
     return ""
+
+
+def _replace_message_mentions(text: str, item: dict[str, Any]) -> str:
+    normalized = str(text or "")
+    mentions = item.get("mentions", [])
+    if not isinstance(mentions, list):
+        return normalized
+    for mention in mentions:
+        if not isinstance(mention, dict):
+            continue
+        key = str(mention.get("key") or "").strip()
+        name = str(mention.get("name") or mention.get("display_name") or "").strip()
+        if not key or not name:
+            continue
+        normalized = normalized.replace(key, f"@{name}")
+    return normalized
 
 
 def _normalize_knowledge(item: dict[str, Any]) -> dict[str, str]:
@@ -415,12 +433,16 @@ def _normalize_profile(item: dict[str, Any]) -> dict[str, Any]:
         interests = [value.strip() for value in interests_raw.split(",") if value.strip()]
     elif isinstance(interests_raw, list):
         interests = [str(value).strip() for value in interests_raw if str(value).strip()]
+    display_name = str(item.get("display_name") or "").strip()
+    if display_name and display_name.lower() not in {value.lower() for value in interests}:
+        interests.append(display_name)
 
     return {
         "persona": str(item.get("persona") or item.get("avatar") or "").strip(),
         "role": str(item.get("role") or item.get("profession") or "").strip(),
         "business_tracks": business_tracks,
         "interests": interests,
+        "display_name": display_name,
         "current_focus": [track["name"] for track in business_tracks],
         "require_user_confirmation": bool(item.get("require_user_confirmation", True)),
         "update_hint": "根据最新阅读文档候选更新画像时，应先向用户确认。",
@@ -477,6 +499,12 @@ def _extract_keywords(text: str) -> set[str]:
     normalized = str(text or "").lower()
     tokens = re.findall(r"[a-z0-9_]{2,}|[\u4e00-\u9fff]{2,}", normalized)
     result: set[str] = {token for token in tokens if token.strip()}
+    mention_tokens = re.findall(r"@([a-z0-9_]{1,}|[\u4e00-\u9fff]{1,})", normalized)
+    for token in mention_tokens:
+        token = str(token).strip()
+        if token:
+            result.add(f"@{token}")
+            result.add(token)
     for token in tokens:
         if re.fullmatch(r"[\u4e00-\u9fff]{2,}", token):
             for idx in range(0, len(token) - 1):

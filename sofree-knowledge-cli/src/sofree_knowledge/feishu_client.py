@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import html
 import json
+import time
 from pathlib import Path
 from typing import Any
 
@@ -9,6 +10,8 @@ import httpx
 
 from .config import get_app_credentials, get_user_access_token
 from .auth_token_store import TokenStore
+
+USER_TOKEN_REFRESH_BUFFER_SECONDS = 3 * 24 * 60 * 60
 
 
 class FeishuAPIError(RuntimeError):
@@ -402,6 +405,8 @@ class FeishuClient:
         token = access_token or self.user_access_token
         if not token:
             raise MissingFeishuConfigError("Missing Feishu access token.")
+        if self._should_refresh_user_token_proactively(token, access_token):
+            token = self.refresh_user_access_token()
         headers = dict(kwargs.pop("headers", {}) or {})
         headers["Authorization"] = f"Bearer {token}"
         try:
@@ -467,6 +472,28 @@ class FeishuClient:
             and bool(self.user_access_token)
             and self.token_file is not None
         )
+
+    def _should_refresh_user_token_proactively(
+        self,
+        token: str,
+        access_token: str | None,
+    ) -> bool:
+        if access_token is not None or self.token_file is None or not self.user_access_token:
+            return False
+        token_data = TokenStore(token_file=self.token_file).load()
+        saved_token = str(token_data.get("access_token") or "").strip()
+        if not saved_token or saved_token != token:
+            return False
+        expires_at = self._coerce_int(token_data.get("access_token_expires_at"))
+        if expires_at is None:
+            return False
+        return expires_at <= int(time.time()) + USER_TOKEN_REFRESH_BUFFER_SECONDS
+
+    def _coerce_int(self, value: Any) -> int | None:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
 
     def _format_network_error(self, exc: Exception) -> str:
         if isinstance(exc, OSError) and getattr(exc, "winerror", None) == 10013:

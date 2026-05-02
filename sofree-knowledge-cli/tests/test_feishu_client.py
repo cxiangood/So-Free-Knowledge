@@ -1,4 +1,5 @@
 import json
+import time
 
 import pytest
 import httpx
@@ -117,3 +118,61 @@ def test_request_refreshes_user_token_on_401(monkeypatch, tmp_path):
     saved = json.loads(token_file.read_text(encoding="utf-8"))
     assert saved["access_token"] == "refreshed_user_token"
     assert saved["refresh_token"] == "refresh_token_value_2"
+
+
+def test_request_refreshes_user_token_before_expiry(monkeypatch, tmp_path):
+    token_file = tmp_path / "token.json"
+    token_file.write_text(
+        json.dumps(
+            {
+                "access_token": "expiring_token",
+                "refresh_token": "refresh_token_value",
+                "access_token_expires_at": int(time.time()) + 60,
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    client = FeishuClient(user_access_token="expiring_token", token_file=token_file)
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            self.calls = 0
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def request(self, method, path, headers=None, **kwargs):
+            self.calls += 1
+            assert (headers or {}).get("Authorization") == "Bearer refreshed_user_token"
+            return httpx.Response(200, json={"code": 0, "data": {"ok": True}})
+
+    def fake_post(url, json=None, headers=None, timeout=30):
+        assert url.endswith("/open-apis/authen/v1/refresh_access_token")
+        return httpx.Response(
+            200,
+            request=httpx.Request("POST", url),
+            json={
+                "code": 0,
+                "data": {
+                    "access_token": "refreshed_user_token",
+                    "refresh_token": "refresh_token_value_2",
+                    "expires_in": 7200,
+                    "refresh_expires_in": 2592000,
+                },
+            },
+        )
+
+    monkeypatch.setattr("sofree_knowledge.feishu_client.httpx.Client", FakeClient)
+    monkeypatch.setattr("sofree_knowledge.feishu_client.httpx.post", fake_post)
+    monkeypatch.setattr(FeishuClient, "get_app_access_token", lambda self: "app_token")
+
+    result = client.request("GET", "/open-apis/im/v1/chats")
+
+    assert result["data"]["ok"] is True
+    saved = json.loads(token_file.read_text(encoding="utf-8"))
+    assert saved["access_token"] == "refreshed_user_token"
+    assert saved["access_token_expires_at"] > int(time.time())

@@ -146,6 +146,7 @@ def suggest_profile_from_online_inputs(
 
     if not interests:
         interests = _suggest_interest_terms(online_inputs)[:4]
+    interests = _append_display_name_keyword(interests, display_name)
     if not interests:
         interests = ["知识协同", "项目推进"]
 
@@ -231,6 +232,16 @@ def _extract_profile_terms(text: str) -> list[str]:
             continue
         results.append(normalized)
     return results
+
+
+def _append_display_name_keyword(keywords: list[str], display_name: str) -> list[str]:
+    normalized_name = str(display_name or "").strip()
+    if not normalized_name:
+        return list(keywords)
+    lowered_existing = {str(item).strip().lower() for item in keywords if str(item).strip()}
+    if normalized_name.lower() in lowered_existing:
+        return list(keywords)
+    return [*keywords, normalized_name]
 
 
 def _legacy_profile_path(path: Path) -> Path | None:

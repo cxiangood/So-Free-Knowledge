@@ -328,6 +328,36 @@ def test_interest_card_keeps_user_mentions_in_summary():
     assert "@Alice" in content
 
 
+def test_interest_card_replaces_placeholder_mentions_with_real_names():
+    report = build_personal_brief(
+        documents=[{"doc_id": "d1", "title": "Release Plan", "summary": "Plan summary"}],
+        messages=[
+            {
+                "message_id": "om_m_real_name",
+                "chat_id": "oc_chat",
+                "content": "@_user_1 说话",
+                "mentions": [{"key": "@_user_1", "name": "listener", "id": "ou_x"}],
+                "mentions_target_user": True,
+            }
+        ],
+        user_profile={"interests": ["listener"]},
+    )
+    content = report["interest_card"]["elements"][0]["content"]
+    assert "@listener" in content
+    assert "@_user_1" not in content
+
+
+def test_extract_keywords_keeps_at_mention_tokens():
+    from sofree_knowledge.assistant_brief import _extract_keywords
+
+    keywords = _extract_keywords("@listener 请确认 @曹林江 的排期")
+
+    assert "@listener" in keywords
+    assert "@曹林江" in keywords
+    assert "listener" in keywords
+    assert "曹林江" in keywords
+
+
 def test_interest_digest_accepts_at_user_without_interest_keyword_hit():
     report = build_personal_brief(
         documents=[{"doc_id": "d1", "title": "Any", "summary": "Any"}],
