@@ -104,6 +104,7 @@ def event_row_to_message_event(row: dict[str, Any]) -> MessageEvent | None:
         sender_user_id=_get_field(sender_id, "user_id", ""),
         sender_type=_get_field(sender, "sender_type", ""),
         tenant_key=_get_field(sender, "tenant_key", ""),
+        sender_name=str(_get_field(sender, "name", "") or ""),
         mentions=_get_field(message, "mentions", []) if isinstance(_get_field(message, "mentions", []), list) else [],
         user_agent=_get_field(message, "user_agent", ""),
         raw=row,
@@ -230,6 +231,7 @@ def plain_message_to_event(message: PlainMessage) -> MessageEvent:
     raw = {
         "sender": {
             "sender_id": {"union_id": "", "user_id": "", "open_id": message.sender},
+            "name": message.sender,
             "sender_type": "user",
             "tenant_key": "",
         },
@@ -267,6 +269,7 @@ def plain_message_to_event(message: PlainMessage) -> MessageEvent:
         sender_user_id="",
         sender_type="user",
         tenant_key="",
+        sender_name=message.sender,
         mentions=raw["message"]["mentions"],
         user_agent="",
         raw=raw,

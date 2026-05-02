@@ -8,9 +8,27 @@ from ..prompt import get_prompt
 from ..shared.models import LiftedCard, RouteDecision
 
 
-def _route_by_rule(card: LiftedCard) -> tuple[str, list[str]]:
-    reason_codes: list[str] = []
-    target = "observe"
+_ROUTE_ORDER = ("knowledge", "task", "observe")
+
+
+def _normalize_routes(routes: list[tuple[str, list[str]]]) -> list[tuple[str, list[str]]]:
+    merged: dict[str, list[str]] = {}
+    for raw_target, raw_reasons in routes:
+        target = str(raw_target).strip().lower()
+        if target not in _ROUTE_ORDER:
+            continue
+        reasons = merged.setdefault(target, [])
+        for reason in raw_reasons or []:
+            value = str(reason).strip()
+            if value and value not in reasons:
+                reasons.append(value)
+    if not merged:
+        merged["observe"] = ["fallback-observe"]
+    return [(target, merged[target] or ["llm-route"]) for target in _ROUTE_ORDER if target in merged]
+
+
+def _route_by_rule(card: LiftedCard) -> list[tuple[str, list[str]]]:
+    routes: list[tuple[str, list[str]]] = []
     signals = card.decision_signals or {}
     actionability_score = float(signals.get("actionability_score", 0.0) or 0.0)
     novelty_score = float(signals.get("novelty_score", 0.0) or 0.0)
@@ -22,48 +40,43 @@ def _route_by_rule(card: LiftedCard) -> tuple[str, list[str]]:
     missing_fields = [str(x).strip().lower() for x in (card.missing_fields or []) if str(x).strip()]
     is_task_like = any(field in {"owner", "time", "location", "deadline"} for field in missing_fields)
 
-    # 1) Respect lifted target first.
     if card.suggested_target == "knowledge":
-        target = "knowledge"
-        reason_codes.append("suggested-knowledge")
+        routes.append(("knowledge", ["suggested-knowledge"]))
     elif card.suggested_target == "task":
-        target = "task"
-        reason_codes.append("suggested-task")
-    # 2) Context role and action semantics.
-    elif role in {"followup", "update", "confirm"} and (actionability_score >= 0.5 or has_action_hint):
-        target = "task"
-        reason_codes.extend(["context-followup-task", "action-signal"])
-    elif role == "question" and (has_question or actionability_score >= 0.5):
-        target = "task"
-        reason_codes.extend(["context-question-task", "question-signal"])
-    # 3) Tags and explicit task incompleteness.
-    elif "actionable-signal" in card.tags or is_task_like:
-        target = "task"
-        reason_codes.append("task-semantic-signal")
-    elif "novel-content" in card.tags or novelty_score >= 0.6:
-        target = "knowledge"
-        reason_codes.append("knowledge-semantic-signal")
-    else:
+        routes.append(("task", ["suggested-task"]))
+    elif card.suggested_target == "observe":
+        routes.append(("observe", ["suggested-observe"]))
+
+    if role in {"followup", "update", "confirm", "cancel"} and (actionability_score >= 0.5 or has_action_hint):
+        routes.append(("task", ["context-followup-task", "action-signal"]))
+    if role == "question" and (has_question or actionability_score >= 0.5):
+        routes.append(("task", ["context-question-task", "question-signal"]))
+    if "actionable-signal" in card.tags or is_task_like:
+        routes.append(("task", ["task-semantic-signal"]))
+    if "novel-content" in card.tags or novelty_score >= 0.6:
+        routes.append(("knowledge", ["knowledge-semantic-signal"]))
+
+    if not routes:
         # Soft score reference (not hard threshold gating): use score tendency as tie-breaker.
         task_score = actionability_score + (0.15 if has_action_hint else 0.0) + (0.1 if has_question else 0.0) + (0.1 if confidence >= 0.7 else 0.0)
         knowledge_score = novelty_score + (impact_score * 0.4) + (0.1 if confidence >= 0.7 else 0.0)
         if task_score >= 0.85 and task_score >= knowledge_score:
-            target = "task"
-            reason_codes.append("score-lean-task")
+            routes.append(("task", ["score-lean-task"]))
         elif knowledge_score >= 0.85 and knowledge_score > task_score:
-            target = "knowledge"
-            reason_codes.append("score-lean-knowledge")
+            routes.append(("knowledge", ["score-lean-knowledge"]))
         else:
-            reason_codes.append("fallback-observe")
-    return target, reason_codes
+            routes.append(("observe", ["fallback-observe"]))
+    if role == "chitchat" or not routes:
+        routes.append(("observe", ["weak-or-unclear-signal", "fallback-observe"]))
+    return _normalize_routes(routes)
 
 
 def _route_by_llm(
     card: LiftedCard,
-) -> tuple[str, list[str]] | None:
-    # 路由判断任务：三选一输出，非常简单，使用最快参数
+) -> list[tuple[str, list[str]]] | None:
+    # 路由判断任务：输出 1~3 个目标池，保持低温度保证稳定。
     config = llm_client.LLMConfig.from_env(
-        max_tokens=96,
+        max_tokens=256,
         temperature=0.0,
         top_p=0.1,
         extra_body={"thinking": {"type": "disabled"}},
@@ -85,11 +98,10 @@ def _route_by_llm(
     )
     if payload is None:
         return None
-    target = str(payload.target_pool).strip().lower()
-    if target not in {"knowledge", "task", "observe"}:
+    routes = _normalize_routes([(item.target_pool, item.reason_codes) for item in payload.routes])
+    if not routes:
         return None
-    reasons = [str(x).strip() for x in payload.reason_codes if str(x).strip()]
-    return target, (reasons or ["llm-route"])
+    return routes
 
 
 def route_cards(
@@ -98,19 +110,18 @@ def route_cards(
     decisions: list[RouteDecision] = []
     snapshot = {"routing_mode": "semantic_with_score_reference"}
     for card in cards:
-        llm_decision = _route_by_llm(card)
-        if llm_decision is None:
-            target, reason_codes = _route_by_rule(card)
-        else:
-            target, reason_codes = llm_decision
-        decisions.append(
-            RouteDecision(
-                card_id=card.card_id,
-                target_pool=target,  # type: ignore[arg-type]
-                reason_codes=reason_codes,
-                threshold_snapshot=dict(snapshot),
+        routes = _route_by_llm(card)
+        if routes is None:
+            routes = _route_by_rule(card)
+        for target, reason_codes in routes:
+            decisions.append(
+                RouteDecision(
+                    card_id=card.card_id,
+                    target_pool=target,  # type: ignore[arg-type]
+                    reason_codes=reason_codes,
+                    threshold_snapshot=dict(snapshot),
+                )
             )
-        )
     return decisions
 
 __all__ = ["route_cards"]

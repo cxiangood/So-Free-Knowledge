@@ -65,9 +65,13 @@ class LiftParts(BaseModel):
     missing_fields: list[str] = Field(default_factory=list)
 
 
-class RouteOutput(BaseModel):
+class RouteItem(BaseModel):
     target_pool: Literal["knowledge", "task", "observe"]
     reason_codes: list[str] = Field(default_factory=list)
+
+
+class RouteOutput(BaseModel):
+    routes: list[RouteItem] = Field(default_factory=list, min_length=1, max_length=3)
 
 
 class ObserveQuestionOutput(BaseModel):

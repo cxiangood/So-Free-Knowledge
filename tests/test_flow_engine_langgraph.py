@@ -94,6 +94,47 @@ def test_engine_graph_task_route_stores_task(monkeypatch) -> None:
     assert tasks["items"]
 
 
+def test_engine_graph_multi_route_stores_each_target(monkeypatch) -> None:
+    from local_pipeline.core.detect import DetectionResult
+    from local_pipeline.core.lift import LiftResult
+    from local_pipeline.shared.models import LiftedCard, RouteDecision
+
+    card = LiftedCard(
+        card_id="card-multi",
+        candidate_id="cand-multi",
+        title="修复导出失败并沉淀规则",
+        summary="导出失败需要修复，同时权限规则可沉淀。",
+        problem="导出失败影响用户使用。",
+        suggestion="今天完成修复并更新文档。",
+        target_audience="团队成员",
+        evidence=["导出失败和权限改动有关"],
+        tags=["actionable-signal", "novel-content"],
+        confidence=0.86,
+        suggested_target="task",
+        source_message_ids=["current"],
+    )
+    monkeypatch.setattr("local_pipeline.flow.engine.detect_candidates", lambda messages: DetectionResult(messages=messages, value_score=90.0))
+    monkeypatch.setattr("local_pipeline.flow.engine.lift_candidates", lambda messages: LiftResult(cards=[card], warnings=[]))
+    monkeypatch.setattr(
+        "local_pipeline.flow.engine.route_cards",
+        lambda cards: [
+            RouteDecision(card_id=card.card_id, target_pool="knowledge", reason_codes=["knowledge-semantic-signal"], threshold_snapshot={}),
+            RouteDecision(card_id=card.card_id, target_pool="task", reason_codes=["task-semantic-signal"], threshold_snapshot={}),
+        ],
+    )
+    tmp_path = _case_dir("multi_route")
+    engine = _engine(tmp_path)
+
+    result = engine.run(_event("om-multi", "导出失败需要修复，同时沉淀规则"))
+
+    assert result.routed_counts.get("knowledge", 0) == 1
+    assert result.routed_counts.get("task", 0) == 1
+    knowledge = json.loads((tmp_path / "state" / "knowledge_store.json").read_text(encoding="utf-8"))
+    tasks = json.loads((tmp_path / "state" / "task_store.json").read_text(encoding="utf-8"))
+    assert knowledge["items"]
+    assert tasks["items"]
+
+
 def test_engine_graph_task_push_failure_queues_retry(monkeypatch) -> None:
     monkeypatch.setattr("llm.client.LLMConfig.missing_fields", lambda self: ["llm_api_key"])
     tmp_path = _case_dir("push_failure")

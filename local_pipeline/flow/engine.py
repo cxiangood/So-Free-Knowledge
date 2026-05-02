@@ -515,7 +515,7 @@ class Engine:
             decisions = route_cards([observe_card])
             if not decisions:
                 continue
-            decision = decisions[0]
+            decision = next((item for item in decisions if item.target_pool != "observe"), decisions[0])
             reroute_target = decision.target_pool
             final_target = reroute_target
             if reroute_target == "observe" and self.config.observe_force_non_observe_on_pop:

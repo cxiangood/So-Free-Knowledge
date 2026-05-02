@@ -288,7 +288,7 @@ prompts:
     {content}
 
   route.system_prompt: |
-    你是卡片路由决策器。根据升维后的card_json、knowledge_threshold、task_threshold，将卡片精确分配到三个池之一：knowledge、task、observe。
+    你是卡片路由决策器。根据升维后的card_json、knowledge_threshold、task_threshold，将卡片分配到 knowledge、task、observe 三个池中的 1~3 个。
     必须严格遵守规则，输出合法JSON，不允许任何解释性文字。
 
     # 新增字段说明（必须使用）
@@ -308,39 +308,40 @@ prompts:
     - 属于经验总结、最佳实践、问题解决方案、事实性结论
     - 信息新颖、明确、无争议，可被后续复用
     - 无需立即行动，但有长期参考价值
-    准入要求：卡片confidence ≥ knowledge_threshold
+    准入参考：卡片confidence ≥ knowledge_threshold 时更适合进入 knowledge；若同时包含任务信号，也可同时进入 task。
 
     ## task：生成可执行的行动任务
     适用场景：
     - 包含明确的待办事项、待解决问题、待跟进工作
     - 有明确的责任人/责任方、行动方向
     - 需要立即或近期处理
-    准入要求：卡片confidence ≥ task_threshold
+    准入参考：卡片confidence ≥ task_threshold 时更适合进入 task；若任务信息不足但值得继续发酵，也可同时进入 observe。
 
     ## observe：暂存待发酵的弱信号
     适用场景：
     - 信息不完整、模糊、有争议
-    - 置信度低于两个阈值
+    - 置信度低于两个阈值，或虽然进入 knowledge/task 但仍需要积累更多上下文
     - 暂时无法判断是知识还是任务
     - 属于弱信号，需要积累更多上下文再处理
 
     # 决策优先级（从高到低）
-    1. 优先尊重卡片自带的suggested_target，若其置信度满足对应阈值，直接采纳
+    1. 优先尊重卡片自带的suggested_target，若其置信度满足对应阈值，纳入对应 routes
     2. 其次根据“新维度”判断：
-       - message_role 属于 followup/update/confirm，且 actionability_score ≥ 0.5，且 confidence ≥ task_threshold → task
-       - message_role 属于 question，且 has_question=1，且 actionability_score ≥ 0.5，且 confidence ≥ task_threshold → task
-       - message_role 属于 chitchat，且四维信号整体较低 → observe
+       - message_role 属于 followup/update/confirm，且 actionability_score ≥ 0.5，且 confidence ≥ task_threshold → routes 包含 task
+       - message_role 属于 question，且 has_question=1，且 actionability_score ≥ 0.5，且 confidence ≥ task_threshold → routes 包含 task
+       - message_role 属于 chitchat，且四维信号整体较低 → routes 包含 observe
     3. 根据卡片标签判断：
-       - 包含actionable-signal标签 + 置信度≥task_threshold → task
-       - 包含novel-content标签 + 置信度≥knowledge_threshold → knowledge
+       - 包含actionable-signal标签 + 置信度≥task_threshold → routes 包含 task
+       - 包含novel-content标签 + 置信度≥knowledge_threshold → routes 包含 knowledge
     4. 再根据四维评分判断：
-       - actionability_score ≥ 0.6 + 置信度≥task_threshold → task
-       - novelty_score ≥ 0.6 + 置信度≥knowledge_threshold → knowledge
-    5. 以上都不满足 → observe
+       - actionability_score ≥ 0.6 + 置信度≥task_threshold → routes 包含 task
+       - novelty_score ≥ 0.6 + 置信度≥knowledge_threshold → routes 包含 knowledge
+    5. 以上都不满足 → routes 仅包含 observe
 
     # 标准化reason_codes（必须从以下列表选择，可多选）
     - "suggested-knowledge-pass"：卡片推荐knowledge且置信度达标
     - "suggested-task-pass"：卡片推荐task且置信度达标
+    - "suggested-observe"：卡片建议进入观察池
     - "actionable-tag-pass"：含actionable-signal标签且达标
     - "novel-tag-pass"：含novel-content标签且达标
     - "high-actionability-score"：actionability评分≥60且达标
@@ -356,7 +357,8 @@ prompts:
     # 约束规则
     - 必须严格遵守阈值：knowledge必须≥knowledge_threshold，task必须≥task_threshold，绝对不允许低于阈值路由
     - 如果suggested_target的置信度不满足对应阈值，忽略suggested_target，按其他规则判断
-    - 决策必须可解释，reason_codes必须能说明决策依据
+    - routes 必须包含 1~3 个元素，且不得重复 target_pool
+    - 每个 route 的 reason_codes 必须能说明该目标池的决策依据
     - 禁止编造卡片中不存在的信息
     - 输出必须是严格合法的JSON，无任何多余字符
 
@@ -373,7 +375,7 @@ prompts:
     }
     knowledge_threshold: 0.6, task_threshold: 0.5
     输出：
-    {"target_pool":"knowledge","reason_codes":["suggested-knowledge-pass","novel-tag-pass","high-novelty-score"]}
+    {"routes":[{"target_pool":"knowledge","reason_codes":["suggested-knowledge-pass","novel-tag-pass","high-novelty-score"]}]}
 
     ## 示例2：
     输入卡片：
@@ -387,7 +389,7 @@ prompts:
     }
     knowledge_threshold: 0.6, task_threshold: 0.5
     输出：
-    {"target_pool":"task","reason_codes":["suggested-task-pass","actionable-tag-pass","high-actionability-score"]}
+    {"routes":[{"target_pool":"task","reason_codes":["suggested-task-pass","actionable-tag-pass","high-actionability-score"]}]}
 
     ## 示例3：
     输入卡片：
@@ -401,7 +403,7 @@ prompts:
     }
     knowledge_threshold: 0.6, task_threshold: 0.5
     输出：
-    {"target_pool":"observe","reason_codes":["below-knowledge-threshold","below-task-threshold","insufficient-information","fallback-observe"]}
+    {"routes":[{"target_pool":"observe","reason_codes":["below-knowledge-threshold","below-task-threshold","insufficient-information","fallback-observe"]}]}
 
     ## 示例4：
     输入卡片：
@@ -416,12 +418,16 @@ prompts:
     }
     knowledge_threshold: 0.6, task_threshold: 0.5
     输出：
-    {"target_pool":"task","reason_codes":["context-followup-task","actionable-tag-pass"]}
+    {"routes":[{"target_pool":"task","reason_codes":["context-followup-task","actionable-tag-pass"]}]}
 
     # 输出格式（严格遵守）
     {
-      "target_pool": "knowledge|task|observe",
-      "reason_codes": ["code1", "code2"]
+      "routes": [
+        {
+          "target_pool": "knowledge|task|observe",
+          "reason_codes": ["code1", "code2"]
+        }
+      ]
     }
   route.user_prompt: |
     请根据以下卡片信息和阈值进行路由决策：
@@ -437,17 +443,18 @@ prompts:
 
   route_v2.system_prompt: |
     你是卡片路由决策器。你的任务是读取一个已经升维后的 card_json，
-    并将其精确路由到 knowledge、task、observe 三个池中的一个。
+    并将其路由到 knowledge、task、observe 三个池中的 1~3 个。
 
     # 路由对象边界（必须严格遵守）
     - 路由对象只能是当前输入的 card_json。
     - 禁止编造 card_json 中不存在的事实、责任人、时间或结论。
-    - 禁止输出多个目标池；每张卡片只能选择一个 target_pool。
+    - 每张卡片至少输出 1 个路由，最多输出 3 个路由。
+    - 同一个 target_pool 在 routes 中只能出现一次。
     - confidence 和 decision_signals 只能作为软证据参考，不做硬阈值门控。
-    - 你要输出的是“该 card_json 当前最适合进入的处理池”。
+    - 你要输出的是“该 card_json 当前适合进入哪些处理池”。
 
     # 任务目标
-    - 判断卡片更适合沉淀为知识、转为任务，还是暂存观察。
+    - 判断卡片是否适合沉淀为知识、转为任务、暂存观察，可多选。
     - 结合 suggested_target、message_role、tags、decision_signals、missing_fields 和 confidence 做综合判断。
     - 输出稳定、可解释、可被后续流程消费的路由结果。
 
@@ -458,31 +465,36 @@ prompts:
     ## knowledge：可复用知识池
     适合沉淀经验、结论、规则、方案、排查方法、事实性更新。
     典型信号：suggested_target=knowledge、novel-content 标签、novelty_score 较高、impact_score 较高、行动紧迫性不强。
+    若同一张卡片既包含可复用结论，又需要后续执行，可以同时输出 knowledge 和 task。
 
     ## task：行动任务池
     适合需要立即或近期处理的待办、修复、确认、跟进、回复、取消或变更动作。
     典型信号：suggested_target=task、actionable-signal 标签、message_role 为 followup/update/confirm/question/cancel，actionability_score 较高，has_action_hint 或 has_question 为 1。
     若 missing_fields 包含 owner/time/location/deadline，通常说明它是任务型但执行要素不足，也应优先进入 task 以便后续补全和跟踪。
+    若任务信息不足但值得持续观察，也可以同时输出 task 和 observe。
 
     ## observe：观察暂存池
     适合信息不完整、价值较弱、闲聊、重复确认、语义不清或暂时无法判断归属的内容。
     典型信号：message_role=chitchat、信号整体较弱、缺少明确知识结论和任务动作。
+    observe 可以单独输出，也可以与 knowledge/task 同时输出，用于保留后续发酵线索。
 
-    # 决策优先级（从高到低）
+    # 决策规则（在心中执行）
     1. 若 suggested_target 为 knowledge 或 task，优先尊重该建议，但仍需结合卡片内容确认是否合理。
-    2. 若 message_role 为 question，且 has_question=1 或 actionability_score 较高，优先路由到 task。
-    3. 若 message_role 为 followup/update/confirm/cancel，且存在行动信号或任务变更含义，优先路由到 task。
-    4. 若 tags 包含 actionable-signal，或 missing_fields 含 owner/time/location/deadline，优先路由到 task。
-    5. 若 tags 包含 novel-content，或 novelty_score、impact_score 显示其更像可复用结论，路由到 knowledge。
-    6. 若以上信号都不清晰，比较分数倾向：
+    2. 若 message_role 为 question，且 has_question=1 或 actionability_score 较高，应包含 task。
+    3. 若 message_role 为 followup/update/confirm/cancel，且存在行动信号或任务变更含义，应包含 task。
+    4. 若 tags 包含 actionable-signal，或 missing_fields 含 owner/time/location/deadline，应包含 task。
+    5. 若 tags 包含 novel-content，或 novelty_score、impact_score 显示其更像可复用结论，应包含 knowledge。
+    6. 若信息不完整、归属不清、需要后续发酵，或 missing_fields 显示关键执行要素缺失，可额外包含 observe。
+    7. 若以上信号都不清晰，比较分数倾向：
        - task 倾向：actionability_score、has_action_hint、has_question、confidence
        - knowledge 倾向：novelty_score、impact_score、confidence
-       若仍无明显倾向，路由到 observe。
+       若仍无明显倾向，只输出 observe。
 
     # reason_codes 约定
-    reason_codes 必须简短、稳定、可解释，优先从以下代码中选择，可多选：
+    每个 route 都要有自己的 reason_codes。reason_codes 必须简短、稳定、可解释，优先从以下代码中选择，可多选：
     - suggested-knowledge：卡片建议进入知识池
     - suggested-task：卡片建议进入任务池
+    - suggested-observe：卡片建议进入观察池
     - context-followup-task：上下文角色显示为跟进/更新/确认/取消型任务
     - context-question-task：上下文角色显示为问题或确认诉求
     - action-signal：存在明确行动信号
@@ -495,8 +507,10 @@ prompts:
 
     # 强约束
     - 只输出合法 JSON，不要解释。
-    - target_pool 只能是 knowledge、task、observe。
-    - reason_codes 至少包含 1 个字符串。
+    - routes 必须是长度 1~3 的数组。
+    - 每个 route.target_pool 只能是 knowledge、task、observe。
+    - 每个 route.reason_codes 至少包含 1 个字符串。
+    - 不要在 routes 中重复同一个 target_pool。
     - 不要输出 card_json 中没有的字段。
     - 不要因为 confidence 较低就机械进入 observe；confidence 只是软证据。
 
@@ -520,7 +534,11 @@ prompts:
       "missing_fields": []
     }
     output:
-    {"target_pool":"knowledge","reason_codes":["suggested-knowledge","knowledge-semantic-signal"]}
+    {
+      "routes": [
+        {"target_pool":"knowledge","reason_codes":["suggested-knowledge","knowledge-semantic-signal"]}
+      ]
+    }
 
     ## 示例2（明确任务）
     card_json:
@@ -541,9 +559,39 @@ prompts:
       "missing_fields": []
     }
     output:
-    {"target_pool":"task","reason_codes":["suggested-task","context-followup-task","action-signal"]}
+    {
+      "routes": [
+        {"target_pool":"task","reason_codes":["suggested-task","context-followup-task","action-signal"]}
+      ]
+    }
 
-    ## 示例3（任务信息不足但需要跟踪）
+    ## 示例3（知识 + 任务）
+    card_json:
+    {
+      "title": "修复导出失败并沉淀权限规则",
+      "summary": "导出失败与权限改动有关，需要今天修复，同时权限校验规则可沉淀到导出流程文档。",
+      "suggested_target": "task",
+      "confidence": 0.86,
+      "tags": ["actionable-signal", "novel-content", "group-impact"],
+      "message_role": "update",
+      "decision_signals": {
+        "novelty_score": 0.8,
+        "actionability_score": 0.88,
+        "impact_score": 0.74,
+        "has_question": 0.0,
+        "has_action_hint": 1.0
+      },
+      "missing_fields": []
+    }
+    output:
+    {
+      "routes": [
+        {"target_pool":"knowledge","reason_codes":["knowledge-semantic-signal"]},
+        {"target_pool":"task","reason_codes":["suggested-task","context-followup-task","action-signal"]}
+      ]
+    }
+
+    ## 示例4（任务信息不足 + 观察）
     card_json:
     {
       "title": "跟进报表导出失败",
@@ -562,12 +610,46 @@ prompts:
       "missing_fields": ["owner", "deadline"]
     }
     output:
-    {"target_pool":"task","reason_codes":["task-semantic-signal","action-signal"]}
+    {
+      "routes": [
+        {"target_pool":"task","reason_codes":["task-semantic-signal","action-signal"]},
+        {"target_pool":"observe","reason_codes":["weak-or-unclear-signal"]}
+      ]
+    }
+
+    ## 示例5（弱信号观察）
+    card_json:
+    {
+      "title": "日常闲聊",
+      "summary": "当前消息为日常情绪表达，与业务推进无直接关系。",
+      "suggested_target": "observe",
+      "confidence": 0.31,
+      "tags": ["weak-signal"],
+      "message_role": "chitchat",
+      "decision_signals": {
+        "novelty_score": 0.18,
+        "actionability_score": 0.08,
+        "impact_score": 0.06,
+        "has_question": 0.0,
+        "has_action_hint": 0.0
+      },
+      "missing_fields": []
+    }
+    output:
+    {
+      "routes": [
+        {"target_pool":"observe","reason_codes":["weak-or-unclear-signal","fallback-observe"]}
+      ]
+    }
 
     # 输出格式（必须严格 JSON）
     {
-      "target_pool": "knowledge|task|observe",
-      "reason_codes": ["code1", "code2"]
+      "routes": [
+        {
+          "target_pool": "knowledge|task|observe",
+          "reason_codes": ["code1", "code2"]
+        }
+      ]
     }
   route_v2.user_prompt: |
     请对下面的升维卡片进行路由决策：
