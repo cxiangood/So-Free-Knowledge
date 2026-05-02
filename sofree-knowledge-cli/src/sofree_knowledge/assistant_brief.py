@@ -446,7 +446,9 @@ def _normalize_schedule(item: dict[str, Any]) -> dict[str, Any]:
 
 
 def _build_doc_stats(records: list[dict[str, Any]], target_user_id: str) -> dict[str, dict[str, int]]:
-    stats: dict[str, dict[str, int]] = defaultdict(lambda: {"views": 0, "edits": 0, "comments": 0})
+    stats: dict[str, dict[str, int]] = defaultdict(
+        lambda: {"views": 0, "edits": 0, "comments": 0, "shares": 0}
+    )
     normalized_target = str(target_user_id or "").strip()
     for record in records:
         doc_id = str(record.get("doc_id") or record.get("document_id") or record.get("token") or "").strip()
@@ -462,6 +464,10 @@ def _build_doc_stats(records: list[dict[str, Any]], target_user_id: str) -> dict
             stats[doc_id]["edits"] += count
         elif "comment" in action:
             stats[doc_id]["comments"] += count
+        elif "share" in action:
+            stats[doc_id]["shares"] += count
+        elif "view" in action or "click" in action or "open" in action:
+            stats[doc_id]["views"] += count
         else:
             stats[doc_id]["views"] += count
     return stats
@@ -561,6 +567,7 @@ def _score_doc_recommend(
     score += min(25, int(stats.get("views", 0)) * 3)
     score += min(20, int(stats.get("edits", 0)) * 8)
     score += min(15, int(stats.get("comments", 0)) * 5)
+    score += min(10, int(stats.get("shares", 0)) * 3)
     score += min(10, len(related_messages) * 2)
     score += min(10, len(related_knowledge) * 3)
     if _is_recent(doc.get("updated_at", "")):
@@ -613,6 +620,10 @@ def _build_reasons(doc: dict[str, str], stats: dict[str, int], related_messages:
         reasons.append(f"近期编辑活跃（{stats.get('edits', 0)} 次）")
     if int(stats.get("views", 0)) > 0:
         reasons.append(f"近期访问较多（{stats.get('views', 0)} 次）")
+    if int(stats.get("comments", 0)) > 0:
+        reasons.append(f"近期评论互动（{stats.get('comments', 0)} 次）")
+    if int(stats.get("shares", 0)) > 0:
+        reasons.append(f"近期群聊分享（{stats.get('shares', 0)} 次）")
     if related_messages:
         reasons.append(f"关联群聊消息 {len(related_messages)} 条")
     if not reasons:
@@ -1165,8 +1176,8 @@ def _to_markdown(
         lines.append(f"### {business}")
         for item in group.get("documents", [])[:5]:
             title = f"[{item['title']}]({item['url']})" if item.get("url") else item["title"]
+            weighted_stars = _weighted_stars(item['urgency_score'], item['recommend_score'])
             lines.append(
-                weighted_stars = _weighted_stars(item['urgency_score'], item['recommend_score'])
                 f"- {'★' * weighted_stars}{'☆' * (5 - weighted_stars)} "
                 f"[{item['doc_type']}] {title}"
             )

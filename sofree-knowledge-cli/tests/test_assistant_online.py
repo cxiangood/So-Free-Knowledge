@@ -42,6 +42,32 @@ class FakeClient:
             "page_token": "",
         }
 
+    def list_file_view_records(self, file_token, file_type="docx", page_size=50, page_token=""):
+        return {
+            "items": [
+                {"viewer_id": "ou_target", "view_time": "1710000000"},
+                {"viewer_id": "ou_other", "view_time": "1710000001"},
+            ],
+            "has_more": False,
+            "page_token": "",
+        }
+
+    def list_file_comments(self, file_token, file_type="docx", page_size=50, page_token="", is_solved=None):
+        return {
+            "items": [
+                {
+                    "reply_list": {
+                        "replies": [
+                            {"create_user_id": "ou_target"},
+                            {"create_user_id": "ou_other"},
+                        ]
+                    }
+                }
+            ],
+            "has_more": False,
+            "page_token": "",
+        }
+
 
 def test_collect_online_personal_inputs_builds_documents_and_access_records(monkeypatch):
     monkeypatch.setattr("sofree_knowledge.assistant_online.get_user_identity", lambda token_file=None: {"open_id": "ou_target"})
@@ -60,7 +86,10 @@ def test_collect_online_personal_inputs_builds_documents_and_access_records(monk
     assert out["meta"]["message_count"] == 0
     assert out["messages"] == []
     assert any(item.get("doc_id") == "abc123" for item in out["documents"])
-    assert out["access_records"][0]["doc_id"] == "abc123"
+    actions = {(item["doc_id"], item["action"], item.get("count", 0)) for item in out["access_records"]}
+    assert ("abc123", "share", 1) in actions
+    assert ("abc123", "view", 1) in actions
+    assert ("abc123", "comment", 1) in actions
     assert out["knowledge_items"] == []
 
 

@@ -193,6 +193,71 @@ class FeishuClient:
             "updated_at": body.get("modified_time", ""),
         }
 
+    def list_file_comments(
+        self,
+        file_token: str,
+        *,
+        file_type: str = "docx",
+        page_size: int = 50,
+        page_token: str = "",
+        is_solved: bool | None = None,
+    ) -> dict[str, Any]:
+        params: dict[str, Any] = {
+            "file_type": file_type,
+            "page_size": min(max(page_size, 1), 50),
+        }
+        if page_token:
+            params["page_token"] = page_token
+        if is_solved is not None:
+            params["is_solved"] = is_solved
+        path = f"/open-apis/drive/v1/files/{file_token}/comments"
+        if self.user_access_token:
+            data = self.request("GET", path, params=params)
+        else:
+            data = self.request(
+                "GET",
+                path,
+                access_token=self.get_tenant_access_token(),
+                params=params,
+            )
+        body = data.get("data", data)
+        return {
+            "items": body.get("items", []),
+            "has_more": bool(body.get("has_more", False)),
+            "page_token": body.get("page_token", ""),
+        }
+
+    def list_file_view_records(
+        self,
+        file_token: str,
+        *,
+        file_type: str = "docx",
+        page_size: int = 50,
+        page_token: str = "",
+    ) -> dict[str, Any]:
+        params: dict[str, Any] = {
+            "file_type": file_type,
+            "page_size": min(max(page_size, 1), 50),
+        }
+        if page_token:
+            params["page_token"] = page_token
+        path = f"/open-apis/drive/v1/files/{file_token}/view_records"
+        if self.user_access_token:
+            data = self.request("GET", path, params=params)
+        else:
+            data = self.request(
+                "GET",
+                path,
+                access_token=self.get_tenant_access_token(),
+                params=params,
+            )
+        body = data.get("data", data)
+        return {
+            "items": body.get("items", body.get("view_records", [])),
+            "has_more": bool(body.get("has_more", False)),
+            "page_token": body.get("page_token", ""),
+        }
+
     def get_app_access_token(self) -> str:
         app_id, app_secret = get_app_credentials()
         if not app_id or not app_secret:

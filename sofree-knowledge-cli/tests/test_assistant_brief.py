@@ -34,6 +34,48 @@ def test_build_personal_brief_ranks_docs_with_urgency_and_recommend():
     assert report["retrieval_plan"]["dual_tower_ready"] is True
 
 
+def test_build_personal_brief_counts_share_and_comment_separately():
+    documents = [
+        {"doc_id": "d1", "title": "Release Flow", "summary": "Pre-release checklist"},
+        {"doc_id": "d2", "title": "Weekly Notes", "summary": "Routine sync"},
+    ]
+    access = [
+        {"doc_id": "d1", "user_id": "u1", "action": "share", "count": 2},
+        {"doc_id": "d1", "user_id": "u1", "action": "comment", "count": 1},
+    ]
+
+    report = build_personal_brief(
+        documents=documents,
+        access_records=access,
+        target_user_id="u1",
+    )
+
+    top_doc = report["documents"][0]
+    assert top_doc["doc_id"] == "d1"
+    assert top_doc["recommend_score"] > report["documents"][1]["recommend_score"]
+    assert any("群聊分享" in reason for reason in top_doc["reasons"])
+    assert any("评论互动" in reason for reason in top_doc["reasons"])
+
+
+def test_extract_docs_and_access_from_messages_marks_share_not_view():
+    from sofree_knowledge.assistant_online import extract_docs_and_access_from_messages
+
+    docs, access_records = extract_docs_and_access_from_messages(
+        [
+            {
+                "message_id": "m1",
+                "chat_id": "oc_x",
+                "sender": {"id": "ou_1"},
+                "text": "See https://example.feishu.cn/docx/abc123 this file",
+            }
+        ],
+        target_user_id="ou_1",
+    )
+
+    assert len(docs) == 1
+    assert access_records == [{"doc_id": "abc123", "user_id": "ou_1", "action": "share", "count": 1}]
+
+
 def test_build_personal_brief_emits_dual_tower_text_payload():
     report = build_personal_brief(
         documents=[{"doc_id": "d1", "title": "Release Flow", "summary": "Rollback checklist for release"}],

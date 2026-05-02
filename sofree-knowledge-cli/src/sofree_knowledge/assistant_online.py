@@ -136,6 +136,12 @@ def collect_online_personal_inputs(
         drive_error = str(exc)
 
     linked_docs, link_access_records = extract_docs_and_access_from_messages(all_messages, resolved_target)
+    direct_access_records = _collect_direct_doc_access_records(
+        client,
+        documents=drive_docs,
+        target_user_id=resolved_target,
+        recent_days=recent_days,
+    )
 
     # 批量获取消息提及文档的真实标题（使用独立实现，不依赖FeishuClient内置方法）
     for doc in linked_docs:
@@ -168,7 +174,7 @@ def collect_online_personal_inputs(
             doc["title"] = f"文档（{doc_token[:8]}...）"
 
     documents = _merge_documents(drive_docs, linked_docs)
-    access_records = link_access_records
+    access_records = _merge_access_records([*link_access_records, *direct_access_records])
     knowledge_items = build_knowledge_items(messages=messages, documents=documents, max_items=max_knowledge)
 
     return {
@@ -248,7 +254,9 @@ def extract_docs_and_access_from_messages(
         {
             "doc_id": doc_id,
             "user_id": user_id,
-            "action": "view",
+            # Chat messages only prove the user shared a doc link in chat.
+            # They should not be treated as direct document views.
+            "action": "share",
             "count": count,
         }
         for (doc_id, user_id), count in access_counts.items()
@@ -280,6 +288,165 @@ def build_knowledge_items(
     return knowledge
 
 
+def _collect_direct_doc_access_records(
+    client: FeishuClient,
+    *,
+    documents: list[dict[str, Any]],
+    target_user_id: str,
+    recent_days: int,
+) -> list[dict[str, Any]]:
+    if not target_user_id:
+        return []
+    if not hasattr(client, "list_file_view_records") and not hasattr(client, "list_file_comments"):
+        return []
+
+    records: list[dict[str, Any]] = []
+    for doc in documents:
+        doc_id = str(doc.get("doc_id") or "").strip()
+        if not doc_id:
+            continue
+        file_type = _infer_drive_file_type(doc)
+        if file_type == "wiki":
+            continue
+
+        records.extend(
+            _collect_direct_view_records(
+                client,
+                doc_id=doc_id,
+                file_type=file_type,
+                target_user_id=target_user_id,
+                recent_days=recent_days,
+            )
+        )
+        records.extend(
+            _collect_direct_comment_records(
+                client,
+                doc_id=doc_id,
+                file_type=file_type,
+                target_user_id=target_user_id,
+            )
+        )
+    return records
+
+
+def _collect_direct_view_records(
+    client: FeishuClient,
+    *,
+    doc_id: str,
+    file_type: str,
+    target_user_id: str,
+    recent_days: int,
+) -> list[dict[str, Any]]:
+    if not hasattr(client, "list_file_view_records"):
+        return []
+    count = 0
+    page_token = ""
+    while True:
+        try:
+            page = client.list_file_view_records(
+                doc_id,
+                file_type=file_type,
+                page_size=50,
+                page_token=page_token,
+            )
+        except (AttributeError, FeishuAPIError, MissingFeishuConfigError):
+            return []
+        items = page.get("items", []) if isinstance(page, dict) else []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            actor_ids = _extract_actor_ids(item)
+            if target_user_id not in actor_ids:
+                continue
+            record_time = str(
+                item.get("view_time")
+                or item.get("create_time")
+                or item.get("timestamp")
+                or ""
+            )
+            if record_time and not _is_within_recent_days(record_time, recent_days):
+                continue
+            count += 1
+        page_token = str(page.get("page_token", "") or "")
+        if not page.get("has_more") or not page_token:
+            break
+    if count <= 0:
+        return []
+    return [{"doc_id": doc_id, "user_id": target_user_id, "action": "view", "count": count}]
+
+
+def _collect_direct_comment_records(
+    client: FeishuClient,
+    *,
+    doc_id: str,
+    file_type: str,
+    target_user_id: str,
+) -> list[dict[str, Any]]:
+    if file_type not in {"doc", "docx", "sheet"}:
+        return []
+    if not hasattr(client, "list_file_comments"):
+        return []
+    count = 0
+    page_token = ""
+    while True:
+        try:
+            page = client.list_file_comments(
+                doc_id,
+                file_type=file_type,
+                page_size=50,
+                page_token=page_token,
+                is_solved=None,
+            )
+        except (AttributeError, FeishuAPIError, MissingFeishuConfigError):
+            return []
+        items = page.get("items", []) if isinstance(page, dict) else []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            count += _count_user_comment_replies(item, target_user_id)
+        page_token = str(page.get("page_token", "") or "")
+        if not page.get("has_more") or not page_token:
+            break
+    if count <= 0:
+        return []
+    return [{"doc_id": doc_id, "user_id": target_user_id, "action": "comment", "count": count}]
+
+
+def _count_user_comment_replies(comment_item: dict[str, Any], target_user_id: str) -> int:
+    reply_list = comment_item.get("reply_list")
+    if isinstance(reply_list, dict):
+        replies = reply_list.get("replies", [])
+        if isinstance(replies, list):
+            return sum(
+                1
+                for reply in replies
+                if isinstance(reply, dict) and target_user_id in _extract_actor_ids(reply)
+            )
+    return 1 if target_user_id in _extract_actor_ids(comment_item) else 0
+
+
+def _merge_access_records(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    merged: dict[tuple[str, str, str], dict[str, Any]] = {}
+    for item in records:
+        if not isinstance(item, dict):
+            continue
+        doc_id = str(item.get("doc_id") or item.get("document_id") or item.get("token") or "").strip()
+        action = str(item.get("action") or item.get("event") or "").strip().lower()
+        user_id = str(item.get("user_id") or item.get("operator_id") or "").strip()
+        if not doc_id or not action:
+            continue
+        key = (doc_id, user_id, action)
+        if key not in merged:
+            merged[key] = {
+                "doc_id": doc_id,
+                "user_id": user_id,
+                "action": action,
+                "count": 0,
+            }
+        merged[key]["count"] += int(item.get("count") or 1)
+    return list(merged.values())
+
+
 def _merge_documents(primary: list[dict[str, Any]], secondary: list[dict[str, Any]]) -> list[dict[str, Any]]:
     merged: dict[str, dict[str, Any]] = {}
     for item in [*primary, *secondary]:
@@ -299,6 +466,41 @@ def _merge_documents(primary: list[dict[str, Any]], secondary: list[dict[str, An
         if len(str(item.get("title") or "")) > len(str(current.get("title") or "")):
             current["title"] = item.get("title", "")
     return list(merged.values())
+
+
+def _infer_drive_file_type(doc: dict[str, Any]) -> str:
+    url = str(doc.get("url") or "").lower()
+    if "/docx/" in url:
+        return "docx"
+    if "/docs/" in url or "/doc/" in url:
+        return "doc"
+    if "/sheet/" in url or "/sheets/" in url:
+        return "sheet"
+    if "/base/" in url:
+        return "base"
+    if "/slides/" in url:
+        return "slides"
+    if "/wiki/" in url:
+        return "wiki"
+    if "/file/" in url:
+        return "file"
+    return "docx"
+
+
+def _extract_actor_ids(item: dict[str, Any]) -> set[str]:
+    candidates: set[str] = set()
+    for key in ("open_id", "user_id", "operator_id", "create_user_id", "creator_id", "commenter_id", "viewer_id"):
+        value = item.get(key)
+        if value:
+            candidates.add(str(value))
+    for key in ("user", "operator", "creator", "commenter", "viewer"):
+        nested = item.get(key)
+        if isinstance(nested, dict):
+            for nested_key in ("open_id", "user_id", "id"):
+                value = nested.get(nested_key)
+                if value:
+                    candidates.add(str(value))
+    return {value for value in candidates if value}
 
 
 def _extract_urls(text: str) -> list[str]:

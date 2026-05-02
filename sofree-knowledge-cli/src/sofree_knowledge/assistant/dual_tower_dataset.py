@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import defaultdict
 from typing import Any
 
 from .two_tower import build_document_tower_text, build_user_tower_text
@@ -26,7 +27,7 @@ def build_weak_supervision_samples(
     enriched_profile.setdefault("recent_topics", recent_topics)
     user_tower_text = build_user_tower_text_with_topics(enriched_profile)
 
-    positives: dict[str, int] = {}
+    positives: dict[str, int] = defaultdict(int)
     normalized_target = str(target_user_id or "").strip()
     for record in access_records:
         doc_id = str(record.get("doc_id") or record.get("document_id") or record.get("token") or "").strip()
@@ -35,7 +36,9 @@ def build_weak_supervision_samples(
         user_id = str(record.get("user_id") or record.get("operator_id") or "").strip()
         if normalized_target and user_id and user_id != normalized_target:
             continue
-        positives[doc_id] = positives.get(doc_id, 0) + int(record.get("count") or 1)
+        action = str(record.get("action") or record.get("event") or "").lower()
+        count = int(record.get("count") or 1)
+        positives[doc_id] += _positive_strength_for_action(action, count)
 
     if not positives:
         return []
@@ -70,6 +73,19 @@ def build_weak_supervision_samples(
             }
         )
     return samples
+
+
+def _positive_strength_for_action(action: str, count: int) -> int:
+    normalized_count = max(1, int(count or 1))
+    if "edit" in action:
+        return normalized_count * 3
+    if "comment" in action:
+        return normalized_count * 2
+    if "share" in action:
+        return normalized_count
+    if "view" in action or "click" in action or "open" in action:
+        return normalized_count * 2
+    return normalized_count
 
 
 def build_user_tower_text_with_topics(profile: dict[str, Any]) -> str:
