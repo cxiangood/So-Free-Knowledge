@@ -4,7 +4,7 @@ from dataclasses import dataclass
 import os
 from typing import Any
 
-from ..comm.identity_map import UserIdentityMap, parse_target_audience_names
+from ..comm.identity_map import UserIdentityMap, parse_participants_names
 from ..comm.send import TaskPushAttempt, TaskPushConfig, push_task_card, push_task_card_to_user_targets
 from ..shared.models import LiftedCard, RagHit
 from ..store.state import LocalStateStore
@@ -34,7 +34,7 @@ def save_task(
     task_id = store.add_task(card)
     attempt: TaskPushAttempt | None = None
     if push_config.enabled:
-        names = parse_target_audience_names(card.target_audience)
+        names = parse_participants_names(card.participants)
         if identity_map is not None and names and source_chat_id:
             targets: list[tuple[str, str, str]] = []
             fallback_id = str(os.getenv("TASK_PUSH_FALLBACK_RECEIVE_ID", "")).strip()
@@ -64,7 +64,7 @@ def save_task(
                     chat_id=source_chat_id,
                     card_payload={},
                     status="failed",
-                    error="no_resolvable_target_in_target_audience",
+                    error="no_resolvable_target_in_participants",
                     details=[],
                 )
         else:
@@ -93,7 +93,9 @@ def enhance_task_card_with_rag(card: LiftedCard, hits: list[RagHit], max_hits: i
         summary=new_summary,
         problem=card.problem,
         suggestion=new_suggestion,
-        target_audience=card.target_audience,
+        participants=list(card.participants),
+        times=str(card.times or ""),
+        locations=str(card.locations or ""),
         evidence=new_evidence,
         tags=card.tags,
         confidence=card.confidence,

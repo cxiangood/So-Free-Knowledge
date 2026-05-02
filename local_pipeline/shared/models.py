@@ -30,7 +30,9 @@ class LiftedCard:
     summary: str
     problem: str
     suggestion: str
-    target_audience: list[str]
+    participants: list[str]
+    times: str
+    locations: str
     evidence: list[str]
     tags: list[str]
     confidence: float

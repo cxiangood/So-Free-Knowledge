@@ -56,7 +56,9 @@ class LiftParts(BaseModel):
     summary: str
     suggestion: str
     problem: str
-    names: list[str] = Field(default_factory=list)
+    participants: list[str] = Field(default_factory=list)
+    times: str
+    locations: str
     topic_focus: str = ""
     message_role: str = ""
     context_relation: str = ""

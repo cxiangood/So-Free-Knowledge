@@ -1,7 +1,6 @@
-prompts:
+﻿prompts:
   detect.system_prompt: |
-    你是一个群聊消息评分器。根据 current_line 和 context_lines，
-    对当前消息在四个维度打分（0~100），并只输出 JSON。
+    你是一个群聊消息评分器。根据 current_line 和 context_lines，对当前消息在四个维度打分（0~100），并只输出 JSON。
 
     # 评分维度 + 锚点
 
@@ -113,7 +112,9 @@ prompts:
     - summary
     - suggestion
     - problem
-    - names
+    - participants
+    - times
+    - locations
     - topic_focus
     - message_role
     - context_relation
@@ -126,7 +127,9 @@ prompts:
     - summary：1-2句，体现“当前句在该话题中的含义 + 与上下文关系”。
     - suggestion：给出下一步动作。若 actionability 低，可写“无需行动”。
     - problem：提炼待解决问题或风险。若无明确问题，写“无明显问题”。
-    - names：输出该话题下的关键人物，排除无关话题人物。
+    - participants：输出该话题下的关键人物，排除无关话题人物。
+    - times：输出该话题相关时间要素，支持多个。
+    - locations：输出该话题相关地点要素，支持多个。
     - topic_focus：当前消息所属话题的短语（8-20字）。
     - message_role：当前消息在该话题中的角色，取值限于
       new / followup / update / confirm / question / cancel / chitchat。
@@ -156,7 +159,9 @@ prompts:
       "summary": "",
       "suggestion": "",
       "problem": "",
-      "names": [],
+      "participants": [],
+      "times": [],
+      "locations": [],
       "topic_focus": "",
       "message_role": "new",
       "context_relation": "",
@@ -759,7 +764,9 @@ prompts:
     - summary：1~2句，体现“current_line 含义 + 在 context_lines 中的位置与作用”。不混入无关内容
     - suggestion：下一步动作；若无动作，写“暂无需立即行动”
     - problem：待解决问题或风险；若无，写“无明显问题”
-    - names：仅保留本话题相关人物
+    - participants：仅保留本话题相关人物
+    - times：提取本话题相关时间要素
+    - locations：提取本话题相关地点要素
     - context_evidence：只能放用于支撑 current_line 的同话题证据短句
     - decision_signals：必须含以下数值键（0~1）
       novelty_score, actionability_score, impact_score, emotion_score, has_question, has_action_hint
@@ -778,7 +785,9 @@ prompts:
       "summary": "当前消息将登录超时问题推进为明确执行动作，并指定了负责人和时间节点。",
       "suggestion": "创建任务并跟踪17:00前交付结果。",
       "problem": "若未按时修复将继续影响用户登录。",
-      "names": ["张三"],
+      "participants": ["张三"],
+      "times": "今天17:00前",
+      "locations": "",
       "topic_focus": "登录超时修复",
       "message_role": "followup",
       "context_relation": "基于前文问题反馈，补充了执行责任与截止时间。",
@@ -810,7 +819,9 @@ prompts:
       "summary": "当前消息继续补充下午会议的参会人员，将赵六加入需要参会的范围。",
       "suggestion": "更新会议参会名单，并同步给张三、李四、王五和赵六。",
       "problem": "若参会名单未同步，赵六可能遗漏会议安排。",
-      "names": ["张三", "李四", "王五", "赵六"],
+      "participants": ["张三", "李四", "王五", "赵六"],
+      "times": "今天下午",
+      "locations": "我办公室",
       "topic_focus": "下午会议参会安排",
       "message_role": "followup",
       "context_relation": "延续前文会议安排，只补充同一会议的话题信息。",
@@ -838,7 +849,9 @@ prompts:
       "summary": "当前消息给出导入失败问题的处理结论：导入前过滤全空行，避免行号错位。该信息适合作为后续排查和实现规则沉淀。",
       "suggestion": "将过滤全空行规则写入导入流程或开发文档。",
       "problem": "若不处理全空行，导入结果可能出现行号错位。",
-      "names": ["Dev", "QA"],
+      "participants": ["Dev", "QA"],
+      "times": "",
+      "locations": "",
       "topic_focus": "Excel导入空行处理",
       "message_role": "update",
       "context_relation": "在前文问题定位和复现基础上，补充最终结论。",
@@ -866,7 +879,9 @@ prompts:
       "summary": "当前消息取消了前文已安排的竞品清单整理任务，并说明竞品方向今天取消。",
       "suggestion": "关闭或暂停对应任务，避免李四继续投入整理工作。",
       "problem": "若未同步取消，可能产生无效工作。",
-      "names": ["PM", "李四"],
+      "participants": ["PM", "李四"],
+      "times": "今天下班前",
+      "locations": "",
       "topic_focus": "竞品清单整理取消",
       "message_role": "cancel",
       "context_relation": "对前文任务安排做反向更新，取消原执行动作。",
@@ -894,7 +909,9 @@ prompts:
       "summary": "当前消息将报表导出失败问题推进为待处理事项，但没有明确负责人、截止时间和处理范围。",
       "suggestion": "先补充负责人和截止时间，再创建修复跟进任务。",
       "problem": "导出失败可能影响用户使用，但当前安排缺少可执行细节。",
-      "names": ["Support", "Dev", "PM"],
+      "participants": ["Support", "Dev", "PM"],
+      "times": "",
+      "locations": "",
       "topic_focus": "报表导出失败处理",
       "message_role": "followup",
       "context_relation": "基于前文用户反馈和可能原因，提出处理要求但未补齐执行要素。",
@@ -916,7 +933,9 @@ prompts:
       "summary": "",
       "suggestion": "",
       "problem": "",
-      "names": [],
+      "participants": [],
+      "times": "",
+      "locations": "",
       "topic_focus": "",
       "message_role": "new",
       "context_relation": "",

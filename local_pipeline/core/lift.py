@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 from typing import Any
 
 import llm.client as llm_client
@@ -12,13 +13,14 @@ ACTION_HINTS = ("需要", "建议", "请", "安排", "修复", "优化", "跟进
 TASK_OWNER_HINTS = ("负责", "@", "同学", "团队")
 TASK_TIME_HINTS = ("今天", "明天", "本周", "下周", "上午", "下午", "点", "截止")
 GROUP_IMPACT_HINTS = ("大家", "我们", "各位", "团队", "全员")
+TIME_HINT_PATTERN = re.compile(r"(今天|明天|后天|本周|下周|上午|下午|晚上|\d{1,2}[:点时]\d{0,2})")
+LOCATION_HINT_PATTERN = re.compile(r"(在[\u4e00-\u9fa5A-Za-z0-9_-]{2,30}(会议室|办公室|工位|楼|层|room|Room)?)")
 
 
 @dataclass(slots=True)
 class LiftResult:
     cards: list[LiftedCard]
     warnings: list[str]
-
 
 
 def _heuristic_signals(content: str) -> dict[str, float]:
@@ -68,18 +70,23 @@ def _build_default_parts(current_line: str) -> dict[str, Any]:
     if has_question:
         problem = "存在待解答问题"
     decision_signals = _heuristic_signals(content)
+    times, locations = _extract_time_location_hints(content)
     missing_fields: list[str] = []
     if decision_signals["actionability_score"] >= 0.6:
-        if not any(token in content for token in TASK_TIME_HINTS):
+        if not any(token in content for token in TASK_TIME_HINTS) and not times:
             missing_fields.append("time")
         if not any(token in content for token in TASK_OWNER_HINTS):
             missing_fields.append("owner")
+        if not locations:
+            missing_fields.append("location")
     return {
         "title": title,
         "summary": content or "空消息",
         "suggestion": suggestion,
         "problem": problem,
-        "names": [],
+        "participants": [],
+        "times": times,
+        "locations": locations,
         "topic_focus": title[:20],
         "message_role": "question" if has_question else "new",
         "context_relation": "当前消息触发新的升维单元",
@@ -90,7 +97,7 @@ def _build_default_parts(current_line: str) -> dict[str, Any]:
 
 
 def _try_llm_parts(*, current_line: str, context_lines: list[str]) -> dict[str, Any] | None:
-    config = llm_client.LLMConfig.from_env(max_tokens=2048, temperature=0.0, top_p=0.1,extra_body={"thinking": {"type": "disabled"}},)
+    config = llm_client.LLMConfig.from_env(max_tokens=2048, temperature=0.0, top_p=0.1, extra_body={"thinking": {"type": "disabled"}})
     if config.missing_fields():
         return None
     try:
@@ -114,7 +121,9 @@ def _try_llm_parts(*, current_line: str, context_lines: list[str]) -> dict[str, 
         "summary": payload.summary,
         "suggestion": payload.suggestion,
         "problem": payload.problem,
-        "names": payload.names,
+        "participants": payload.participants,
+        "times": payload.times,
+        "locations": payload.locations,
         "topic_focus": payload.topic_focus,
         "message_role": payload.message_role,
         "context_relation": payload.context_relation,
@@ -180,7 +189,9 @@ def lift_candidates(messages: list[str], *, llm_max_items: int = 20) -> LiftResu
         summary=str(parts.get("summary", defaults["summary"])),
         problem=str(parts.get("problem", defaults["problem"])),
         suggestion=str(parts.get("suggestion", defaults["suggestion"])),
-        target_audience=parts.get("names", []),
+        participants=[str(x).strip() for x in (parts.get("participants", []) or []) if str(x).strip()],
+        times=parts.get("times", defaults["times"]),
+        locations=parts.get("locations", defaults["locations"]),
         evidence=[content] if content else [],
         tags=tags,
         confidence=float(confidence),
@@ -197,22 +208,25 @@ def lift_candidates(messages: list[str], *, llm_max_items: int = 20) -> LiftResu
     return LiftResult(cards=cards, warnings=warnings)
 
 
-__all__ = ["LiftResult", "lift_candidates"]
+def _extract_time_location_hints(content: str) -> tuple[list[str], list[str]]:
+    text = str(content or "").strip()
+    if not text:
+        return [], []
+    times = _dedup_keep_order([m.group(0).strip() for m in TIME_HINT_PATTERN.finditer(text)])
+    locations = _dedup_keep_order([m.group(0).strip().lstrip("在") for m in LOCATION_HINT_PATTERN.finditer(text)])
+    return times, locations
 
-if __name__ == "__main__":
-    test_messages = [
-        "[Alice] 大家好",
-        "[Alice] 今天下午需要开会",
-        "[Alice] 1点种",
-        "[Alice] 在我办公室",  # duplicate
-        "[Alice] 张三和李四需要来开会",  # duplicate
-        "[Alice] 王五也要来"
-        "[Bob] 午饭的牛肉真好吃",
-        "[Alice] 赵六也来听一下",
-        "[李四] 我要来吗？",
-        #"[Peter] 笑死我了哈哈哈哈"
-        "[王五] 在哪开会？",
-    ]
-    result = lift_candidates(test_messages)
-    print("Lift End")
-    print(result)
+
+def _dedup_keep_order(rows: list[str]) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for row in rows:
+        key = row.strip().casefold()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        out.append(row.strip())
+    return out
+
+
+__all__ = ["LiftResult", "lift_candidates"]

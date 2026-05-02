@@ -87,7 +87,7 @@ class LocalStateStore:
                     "card_id": card.card_id,
                     "task_id": task_id,
                     "action": card.suggestion,
-                    "owner_hint": card.target_audience,
+                    "owner_hint": card.participants,
                     "deadline_hint": "",
                     "priority": _priority_from_confidence(card.confidence),
                     "evidence": card.evidence,

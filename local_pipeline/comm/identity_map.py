@@ -247,7 +247,20 @@ class UserIdentityMap:
         write_json(self.path, data)
 
 
-def parse_target_audience_names(raw: str) -> list[str]:
+def parse_participants_names(raw: Any) -> list[str]:
+    if isinstance(raw, list):
+        rows: list[str] = []
+        seen: set[str] = set()
+        for item in raw:
+            name = str(item or "").strip()
+            if not name:
+                continue
+            key = _normalize_name(name)
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            rows.append(name)
+        return rows
     text = str(raw or "").strip()
     if not text:
         return []
@@ -309,6 +322,6 @@ def resolve_identity_map_config(*, state_dir: str | Path, env_file: str = "") ->
 __all__ = [
     "IdentityMapConfig",
     "UserIdentityMap",
-    "parse_target_audience_names",
+    "parse_participants_names",
     "resolve_identity_map_config",
 ]

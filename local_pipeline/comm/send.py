@@ -136,123 +136,6 @@ def build_task_card_payload(card: LiftedCard, *, run_id: str, task_id: str) -> d
                 "content": "**📌 详情信息**"
             }
         },
-        # 表格行 - 问题
-        {
-            "tag": "column_set",
-            "flex_mode": "none",
-            "background_style": "default",
-            "horizontal_spacing": "default",
-            "columns": [
-                {
-                    "tag": "column",
-                    "width": "weighted",
-                    "weight": 1,
-                    "vertical_align": "middle",
-                    "elements": [
-                        {
-                            "tag": "div",
-                            "text": {
-                                "tag": "plain_text",
-                                "content": "⚠️ 问题"
-                            }
-                        }
-                    ]
-                },
-                {
-                    "tag": "column",
-                    "width": "weighted",
-                    "weight": 3,
-                    "vertical_align": "middle",
-                    "elements": [
-                        {
-                            "tag": "div",
-                            "text": {
-                                "tag": "plain_text",
-                                "content": card.problem
-                            }
-                        }
-                    ]
-                }
-            ]
-        },
-        # 表格行 - 建议
-        {
-            "tag": "column_set",
-            "flex_mode": "none",
-            "background_style": "none",
-            "horizontal_spacing": "default",
-            "columns": [
-                {
-                    "tag": "column",
-                    "width": "weighted",
-                    "weight": 1,
-                    "vertical_align": "middle",
-                    "elements": [
-                        {
-                            "tag": "div",
-                            "text": {
-                                "tag": "plain_text",
-                                "content": "💡 建议"
-                            }
-                        }
-                    ]
-                },
-                {
-                    "tag": "column",
-                    "width": "weighted",
-                    "weight": 3,
-                    "vertical_align": "middle",
-                    "elements": [
-                        {
-                            "tag": "div",
-                            "text": {
-                                "tag": "plain_text",
-                                "content": card.suggestion
-                            }
-                        }
-                    ]
-                }
-            ]
-        },
-        # 表格行 - 相关人员
-        {
-            "tag": "column_set",
-            "flex_mode": "none",
-            "background_style": "default",
-            "horizontal_spacing": "default",
-            "columns": [
-                {
-                    "tag": "column",
-                    "width": "weighted",
-                    "weight": 1,
-                    "vertical_align": "middle",
-                    "elements": [
-                        {
-                            "tag": "div",
-                            "text": {
-                                "tag": "plain_text",
-                                "content": "👥 相关人员"
-                            }
-                        }
-                    ]
-                },
-                {
-                    "tag": "column",
-                    "width": "weighted",
-                    "weight": 3,
-                    "vertical_align": "middle",
-                    "elements": [
-                        {
-                            "tag": "div",
-                            "text": {
-                                "tag": "plain_text",
-                                "content": "、".join(card.target_audience)
-                            }
-                        }
-                    ]
-                }
-            ]
-        }
     ]
 
     # 标签模块（如果有标签）
@@ -271,7 +154,211 @@ def build_task_card_payload(card: LiftedCard, *, run_id: str, task_id: str) -> d
     #             ]
     #         }
     #     ])
-
+    if card.times:
+        elements.append(
+            {
+                "tag": "column_set",
+                "flex_mode": "none",
+                "background_style": "default",
+                "horizontal_spacing": "default",
+                "columns": [
+                    {
+                        "tag": "column",
+                        "width": "weighted",
+                        "weight": 1,
+                        "vertical_align": "middle",
+                        "elements": [
+                            {
+                                "tag": "div",
+                                "text": {
+                                    "tag": "plain_text",
+                                    "content": "🕒 时间"
+                                }
+                            }
+                        ]
+                    },
+                    {
+                        "tag": "column",
+                        "width": "weighted",
+                        "weight": 4,
+                        "vertical_align": "middle",
+                        "elements": [
+                            {
+                                "tag": "div",
+                                "text": {
+                                    "tag": "plain_text",
+                                    "content": card.times
+                                }
+                            }
+                        ]
+                    }
+                ]
+            },
+        )
+    if card.locations:
+        elements.append(
+            {
+                "tag": "column_set",
+                "flex_mode": "none",
+                "background_style": "default",
+                "horizontal_spacing": "default",
+                "columns": [
+                    {
+                        "tag": "column",
+                        "width": "weighted",
+                        "weight": 1,
+                        "vertical_align": "middle",
+                        "elements": [
+                            {
+                                "tag": "div",
+                                "text": {
+                                    "tag": "plain_text",
+                                    "content": "📍 地点"
+                                }
+                            }
+                        ]
+                    },
+                    {
+                        "tag": "column",
+                        "width": "weighted",
+                        "weight": 4,
+                        "vertical_align": "middle",
+                        "elements": [
+                            {
+                                "tag": "div",
+                                "text": {
+                                    "tag": "plain_text",
+                                    "content": card.locations
+                                }
+                            }
+                        ]
+                    }
+                ]
+            },
+        )
+    if card.participants:
+        elements.append(
+            {
+                "tag": "column_set",
+                "flex_mode": "none",
+                "background_style": "default",
+                "horizontal_spacing": "default",
+                "columns": [
+                    {
+                        "tag": "column",
+                        "width": "weighted",
+                        "weight": 1,
+                        "vertical_align": "middle",
+                        "elements": [
+                            {
+                                "tag": "div",
+                                "text": {
+                                    "tag": "plain_text",
+                                    "content": "👥 人员"
+                                }
+                            }
+                        ]
+                    },
+                    {
+                        "tag": "column",
+                        "width": "weighted",
+                        "weight": 4,
+                        "vertical_align": "middle",
+                        "elements": [
+                            {
+                                "tag": "div",
+                                "text": {
+                                    "tag": "plain_text",
+                                    "content": "、".join(card.participants)
+                                }
+                            }
+                        ]
+                    }
+                ]
+            },
+        )
+    if card.suggestion:
+        elements.append(
+            {
+                "tag": "column_set",
+                "flex_mode": "none",
+                "background_style": "none",
+                "horizontal_spacing": "default",
+                "columns": [
+                    {
+                        "tag": "column",
+                        "width": "weighted",
+                        "weight": 1,
+                        "vertical_align": "middle",
+                        "elements": [
+                            {
+                                "tag": "div",
+                                "text": {
+                                    "tag": "plain_text",
+                                    "content": "💡 建议"
+                                }
+                            }
+                        ]
+                    },
+                    {
+                        "tag": "column",
+                        "width": "weighted",
+                        "weight": 4,
+                        "vertical_align": "middle",
+                        "elements": [
+                            {
+                                "tag": "div",
+                                "text": {
+                                    "tag": "plain_text",
+                                    "content": card.suggestion
+                                }
+                            }
+                        ]
+                    }
+                ]
+            },
+        )
+    if card.problem:
+        elements.append(
+            {
+                "tag": "column_set",
+                "flex_mode": "none",
+                "background_style": "default",
+                "horizontal_spacing": "default",
+                "columns": [
+                    {
+                        "tag": "column",
+                        "width": "weighted",
+                        "weight": 1,
+                        "vertical_align": "middle",
+                        "elements": [
+                            {
+                                "tag": "div",
+                                "text": {
+                                    "tag": "plain_text",
+                                    "content": "⚠️ 问题"
+                                }
+                            }
+                        ]
+                    },
+                    {
+                        "tag": "column",
+                        "width": "weighted",
+                        "weight": 4,
+                        "vertical_align": "middle",
+                        "elements": [
+                            {
+                                "tag": "div",
+                                "text": {
+                                    "tag": "plain_text",
+                                    "content": card.problem
+                                }
+                            }
+                        ]
+                    }
+                ]
+            },
+        )
     # 相关片段模块（如果有证据）
     if evidence:
         elements.extend([
@@ -290,7 +377,7 @@ def build_task_card_payload(card: LiftedCard, *, run_id: str, task_id: str) -> d
     return {
         "config": {"wide_screen_mode": True},
         "header": {
-            "template": "red",
+            "template": "blue",
             "title": {"tag": "plain_text", "content": f"[Task] {card.title[:60]}"},
         },
         "elements": elements
