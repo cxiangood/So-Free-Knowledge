@@ -104,6 +104,14 @@ Key runtime flags in `OnlineConfig` / `OfflineConfig`:
 - `rag_embed_model="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"`
 - `observe_auto_reply_enabled=True`
 
+Task push identity mapping env vars:
+
+- `TASK_PUSH_RECEIVE_ID_TYPE` (default `open_id`)
+- `TASK_PUSH_FALLBACK_RECEIVE_ID` (required for fallback delivery)
+- `TASK_PUSH_FALLBACK_RECEIVE_ID_TYPE` (default fallback to `TASK_PUSH_RECEIVE_ID_TYPE`)
+- `TASK_PUSH_BOOTSTRAP_ON_EMPTY` (default `true`)
+- `TASK_PUSH_BOOTSTRAP_MAX_CHATS` (default `200`)
+
 ## Path Cases
 
 - Full message-path cases and trigger examples: [PATH_CASES.md](./PATH_CASES.md)

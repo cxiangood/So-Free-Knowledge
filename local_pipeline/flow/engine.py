@@ -7,6 +7,8 @@ from typing import Any, TypedDict
 
 from langgraph.graph import END, StateGraph
 
+from ..comm.feishu import resolve_sender_credentials
+from ..comm.identity_map import UserIdentityMap, resolve_identity_map_config
 from ..comm.send import TaskPushAttempt, TaskPushConfig, push_text_message, queue_failed_pushes
 from ..core.detect import detect_candidates
 from ..core.kb import save_knowledge
@@ -167,6 +169,14 @@ class Engine:
         self.observe_ferment_events_path = Path(config.state_dir) / "observe_ferment_events.jsonl"
         self.observe_pop_events_path = Path(config.state_dir) / "observe_pop_events.jsonl"
         self.vector_store: VectorKnowledgeStore | None = None
+        self.identity_map = UserIdentityMap(resolve_identity_map_config(state_dir=config.state_dir, env_file=config.env_file))
+        if self.config.task_push_enabled:
+            try:
+                app_id, app_secret = resolve_sender_credentials()
+                if app_id and app_secret:
+                    self.identity_map.ensure_bootstrap(app_id=app_id, app_secret=app_secret)
+            except Exception:
+                pass
         if self.config.rag_enabled:
             try:
                 self.vector_store = VectorKnowledgeStore(Path(config.state_dir) / "vector_kb", embed_model=self.config.rag_embed_model)
@@ -256,6 +266,10 @@ class Engine:
         message = state["message"]
         if self.config.step_trace_enabled:
             trace_node(message_id=message.message_id, node_name="message_cache")
+        try:
+            self.identity_map.update_from_event(message)
+        except Exception:
+            pass
         self.chat_store.append(message)
         return {}
 
@@ -374,6 +388,8 @@ class Engine:
                 card=task_card,
                 run_id=self._build_run_id(message),
                 push_config=TaskPushConfig(enabled=self.config.task_push_enabled, chat_id=self.config.task_push_chat_id, env_file=self.config.env_file),
+                source_chat_id=message.chat_id,
+                identity_map=self.identity_map,
             )
             decision.stored_id = task_result.task_id
             if self.config.step_trace_enabled:
