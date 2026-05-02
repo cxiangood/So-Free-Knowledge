@@ -434,6 +434,7 @@ def recommend_command_result(
         recent_days=args.recent_days,
     )
     documents = [item for item in online.get("documents", []) if isinstance(item, dict)]
+    behavior_documents = [item for item in online.get("behavior_documents", []) if isinstance(item, dict)]
     access_records = [item for item in online.get("access_records", []) if isinstance(item, dict)]
     messages = [item for item in online.get("messages", []) if isinstance(item, dict)]
     knowledge_items = [item for item in online.get("knowledge_items", []) if isinstance(item, dict)]
@@ -455,7 +456,7 @@ def recommend_command_result(
     sample_history_file = Path(args.output_dir).expanduser() / "assistant_dual_tower_samples.jsonl"
     model_file = Path(args.output_dir).expanduser() / "assistant_dual_tower_model.json"
     current_samples = build_weak_supervision_samples(
-        documents=documents,
+        documents=behavior_documents or documents,
         access_records=access_records,
         messages=messages,
         user_profile=user_profile,

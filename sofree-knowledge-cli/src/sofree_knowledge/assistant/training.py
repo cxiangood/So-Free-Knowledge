@@ -1,12 +1,42 @@
 from __future__ import annotations
 
 import json
+import math
+import re
 from collections import Counter
 from pathlib import Path
 from typing import Any
 
 from .dual_tower_dataset import build_weak_supervision_samples
 from .two_tower import score_dual_tower_texts
+
+
+URL_TOKEN_STOPWORDS = {
+    "http",
+    "https",
+    "www",
+    "feishu",
+    "larksuite",
+    "applink",
+    "openapi",
+    "openapis",
+    "client",
+    "chat",
+    "openchatid",
+    "openmessageid",
+    "doc",
+    "docx",
+    "wiki",
+    "sheet",
+    "sheets",
+    "base",
+    "slides",
+    "file",
+    "files",
+    "com",
+    "cn",
+}
+MAX_CONTENT_BONUS = 12.0
 
 
 def export_dual_tower_samples(
@@ -98,12 +128,12 @@ def train_dual_tower_baseline(
     for sample in samples:
         strength = max(1, int(sample.get("strength", 1) or 1))
         positive_text = str(sample.get("positive_doc_text") or "")
-        for token in _tokenize_text(positive_text):
+        for token in set(_tokenize_text(positive_text)):
             positive_counts[token] += strength
         negatives = sample.get("negative_doc_texts", [])
         if isinstance(negatives, list):
             for negative_text in negatives:
-                for token in _tokenize_text(str(negative_text or "")):
+                for token in set(_tokenize_text(str(negative_text or ""))):
                     negative_counts[token] += 1
                 training_pairs += 1
 
@@ -178,21 +208,49 @@ def score_dual_tower_with_model(user_text: str, content_text: str, model: dict[s
 
 def _score_weighted_pair(user_text: str, content_text: str, token_weights: dict[str, float]) -> float:
     base_score = score_dual_tower_texts(user_text, content_text)
-    bonus = 0.0
-    for token in _tokenize_text(content_text):
-        bonus += float(token_weights.get(token, 0.0))
+    content_tokens = set(_tokenize_text(content_text))
+    if not content_tokens:
+        return base_score
+    raw_bonus = sum(float(token_weights.get(token, 0.0)) for token in content_tokens)
+    normalized_bonus = raw_bonus / math.sqrt(len(content_tokens))
+    bonus = min(MAX_CONTENT_BONUS, normalized_bonus)
     return base_score + bonus
 
 
 def _tokenize_text(text: str) -> list[str]:
-    import re
-
-    normalized = str(text or "").lower()
+    normalized = _normalize_text_for_tokenization(text)
     tokens = re.findall(r"[a-z0-9_]{2,}|[\u4e00-\u9fff]{2,}", normalized)
     expanded: list[str] = []
     for token in tokens:
+        if not _is_informative_token(token):
+            continue
         expanded.append(token)
         if re.fullmatch(r"[\u4e00-\u9fff]{2,}", token):
             for idx in range(0, len(token) - 1):
-                expanded.append(token[idx : idx + 2])
+                bigram = token[idx : idx + 2]
+                if _is_informative_token(bigram):
+                    expanded.append(bigram)
     return expanded
+
+
+def _normalize_text_for_tokenization(text: str) -> str:
+    normalized = str(text or "").lower()
+    normalized = re.sub(r"https?://\S+", " ", normalized)
+    normalized = re.sub(r"\b[a-z0-9_-]+\.(?:com|cn|net|org)\b", " ", normalized)
+    normalized = re.sub(r"[?&][a-z0-9_-]+=[^ \n|]+", " ", normalized)
+    return normalized
+
+
+def _is_informative_token(token: str) -> bool:
+    value = str(token or "").strip().lower()
+    if not value:
+        return False
+    if value in URL_TOKEN_STOPWORDS:
+        return False
+    if re.fullmatch(r"[a-z]+[0-9]{4,}[a-z0-9_]*", value):
+        return False
+    if re.fullmatch(r"[0-9_]+", value):
+        return False
+    if len(value) <= 2 and re.fullmatch(r"[a-z0-9_]+", value):
+        return False
+    return True

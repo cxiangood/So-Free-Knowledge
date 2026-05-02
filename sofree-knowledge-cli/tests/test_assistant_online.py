@@ -166,6 +166,9 @@ def test_collect_online_personal_inputs_applies_recent_days(monkeypatch):
     assert out["meta"]["recent_days"] == 7
     assert out["messages"] == []
     assert out["documents"] == []
+    assert any(item.get("doc_id") == "abc123" for item in out["behavior_documents"])
+    actions = {(item["doc_id"], item["action"], item.get("count", 0)) for item in out["access_records"]}
+    assert ("abc123", "comment", 1) in actions
 
 
 def test_collect_online_personal_inputs_builds_message_url_when_user_chat_visible(monkeypatch):

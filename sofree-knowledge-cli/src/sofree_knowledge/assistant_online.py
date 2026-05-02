@@ -38,6 +38,7 @@ def collect_online_personal_inputs(
     max_chats: int = 20,
     max_messages_per_chat: int = 200,
     max_drive_docs: int = 50,
+    max_behavior_docs: int = 200,
     max_knowledge: int = 30,
     recent_days: int = 7,
 ) -> dict[str, Any]:
@@ -129,16 +130,19 @@ def collect_online_personal_inputs(
     all_messages = apply_interest_filter_annotations(all_messages)
 
     drive_docs: list[dict[str, Any]] = []
+    behavior_drive_docs: list[dict[str, Any]] = []
     drive_error = ""
     try:
         drive_docs = list_recent_drive_docs(client, max_items=max_drive_docs, recent_days=recent_days)
+        behavior_drive_docs = list_drive_docs(client, max_items=max(max_drive_docs, max_behavior_docs), recent_days=None)
     except FeishuAPIError as exc:
         drive_error = str(exc)
 
     linked_docs, link_access_records = extract_docs_and_access_from_messages(all_messages, resolved_target)
+    behavior_documents = _merge_documents(behavior_drive_docs, linked_docs)
     direct_access_records = _collect_direct_doc_access_records(
         client,
-        documents=drive_docs,
+        documents=behavior_documents,
         target_user_id=resolved_target,
         recent_days=recent_days,
     )
@@ -179,6 +183,7 @@ def collect_online_personal_inputs(
 
     return {
         "documents": documents,
+        "behavior_documents": behavior_documents,
         "access_records": access_records,
         "messages": messages,
         "knowledge_items": knowledge_items,
@@ -187,6 +192,7 @@ def collect_online_personal_inputs(
             "chat_count": len(chat_records),
             "message_count": len(messages),
             "document_count": len(documents),
+            "behavior_document_count": len(behavior_documents),
             "recent_days": recent_days,
             "drive_error": drive_error,
         },
@@ -194,6 +200,15 @@ def collect_online_personal_inputs(
 
 
 def list_recent_drive_docs(client: FeishuClient, max_items: int = 50, recent_days: int = 7) -> list[dict[str, Any]]:
+    return list_drive_docs(client, max_items=max_items, recent_days=recent_days)
+
+
+def list_drive_docs(
+    client: FeishuClient,
+    *,
+    max_items: int = 50,
+    recent_days: int | None = None,
+) -> list[dict[str, Any]]:
     docs: list[dict[str, Any]] = []
     page_token = ""
     while len(docs) < max_items:
@@ -201,7 +216,7 @@ def list_recent_drive_docs(client: FeishuClient, max_items: int = 50, recent_day
         items = page.get("items", []) if isinstance(page, dict) else []
         for item in items:
             updated_at = str(item.get("modified_time") or item.get("edit_time") or "")
-            if not _is_within_recent_days(updated_at, recent_days):
+            if recent_days is not None and not _is_within_recent_days(updated_at, recent_days):
                 continue
             docs.append(
                 {

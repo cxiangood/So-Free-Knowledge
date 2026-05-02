@@ -1,7 +1,7 @@
 import json
 
 from sofree_knowledge.assistant.dual_tower_dataset import build_weak_supervision_samples
-from sofree_knowledge.assistant.training import load_dual_tower_samples, train_dual_tower_baseline
+from sofree_knowledge.assistant.training import load_dual_tower_samples, score_dual_tower_with_model, train_dual_tower_baseline
 
 
 def test_build_weak_supervision_samples_emits_positive_and_negatives():
@@ -50,3 +50,27 @@ def test_train_dual_tower_baseline_outputs_model(tmp_path):
     assert result["sample_summary"]["sample_count"] == 1
     assert result["quality"]["evaluated_samples"] == 1
     assert (tmp_path / "model.json").exists()
+
+
+def test_score_dual_tower_with_model_filters_url_noise_and_caps_bonus():
+    model = {
+        "token_weights": {
+            "feishu": 22.0,
+            "cn": 22.0,
+            "docx": 22.0,
+            "project": 10.0,
+            "release": 8.0,
+        }
+    }
+
+    score = score_dual_tower_with_model(
+        "role: pm | interests: release, project",
+        (
+            "title: project release | "
+            "summary: see https://foo.feishu.cn/docx/abc123?openChatId=oc_x&from=feishu "
+            "https://foo.feishu.cn/docx/abc123?openChatId=oc_x&from=feishu"
+        ),
+        model,
+    )
+
+    assert score < 20
