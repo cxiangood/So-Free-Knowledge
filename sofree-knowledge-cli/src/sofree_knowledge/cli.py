@@ -48,7 +48,11 @@ from .lingo_context import (
     parse_lingo_judgements,
     publishable_lingo_judgements,
 )
-from .lingo_auto import run_lingo_auto_pipeline
+from .lingo_auto import (
+    parse_lingo_openclaw_judgements,
+    run_lingo_auto_pipeline,
+    sync_openclaw_judgements,
+)
 from .lingo_store import LingoStore
 from .logging_config import configure_logging, get_logger
 from .policy import KnowledgePolicyStore, VALID_SCOPES
@@ -204,7 +208,7 @@ def build_parser() -> argparse.ArgumentParser:
     lingo_sync.add_argument("--write-local", action=argparse.BooleanOptionalAction, default=True, help="Mirror synced entries to local store.")
     lingo_sync.set_defaults(func=cmd_lingo_sync_from_file)
 
-    lingo_auto = lingo_subparsers.add_parser("auto-sync", help="Collect recent messages, mine candidate terms, auto-judge and sync to Lingo.")
+    lingo_auto = lingo_subparsers.add_parser("auto-sync", help="Collect recent messages, mine candidate terms, then emit OpenClaw review prompt and optionally sync reviewed results.")
     lingo_auto.add_argument("--recent-days", type=int, default=7, help="How many recent days of chat history to scan.")
     lingo_auto.add_argument("--min-run-interval-days", type=int, default=7, help="Minimum interval between successful auto-sync runs.")
     lingo_auto.add_argument("--force", action="store_true", help="Ignore last-run interval guard.")
@@ -224,11 +228,12 @@ def build_parser() -> argparse.ArgumentParser:
     lingo_auto.add_argument("--max-contexts", type=int, default=80)
     lingo_auto.add_argument("--classifier-enabled", action=argparse.BooleanOptionalAction, default=True)
     lingo_auto.add_argument("--analyzer-enabled", action=argparse.BooleanOptionalAction, default=True)
-    lingo_auto.add_argument("--publishable-only", action="store_true", help="Only keep key/black with non-empty value before syncing.")
+    lingo_auto.add_argument("--judgements-file", default="", help="Optional OpenClaw review result JSON file. If omitted, only candidate mining + prompt generation are performed.")
+    lingo_auto.add_argument("--publishable-only", action="store_true", help="When --judgements-file is provided, only sync create/append decisions.")
     lingo_auto.add_argument("--source", default="lingo_auto")
     lingo_auto.add_argument("--force-remote-create", action="store_true")
-    lingo_auto.add_argument("--remote", action=argparse.BooleanOptionalAction, default=True, help="Write judged entries to Feishu Lingo remotely.")
-    lingo_auto.add_argument("--write-local", action=argparse.BooleanOptionalAction, default=True, help="Mirror synced entries to local store.")
+    lingo_auto.add_argument("--remote", action=argparse.BooleanOptionalAction, default=True, help="When --judgements-file is provided, write reviewed entries to Feishu Lingo remotely.")
+    lingo_auto.add_argument("--write-local", action=argparse.BooleanOptionalAction, default=True, help="When --judgements-file is provided, mirror reviewed entries to local store.")
     lingo_auto.set_defaults(func=cmd_lingo_auto_sync)
 
     # Confused conversation detection commands
@@ -1231,19 +1236,38 @@ def cmd_lingo_auto_sync(args: argparse.Namespace) -> dict[str, Any]:
         pipeline_result["ok"] = True
         return pipeline_result
 
-    sync_result = _sync_lingo_judgements(
+    if not str(args.judgements_file or "").strip():
+        return {
+            "ok": True,
+            **pipeline_result,
+            "sync": {
+                "performed": False,
+                "reason": "missing_judgements_file",
+                "next_step": "Review the emitted openclaw.prompt, let OpenClaw produce JSON judgements, then rerun with --judgements-file.",
+            },
+        }
+
+    raw = load_text_file(args.judgements_file)
+    judgements = parse_lingo_openclaw_judgements(raw)
+    sync_result = sync_openclaw_judgements(
         output_dir=args.output_dir,
-        judgements=list(pipeline_result.get("judgements", [])),
-        publishable_only=bool(args.publishable_only),
+        judgements=judgements,
         source=args.source,
-        force_remote_create=bool(args.force_remote_create),
         remote=bool(args.remote),
         write_local=bool(args.write_local),
+        force_remote_create=bool(args.force_remote_create),
+        client=_instantiate_feishu_client() if args.remote else None,
+        publishable_only=bool(args.publishable_only),
     )
     return {
         "ok": True,
         **pipeline_result,
-        "sync": sync_result,
+        "judgements": judgements,
+        "judgement_count": len(judgements),
+        "sync": {
+            "performed": True,
+            **sync_result,
+        },
     }
 
 

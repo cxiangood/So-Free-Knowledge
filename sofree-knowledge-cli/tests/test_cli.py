@@ -984,7 +984,7 @@ def test_lingo_sync_from_file_preserves_aliases(tmp_path, capsys):
     assert out["entries"][0]["entry"]["aliases"] == ["Joint Embedding", "jepa"]
 
 
-def test_lingo_auto_sync_cli_runs_pipeline_and_syncs(tmp_path, monkeypatch, capsys):
+def test_lingo_auto_sync_cli_emits_openclaw_prompt_without_sync(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(
         cli_module,
         "run_lingo_auto_pipeline",
@@ -993,28 +993,11 @@ def test_lingo_auto_sync_cli_runs_pipeline_and_syncs(tmp_path, monkeypatch, caps
             "skipped": False,
             "run_id": "20260503T120000Z",
             "candidate_count": 2,
-            "judgement_count": 2,
-            "publishable_count": 1,
             "candidates": [
                 {"keyword": "JEPA", "frequency": 5, "context_count": 2},
                 {"keyword": "今天", "frequency": 5, "context_count": 1},
             ],
-            "judgements": [
-                {
-                    "keyword": "JEPA",
-                    "type": "black",
-                    "value": "团队内部使用的模型项目简称",
-                    "context_ids": ["ctx_1"],
-                    "aliases": ["Joint Embedding"],
-                },
-                {
-                    "keyword": "今天",
-                    "type": "nothing",
-                    "value": "",
-                    "context_ids": ["ctx_2"],
-                    "aliases": [],
-                },
-            ],
+            "openclaw": {"prompt": "review this"},
         },
     )
 
@@ -1032,9 +1015,96 @@ def test_lingo_auto_sync_cli_runs_pipeline_and_syncs(tmp_path, monkeypatch, caps
     assert code == 0
     assert out["ok"] is True
     assert out["candidate_count"] == 2
+    assert out["sync"]["performed"] is False
+    assert out["openclaw"]["prompt"] == "review this"
+
+
+def test_lingo_auto_sync_cli_applies_openclaw_judgements_and_appends_sense(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(
+        cli_module,
+        "run_lingo_auto_pipeline",
+        lambda **kwargs: {
+            "ok": True,
+            "skipped": False,
+            "run_id": "20260503T120000Z",
+            "candidate_count": 1,
+            "candidates": [{"keyword": "JEPA", "frequency": 5, "context_count": 2}],
+            "openclaw": {"prompt": "review this"},
+        },
+    )
+    scoped_root = tmp_path / "users" / "ou_lingo_test"
+    scoped_root.mkdir(parents=True, exist_ok=True)
+    existing_file = scoped_root / "lingo_entries.json"
+    existing_file.write_text(
+        json.dumps(
+            {
+                "entries": {
+                    "JEPA": {
+                        "keyword": "JEPA",
+                        "type": "black",
+                        "value": "旧释义",
+                        "aliases": ["old"],
+                        "senses": [
+                            {
+                                "sense_id": "sense_old",
+                                "type": "black",
+                                "value": "旧释义",
+                                "aliases": ["old"],
+                                "entity_id": "",
+                                "context_ids": ["ctx_old"],
+                            }
+                        ],
+                    }
+                }
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    judgements_file = tmp_path / "openclaw_judgements.json"
+    judgements_file.write_text(
+        json.dumps(
+            [
+                {
+                    "keyword": "JEPA",
+                    "decision": "append_new_sense",
+                    "type": "black",
+                    "value": "团队内部使用的模型项目简称",
+                    "context_ids": ["ctx_1"],
+                    "matched_existing_sense_ids": ["sense_old"],
+                    "aliases": ["Joint Embedding"],
+                    "reason": "与旧释义不同",
+                }
+            ],
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    code = main(
+        [
+            "--output-dir",
+            str(tmp_path),
+            "--user-open-id",
+            "ou_lingo_test",
+            "lingo",
+            "auto-sync",
+            "--no-remote",
+            "--judgements-file",
+            str(judgements_file),
+            "--publishable-only",
+        ]
+    )
+    out = json.loads(capsys.readouterr().out)
+    assert code == 0
+    assert out["ok"] is True
+    assert out["sync"]["performed"] is True
     assert out["sync"]["count"] == 1
-    assert out["sync"]["entries"][0]["keyword"] == "JEPA"
-    assert out["sync"]["entries"][0]["entry"]["aliases"] == ["Joint Embedding"]
+    entry = out["sync"]["entries"][0]["entry"]
+    assert entry["keyword"] == "JEPA"
+    assert len(entry["senses"]) == 2
+    assert entry["senses"][0]["value"] == "旧释义"
+    assert entry["senses"][1]["value"] == "团队内部使用的模型项目简称"
 
 
 def test_wikisheet_create_sheet_routed_from_main_cli(monkeypatch, capsys):
