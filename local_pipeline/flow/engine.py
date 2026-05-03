@@ -2,10 +2,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+from threading import RLock
 from typing import Any, TypedDict
 
 from langgraph.graph import END, StateGraph
 
+from ..comm.feishu import resolve_sender_credentials
+from ..comm.identity_map import UserIdentityMap, resolve_identity_map_config
 from ..comm.send import TaskPushAttempt, TaskPushConfig, push_text_message, queue_failed_pushes
 from ..core.detect import detect_candidates
 from ..core.kb import save_knowledge
@@ -34,9 +37,7 @@ class EngineConfig:
     chat_history_path: str | Path = "outputs/local_pipeline/state/chat_message_store.json"
     chat_history_limit: int = 100
     context_window_size: int = 20
-    candidate_threshold: float = 0.45
-    knowledge_threshold: float = 0.60
-    task_threshold: float = 0.50
+    detect_threshold: float = 40
     task_push_enabled: bool = False
     task_push_chat_id: str = ""
     env_file: str = ""
@@ -103,7 +104,7 @@ class EngineGraphState(TypedDict, total=False):
     message: MessageEvent
     result: EngineResult
     simple_messages: list[str]
-    current_candidates: list[Any]
+    detect_score: float
     cards: list[LiftedCard]
     decisions: list[Any]
     decision_index: int
@@ -116,25 +117,45 @@ class RuntimeState:
     def __init__(self, path: str | Path, max_processed_ids: int = 2000) -> None:
         self.path = Path(path)
         self.max_processed_ids = max(100, int(max_processed_ids))
+        self._lock = RLock()
+        self._inflight: set[str] = set()
 
-    def contains(self, message_id: str) -> bool:
-        data = read_json(self.path, {"processed_ids": []})
-        if not isinstance(data, dict):
+    def try_start(self, message_id: str) -> bool:
+        normalized = str(message_id or "").strip()
+        if not normalized:
             return False
-        ids = data.get("processed_ids", [])
-        return message_id in ids if isinstance(ids, list) else False
+        with self._lock:
+            if normalized in self._inflight:
+                return False
+            data = read_json(self.path, {"processed_ids": []})
+            if not isinstance(data, dict):
+                data = {"processed_ids": []}
+            ids = data.get("processed_ids", [])
+            if not isinstance(ids, list):
+                ids = []
+            if normalized in ids:
+                return False
+            self._inflight.add(normalized)
+            return True
 
-    def add(self, message_id: str) -> None:
-        data = read_json(self.path, {"processed_ids": []})
-        if not isinstance(data, dict):
-            data = {"processed_ids": []}
-        ids = data.get("processed_ids", [])
-        if not isinstance(ids, list):
-            ids = []
-        if message_id not in ids:
-            ids.append(message_id)
-        data["processed_ids"] = ids[-self.max_processed_ids :]
-        write_json(self.path, data)
+    def finish(self, message_id: str, *, success: bool) -> None:
+        normalized = str(message_id or "").strip()
+        if not normalized:
+            return
+        with self._lock:
+            self._inflight.discard(normalized)
+            if not success:
+                return
+            data = read_json(self.path, {"processed_ids": []})
+            if not isinstance(data, dict):
+                data = {"processed_ids": []}
+            ids = data.get("processed_ids", [])
+            if not isinstance(ids, list):
+                ids = []
+            if normalized not in ids:
+                ids.append(normalized)
+            data["processed_ids"] = ids[-self.max_processed_ids :]
+            write_json(self.path, data)
 
 
 class Engine:
@@ -148,6 +169,14 @@ class Engine:
         self.observe_ferment_events_path = Path(config.state_dir) / "observe_ferment_events.jsonl"
         self.observe_pop_events_path = Path(config.state_dir) / "observe_pop_events.jsonl"
         self.vector_store: VectorKnowledgeStore | None = None
+        self.identity_map = UserIdentityMap(resolve_identity_map_config(state_dir=config.state_dir, env_file=config.env_file))
+        if self.config.task_push_enabled:
+            try:
+                app_id, app_secret = resolve_sender_credentials()
+                if app_id and app_secret:
+                    self.identity_map.ensure_bootstrap(app_id=app_id, app_secret=app_secret)
+            except Exception:
+                pass
         if self.config.rag_enabled:
             try:
                 self.vector_store = VectorKnowledgeStore(Path(config.state_dir) / "vector_kb", embed_model=self.config.rag_embed_model)
@@ -165,7 +194,7 @@ class Engine:
                     "message": message,
                     "result": result,
                     "simple_messages": [],
-                    "current_candidates": [],
+                    "detect_score": 0.0,
                     "cards": [],
                     "decisions": [],
                     "decision_index": 0,
@@ -175,6 +204,7 @@ class Engine:
                 }
             )
         except Exception:
+            self.runtime_state.finish(message.message_id, success=False)
             if self.config.step_trace_enabled:
                 trace_finish(message_id=message.message_id, suffix_status="failed")
             raise
@@ -220,7 +250,7 @@ class Engine:
     def _node_deduplicate(self, state: EngineGraphState) -> dict[str, Any]:
         message = state["message"]
         result = state["result"]
-        if self.runtime_state.contains(message.message_id):
+        if not self.runtime_state.try_start(message.message_id):
             result.skipped = True
             return {"result": result}
         if self.config.step_trace_enabled:
@@ -236,6 +266,10 @@ class Engine:
         message = state["message"]
         if self.config.step_trace_enabled:
             trace_node(message_id=message.message_id, node_name="message_cache")
+        try:
+            self.identity_map.update_from_event(message)
+        except Exception:
+            pass
         self.chat_store.append(message)
         return {}
 
@@ -252,21 +286,21 @@ class Engine:
         result = state["result"]
         if self.config.step_trace_enabled:
             trace_node(message_id=message.message_id, node_name="signal_detect")
-        detection = detect_candidates(state.get("simple_messages", []), candidate_threshold=self.config.candidate_threshold)
-        candidates = list(detection.candidates)
-        result.candidate_count = len(candidates)
-        return {"result": result, "current_candidates": candidates}
+        detection = detect_candidates(state.get("simple_messages", []))
+        detect_score = float(detection.value_score)
+        result.candidate_count = 1 if detect_score >= float(self.config.detect_threshold) else 0
+        return {"result": result, "detect_score": detect_score}
 
-    @staticmethod
-    def _after_signal_detect(state: EngineGraphState) -> str:
-        return "semantic_lift" if state.get("current_candidates") else "finalize"
+    def _after_signal_detect(self, state: EngineGraphState) -> str:
+        score = float(state.get("detect_score", 0.0) or 0.0)
+        return "semantic_lift" if score >= float(self.config.detect_threshold) else "finalize"
 
     def _node_semantic_lift(self, state: EngineGraphState) -> dict[str, Any]:
         message = state["message"]
         result = state["result"]
         if self.config.step_trace_enabled:
             trace_node(message_id=message.message_id, node_name="semantic_lift")
-        lift_result = lift_candidates(list(state.get("current_candidates", [])), state.get("simple_messages", []))
+        lift_result = lift_candidates(state.get("simple_messages", []))
         result.warnings.extend(lift_result.warnings)
         return {"result": result, "cards": lift_result.cards}
 
@@ -275,7 +309,7 @@ class Engine:
         result = state["result"]
         if self.config.step_trace_enabled:
             trace_node(message_id=message.message_id, node_name="route")
-        decisions = route_cards(state.get("cards", []), knowledge_threshold=self.config.knowledge_threshold, task_threshold=self.config.task_threshold)
+        decisions = route_cards(state.get("cards", []))
         for decision in decisions:
             result.routed_counts[decision.target_pool] = result.routed_counts.get(decision.target_pool, 0) + 1
         return {"result": result, "decisions": decisions, "decision_index": 0}
@@ -354,6 +388,8 @@ class Engine:
                 card=task_card,
                 run_id=self._build_run_id(message),
                 push_config=TaskPushConfig(enabled=self.config.task_push_enabled, chat_id=self.config.task_push_chat_id, env_file=self.config.env_file),
+                source_chat_id=message.chat_id,
+                identity_map=self.identity_map,
             )
             decision.stored_id = task_result.task_id
             if self.config.step_trace_enabled:
@@ -456,7 +492,7 @@ class Engine:
         if failed_attempts:
             queue_failed_pushes(self.config.state_dir, failed_attempts)
         if not result.skipped:
-            self.runtime_state.add(message.message_id)
+            self.runtime_state.finish(message.message_id, success=True)
         self._append_result(result)
         if self.config.step_trace_enabled and state.get("trace_started"):
             if not result.skipped:
@@ -492,14 +528,15 @@ class Engine:
             if self.config.step_trace_enabled:
                 trace_node(message_id=message.message_id, node_name="observe_pop_route")
             observe_card = self._build_observe_card(item)
-            decisions = route_cards([observe_card], knowledge_threshold=self.config.knowledge_threshold, task_threshold=self.config.task_threshold)
+            decisions = route_cards([observe_card])
             if not decisions:
                 continue
-            decision = decisions[0]
+            decision = next((item for item in decisions if item.target_pool != "observe"), decisions[0])
             reroute_target = decision.target_pool
             final_target = reroute_target
             if reroute_target == "observe" and self.config.observe_force_non_observe_on_pop:
-                final_target = "task" if observe_card.confidence >= self.config.task_threshold else "knowledge"
+                # Force non-observe by lifted semantics only (no score threshold fallback).
+                final_target = "task" if observe_card.suggested_target == "task" else "knowledge"
             if final_target == "task":
                 task_result = save_task(
                     store=self.state_store,
@@ -544,7 +581,9 @@ class Engine:
             summary=f"Observe popped: {topic}",
             problem="Observe fermentation threshold reached.",
             suggestion="Please route to executable action or knowledge.",
-            target_audience="team",
+            participants=["team"],
+            times="",
+            locations="",
             evidence=evidence[:5],
             tags=["observe-pop"],
             confidence=confidence,

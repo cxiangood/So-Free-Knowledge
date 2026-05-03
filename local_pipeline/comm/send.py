@@ -3,7 +3,9 @@ from __future__ import annotations
 import sys
 from contextlib import contextmanager
 from dataclasses import dataclass
+import os
 from pathlib import Path
+import re
 from typing import Any
 
 from ..shared.models import LiftedCard
@@ -28,6 +30,7 @@ class TaskPushAttempt:
     status: str
     message_id: str = ""
     error: str = ""
+    details: list[dict[str, Any]] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -38,6 +41,7 @@ class TaskPushAttempt:
             "status": self.status,
             "message_id": self.message_id,
             "error": self.error,
+            "details": list(self.details or []),
             "created_at": now_utc_iso(),
         }
 
@@ -59,6 +63,7 @@ class TextPushResult:
     status: str
     message_id: str = ""
     error: str = ""
+    receive_id_type: str = "chat_id"
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -66,6 +71,7 @@ class TextPushResult:
             "status": self.status,
             "message_id": self.message_id,
             "error": self.error,
+            "receive_id_type": self.receive_id_type,
             "created_at": now_utc_iso(),
         }
 
@@ -130,123 +136,6 @@ def build_task_card_payload(card: LiftedCard, *, run_id: str, task_id: str) -> d
                 "content": "**📌 详情信息**"
             }
         },
-        # 表格行 - 问题
-        {
-            "tag": "column_set",
-            "flex_mode": "none",
-            "background_style": "default",
-            "horizontal_spacing": "default",
-            "columns": [
-                {
-                    "tag": "column",
-                    "width": "weighted",
-                    "weight": 1,
-                    "vertical_align": "middle",
-                    "elements": [
-                        {
-                            "tag": "div",
-                            "text": {
-                                "tag": "plain_text",
-                                "content": "⚠️ 问题"
-                            }
-                        }
-                    ]
-                },
-                {
-                    "tag": "column",
-                    "width": "weighted",
-                    "weight": 3,
-                    "vertical_align": "middle",
-                    "elements": [
-                        {
-                            "tag": "div",
-                            "text": {
-                                "tag": "plain_text",
-                                "content": card.problem
-                            }
-                        }
-                    ]
-                }
-            ]
-        },
-        # 表格行 - 建议
-        {
-            "tag": "column_set",
-            "flex_mode": "none",
-            "background_style": "none",
-            "horizontal_spacing": "default",
-            "columns": [
-                {
-                    "tag": "column",
-                    "width": "weighted",
-                    "weight": 1,
-                    "vertical_align": "middle",
-                    "elements": [
-                        {
-                            "tag": "div",
-                            "text": {
-                                "tag": "plain_text",
-                                "content": "💡 建议"
-                            }
-                        }
-                    ]
-                },
-                {
-                    "tag": "column",
-                    "width": "weighted",
-                    "weight": 3,
-                    "vertical_align": "middle",
-                    "elements": [
-                        {
-                            "tag": "div",
-                            "text": {
-                                "tag": "plain_text",
-                                "content": card.suggestion
-                            }
-                        }
-                    ]
-                }
-            ]
-        },
-        # 表格行 - 相关人员
-        {
-            "tag": "column_set",
-            "flex_mode": "none",
-            "background_style": "default",
-            "horizontal_spacing": "default",
-            "columns": [
-                {
-                    "tag": "column",
-                    "width": "weighted",
-                    "weight": 1,
-                    "vertical_align": "middle",
-                    "elements": [
-                        {
-                            "tag": "div",
-                            "text": {
-                                "tag": "plain_text",
-                                "content": "👥 相关人员"
-                            }
-                        }
-                    ]
-                },
-                {
-                    "tag": "column",
-                    "width": "weighted",
-                    "weight": 3,
-                    "vertical_align": "middle",
-                    "elements": [
-                        {
-                            "tag": "div",
-                            "text": {
-                                "tag": "plain_text",
-                                "content": card.target_audience
-                            }
-                        }
-                    ]
-                }
-            ]
-        }
     ]
 
     # 标签模块（如果有标签）
@@ -265,7 +154,211 @@ def build_task_card_payload(card: LiftedCard, *, run_id: str, task_id: str) -> d
     #             ]
     #         }
     #     ])
-
+    if card.times:
+        elements.append(
+            {
+                "tag": "column_set",
+                "flex_mode": "none",
+                "background_style": "default",
+                "horizontal_spacing": "default",
+                "columns": [
+                    {
+                        "tag": "column",
+                        "width": "weighted",
+                        "weight": 1,
+                        "vertical_align": "middle",
+                        "elements": [
+                            {
+                                "tag": "div",
+                                "text": {
+                                    "tag": "plain_text",
+                                    "content": "🕒 时间"
+                                }
+                            }
+                        ]
+                    },
+                    {
+                        "tag": "column",
+                        "width": "weighted",
+                        "weight": 4,
+                        "vertical_align": "middle",
+                        "elements": [
+                            {
+                                "tag": "div",
+                                "text": {
+                                    "tag": "plain_text",
+                                    "content": card.times
+                                }
+                            }
+                        ]
+                    }
+                ]
+            },
+        )
+    if card.locations:
+        elements.append(
+            {
+                "tag": "column_set",
+                "flex_mode": "none",
+                "background_style": "default",
+                "horizontal_spacing": "default",
+                "columns": [
+                    {
+                        "tag": "column",
+                        "width": "weighted",
+                        "weight": 1,
+                        "vertical_align": "middle",
+                        "elements": [
+                            {
+                                "tag": "div",
+                                "text": {
+                                    "tag": "plain_text",
+                                    "content": "📍 地点"
+                                }
+                            }
+                        ]
+                    },
+                    {
+                        "tag": "column",
+                        "width": "weighted",
+                        "weight": 4,
+                        "vertical_align": "middle",
+                        "elements": [
+                            {
+                                "tag": "div",
+                                "text": {
+                                    "tag": "plain_text",
+                                    "content": card.locations
+                                }
+                            }
+                        ]
+                    }
+                ]
+            },
+        )
+    if card.participants:
+        elements.append(
+            {
+                "tag": "column_set",
+                "flex_mode": "none",
+                "background_style": "default",
+                "horizontal_spacing": "default",
+                "columns": [
+                    {
+                        "tag": "column",
+                        "width": "weighted",
+                        "weight": 1,
+                        "vertical_align": "middle",
+                        "elements": [
+                            {
+                                "tag": "div",
+                                "text": {
+                                    "tag": "plain_text",
+                                    "content": "👥 人员"
+                                }
+                            }
+                        ]
+                    },
+                    {
+                        "tag": "column",
+                        "width": "weighted",
+                        "weight": 4,
+                        "vertical_align": "middle",
+                        "elements": [
+                            {
+                                "tag": "div",
+                                "text": {
+                                    "tag": "plain_text",
+                                    "content": "、".join(card.participants)
+                                }
+                            }
+                        ]
+                    }
+                ]
+            },
+        )
+    if card.suggestion:
+        elements.append(
+            {
+                "tag": "column_set",
+                "flex_mode": "none",
+                "background_style": "none",
+                "horizontal_spacing": "default",
+                "columns": [
+                    {
+                        "tag": "column",
+                        "width": "weighted",
+                        "weight": 1,
+                        "vertical_align": "middle",
+                        "elements": [
+                            {
+                                "tag": "div",
+                                "text": {
+                                    "tag": "plain_text",
+                                    "content": "💡 建议"
+                                }
+                            }
+                        ]
+                    },
+                    {
+                        "tag": "column",
+                        "width": "weighted",
+                        "weight": 4,
+                        "vertical_align": "middle",
+                        "elements": [
+                            {
+                                "tag": "div",
+                                "text": {
+                                    "tag": "plain_text",
+                                    "content": card.suggestion
+                                }
+                            }
+                        ]
+                    }
+                ]
+            },
+        )
+    if card.problem:
+        elements.append(
+            {
+                "tag": "column_set",
+                "flex_mode": "none",
+                "background_style": "default",
+                "horizontal_spacing": "default",
+                "columns": [
+                    {
+                        "tag": "column",
+                        "width": "weighted",
+                        "weight": 1,
+                        "vertical_align": "middle",
+                        "elements": [
+                            {
+                                "tag": "div",
+                                "text": {
+                                    "tag": "plain_text",
+                                    "content": "⚠️ 问题"
+                                }
+                            }
+                        ]
+                    },
+                    {
+                        "tag": "column",
+                        "width": "weighted",
+                        "weight": 4,
+                        "vertical_align": "middle",
+                        "elements": [
+                            {
+                                "tag": "div",
+                                "text": {
+                                    "tag": "plain_text",
+                                    "content": card.problem
+                                }
+                            }
+                        ]
+                    }
+                ]
+            },
+        )
     # 相关片段模块（如果有证据）
     if evidence:
         elements.extend([
@@ -284,7 +377,7 @@ def build_task_card_payload(card: LiftedCard, *, run_id: str, task_id: str) -> d
     return {
         "config": {"wide_screen_mode": True},
         "header": {
-            "template": "red",
+            "template": "blue",
             "title": {"tag": "plain_text", "content": f"[Task] {card.title[:60]}"},
         },
         "elements": elements
@@ -341,6 +434,42 @@ def push_task_card(*, config: TaskPushConfig, run_id: str, task_id: str, card: L
     )
 
 
+def push_message_by_receive_id(
+    *,
+    receive_id: str,
+    receive_id_type: str,
+    msg_type: str,
+    content: dict[str, Any] | str,
+    env_file: str = "",
+) -> TextPushResult:
+    target = str(receive_id or "").strip()
+    rid_type = str(receive_id_type or "").strip() or "chat_id"
+    if not target:
+        return TextPushResult(chat_id="", status="failed", error="receive_id is required", receive_id_type=rid_type)
+    load_env_file(env_file)
+    app_id, app_secret = resolve_sender_credentials()
+    if not app_id or not app_secret:
+        return TextPushResult(
+            chat_id=target,
+            status="failed",
+            error="missing credentials: CARD_SENDER_APP_ID/CARD_SENDER_APP_SECRET or FEISHU_APP_ID/FEISHU_APP_SECRET",
+            receive_id_type=rid_type,
+        )
+    FeishuClient = _load_feishu_client_class()
+    try:
+        with _temporary_feishu_credentials(app_id, app_secret):
+            client = FeishuClient()
+            sent = client.send_message(
+                receive_id=target,
+                receive_id_type=rid_type,
+                msg_type=msg_type,
+                content=content,
+            )
+    except Exception as exc:
+        return TextPushResult(chat_id=target, status="failed", error=str(exc), receive_id_type=rid_type)
+    return TextPushResult(chat_id=target, status="sent", message_id=str(sent.get("message_id", "")), receive_id_type=rid_type)
+
+
 def queue_failed_pushes(state_dir: str | Path, attempts: list[TaskPushAttempt]) -> int:
     rows = [item.to_pending_dict() for item in attempts if item.status == "failed"]
     if not rows:
@@ -356,27 +485,154 @@ def push_text_message(*, chat_id: str, text: str, env_file: str = "") -> TextPus
     body = str(text or "").strip()
     if not body:
         return TextPushResult(chat_id=target, status="failed", error="text body is empty")
-    load_env_file(env_file)
-    app_id, app_secret = resolve_sender_credentials()
-    if not app_id or not app_secret:
-        return TextPushResult(
-            chat_id=target,
-            status="failed",
-            error="missing credentials: CARD_SENDER_APP_ID/CARD_SENDER_APP_SECRET or FEISHU_APP_ID/FEISHU_APP_SECRET",
-        )
-    FeishuClient = _load_feishu_client_class()
-    try:
-        with _temporary_feishu_credentials(app_id, app_secret):
-            client = FeishuClient()
-            sent = client.send_message(
-                receive_id=target,
-                receive_id_type="chat_id",
-                msg_type="text",
-                content={"text": body},
+    return push_message_by_receive_id(
+        receive_id=target,
+        receive_id_type="chat_id",
+        msg_type="text",
+        content={"text": body},
+        env_file=env_file,
+    )
+
+
+def push_task_card_to_user_targets(
+    *,
+    run_id: str,
+    task_id: str,
+    card: LiftedCard,
+    env_file: str,
+    targets: list[tuple[str, str, str]],
+    fallback_receive_id: str,
+    fallback_receive_id_type: str,
+) -> TaskPushAttempt:
+    payload = build_task_card_payload(card, run_id=run_id, task_id=task_id)
+    details: list[dict[str, Any]] = []
+    any_sent = False
+    any_failed = False
+    first_message_id = ""
+    failed_rows: list[dict[str, str]] = []
+    target_receive_id_type = (os.getenv("TASK_PUSH_RECEIVE_ID_TYPE", "user_id") or "user_id").strip()
+    for audience_name, receive_id, resolve_error_code in targets:
+        if receive_id:
+            sent = push_message_by_receive_id(
+                receive_id=receive_id,
+                receive_id_type=target_receive_id_type,
+                msg_type="interactive",
+                content=payload,
+                env_file=env_file,
             )
-    except Exception as exc:
-        return TextPushResult(chat_id=target, status="failed", error=str(exc))
-    return TextPushResult(chat_id=target, status="sent", message_id=str(sent.get("message_id", "")))
+            error_code = _extract_error_code(sent.error)
+            details.append(
+                {
+                    "name": audience_name,
+                    "receive_id": receive_id,
+                    "receive_id_type": sent.receive_id_type,
+                    "status": sent.status,
+                    "message_id": sent.message_id,
+                    "error": sent.error,
+                    "error_code": error_code,
+                    "fallback": False,
+                }
+            )
+            if sent.status == "sent":
+                any_sent = True
+                if not first_message_id:
+                    first_message_id = sent.message_id
+                continue
+            any_failed = True
+            failed_rows.append({"name": audience_name, "error_code": error_code or "unknown"})
+        else:
+            any_failed = True
+            failed_rows.append({"name": audience_name, "error_code": resolve_error_code or "resolve_failed"})
+
+    fallback_text_result = TextPushResult(chat_id=fallback_receive_id, status="skipped", receive_id_type=fallback_receive_id_type)
+    fallback_card_result = TextPushResult(chat_id=fallback_receive_id, status="skipped", receive_id_type=fallback_receive_id_type)
+    if failed_rows and fallback_receive_id:
+        lines = ["任务卡目标发送失败，已统一回退。", "失败明细："]
+        for row in failed_rows:
+            lines.append(f"- {row['name']}: {row['error_code']}")
+        fallback_text_result = push_message_by_receive_id(
+            receive_id=fallback_receive_id,
+            receive_id_type=fallback_receive_id_type,
+            msg_type="text",
+            content={"text": "\n".join(lines)},
+            env_file=env_file,
+        )
+        details.append(
+            {
+                "name": "fallback_notice",
+                "receive_id": fallback_receive_id,
+                "receive_id_type": fallback_receive_id_type,
+                "status": fallback_text_result.status,
+                "message_id": fallback_text_result.message_id,
+                "error": fallback_text_result.error,
+                "error_code": _extract_error_code(fallback_text_result.error),
+                "fallback": True,
+            }
+        )
+        fallback_card_result = push_message_by_receive_id(
+            receive_id=fallback_receive_id,
+            receive_id_type=fallback_receive_id_type,
+            msg_type="interactive",
+            content=payload,
+            env_file=env_file,
+        )
+        details.append(
+            {
+                "name": "fallback_card",
+                "receive_id": fallback_receive_id,
+                "receive_id_type": fallback_receive_id_type,
+                "status": fallback_card_result.status,
+                "message_id": fallback_card_result.message_id,
+                "error": fallback_card_result.error,
+                "error_code": _extract_error_code(fallback_card_result.error),
+                "fallback": True,
+            }
+        )
+        if fallback_card_result.status == "sent":
+            any_sent = True
+            if not first_message_id:
+                first_message_id = fallback_card_result.message_id
+    elif failed_rows and not fallback_receive_id:
+        details.append(
+            {
+                "name": "fallback_missing",
+                "receive_id": "",
+                "receive_id_type": fallback_receive_id_type,
+                "status": "failed",
+                "message_id": "",
+                "error": "missing fallback receive id",
+                "error_code": "fallback_missing",
+                "fallback": True,
+            }
+        )
+    status = "failed"
+    if any_sent and not any_failed:
+        status = "sent"
+    elif any_sent and any_failed:
+        status = "partial"
+    error = ""
+    if status != "sent":
+        error = "; ".join(item.get("error", "") for item in details if item.get("error"))
+    return TaskPushAttempt(
+        task_id=task_id,
+        run_id=run_id,
+        chat_id="",
+        card_payload=payload,
+        status=status,
+        message_id=first_message_id,
+        error=error,
+        details=details,
+    )
+
+
+def _extract_error_code(error: str) -> str:
+    text = str(error or "")
+    if not text:
+        return ""
+    m = re.search(r"code=([0-9]+)", text)
+    if m:
+        return m.group(1)
+    return ""
 
 
 __all__ = [
@@ -385,6 +641,8 @@ __all__ = [
     "TextPushResult",
     "build_task_card_payload",
     "push_task_card",
+    "push_message_by_receive_id",
+    "push_task_card_to_user_targets",
     "push_text_message",
     "queue_failed_pushes",
 ]

@@ -30,12 +30,20 @@ class LiftedCard:
     summary: str
     problem: str
     suggestion: str
-    target_audience: str
+    participants: list[str]
+    times: str
+    locations: str
     evidence: list[str]
     tags: list[str]
     confidence: float
     suggested_target: RouteTarget
     source_message_ids: list[str]
+    topic_focus: str = ""
+    message_role: str = ""
+    context_relation: str = ""
+    context_evidence: list[str] = field(default_factory=list)
+    decision_signals: dict[str, float] = field(default_factory=dict)
+    missing_fields: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

@@ -1,16 +1,13 @@
 ﻿from __future__ import annotations
 
-import hashlib
 import re
 from dataclasses import dataclass
 
 import llm.client as llm_client
 
-from ..shared.models import InspirationCandidate
 from ..prompt import get_prompt
 
 _ONLY_URL_RE = re.compile(r"^\s*https?://\S+\s*$", re.IGNORECASE)
-_SPACE_RE = re.compile(r"\s+")
 _SIMPLE_MSG_RE = re.compile(r"^\s*\[(?P<sender>[^\]]*)\]\s*(?P<content>.*)$")
 
 ACTION_TERMS = ("需要", "建议", "请", "安排", "修复", "改进", "优化", "跟进", "截止", "完成")
@@ -21,7 +18,7 @@ EMOTION_TERMS = ("吐槽", "抱怨", "卡住", "着急", "崩溃", "问题", "�
 @dataclass(slots=True)
 class DetectionResult:
     messages: list[str]
-    candidates: list[InspirationCandidate]
+    value_score: float
 
 
 
@@ -46,8 +43,8 @@ def _message_content(text: str) -> str:
     return text.strip()
 
 
-def _score_message_rule(content: str, duplicate_count: int) -> tuple[dict[str, float], list[str]]:
-    novelty = 1.0 / float(1 + max(0, duplicate_count))
+def _rule_value_score(content: str) -> float:
+    novelty = 1.0
     action_hits = sum(1 for term in ACTION_TERMS if term in content)
     impact_hits = sum(1 for term in IMPACT_TERMS if term in content)
     emotion_hits = sum(1 for term in EMOTION_TERMS if term in content)
@@ -58,107 +55,75 @@ def _score_message_rule(content: str, duplicate_count: int) -> tuple[dict[str, f
     actionability = min(1.0, 0.35 * is_question + 0.45 * min(1.0, action_hits / 2.0) + 0.2 * has_mentions)
     impact = min(1.0, 0.5 * has_mentions + 0.5 * min(1.0, impact_hits / 2.0))
     emotion = min(1.0, 0.7 * min(1.0, emotion_hits / 2.0) + 0.3 * exclaim_strength)
+    score_breakdown = {
+        "novelty": float(novelty),
+        "actionability": float(actionability),
+        "impact": float(impact),
+        "emotion": float(emotion),
+    }
 
-    reasons: list[str] = []
-    if novelty >= 0.9:
-        reasons.append("novel-content")
-    if actionability >= 0.55:
-        reasons.append("actionable-signal")
-    if impact >= 0.45:
-        reasons.append("group-impact")
-    if emotion >= 0.45:
-        reasons.append("emotion-intensity")
-    return {
-        "novelty": round(novelty, 4),
-        "actionability": round(actionability, 4),
-        "impact": round(impact, 4),
-        "emotion": round(emotion, 4),
-    }, reasons
-
-
-def _score_total(score_breakdown: dict[str, float]) -> float:
-    return (
+    score_total = (
         0.25 * score_breakdown["novelty"]
         + 0.25 * score_breakdown["actionability"]
         + 0.25 * score_breakdown["impact"]
         + 0.25 * score_breakdown["emotion"]
     )
+    return float(max(0.0, min(100.0, score_total * 100.0)))
 
 
-def _score_with_llm(*, context_lines: list[str], current_line: str) -> dict[str, float] | None:
-    # 信号检测任务：输出固定JSON格式，只需4个数值，使用最快参数
-    config = llm_client.LLMConfig.from_env(max_tokens=128, temperature=0.0, top_p=0.1)
+def _detect_with_llm(*, context_lines: list[str], current_line: str) -> float | None:
+    # 信号检测任务：输出 0~100 的价值分数，供后续阈值调灵敏度。
+    config = llm_client.LLMConfig.from_env(
+        max_tokens=64,
+        temperature=0.0,
+        top_p=0.1,
+        extra_body={"thinking": {"type": "disabled"}},
+    )
     if config.missing_fields():
         return None
     try:
-        system_prompt = get_prompt("detect.system_prompt")
-        user_prompt = get_prompt("detect.user_prompt").format(current_line=current_line, context_lines="\n".join(context_lines))
+        system_prompt = get_prompt("detect_v2.system_prompt")
+        user_prompt = get_prompt("detect_v2.user_prompt").format(current_line=current_line, context_lines="\n".join(context_lines))
     except Exception:
         return None
-
     payload = llm_client.invoke_structured(
         config=config,
         system_prompt=system_prompt,
         user_prompt=user_prompt,
-        schema=llm_client.DetectScores,
+        schema=llm_client.DetectValueScore,
     )
     if payload is None:
         return None
-    raw_scores = {
-        "novelty": float(payload.novelty),
-        "actionability": float(payload.actionability),
-        "impact": float(payload.impact),
-        "emotion": float(payload.emotion),
-    }
-    scale = 1.0 if max(raw_scores.values(), default=0.0) <= 1.0 else 100.0
-    score_breakdown = {
-        "novelty": round(raw_scores["novelty"] / scale, 4),
-        "actionability": round(raw_scores["actionability"] / scale, 4),
-        "impact": round(raw_scores["impact"] / scale, 4),
-        "emotion": round(raw_scores["emotion"] / scale, 4),
-    }
-    return score_breakdown
+    return float(max(0.0, min(100.0, payload.value_score)))
 
 
-def detect_candidates(messages: list[str], *, candidate_threshold: float = 0.45) -> DetectionResult:
+def detect_candidates(messages: list[str]) -> DetectionResult:
     filtered = [msg for msg in messages if not _is_noise(msg)]
     if not filtered:
-        return DetectionResult(messages=[], candidates=[])
+        return DetectionResult(messages=[], value_score=0.0)
 
     current_content = _message_content(filtered[-1])
-    
 
     context_raw = filtered[:-1]
+    value_score = _detect_with_llm(context_lines=context_raw, current_line=current_content)
+    if value_score is None:
+        value_score = _rule_value_score(current_content)
 
-    scored = _score_with_llm(context_lines=context_raw, current_line=current_content)
-    if scored is None:
-        score_breakdown, _ = _score_message_rule(current_content, 0)
-    else:
-        score_breakdown = scored
-
-    score_total = _score_total(score_breakdown)
-    if score_total < candidate_threshold:
-        return DetectionResult(messages=filtered, candidates=[])
-
-    candidate_id = "cand-" + hashlib.md5(current_content.encode("utf-8")).hexdigest()[:12]
-    candidate = InspirationCandidate(
-        candidate_id=candidate_id,
-        source_message_ids=[candidate_id],
-        score_total=round(score_total, 4),
-        score_breakdown=score_breakdown,
-        content=current_content,
-    )
-    return DetectionResult(messages=filtered, candidates=[candidate])
+    return DetectionResult(messages=filtered, value_score=float(max(0.0, min(100.0, value_score))))
 __all__ = ["DetectionResult", "detect_candidates"]
     
 if __name__ == "__main__":
     test_messages = [
-        "[Alice] 大家好！",
-        "[Bob] 需要安排一下下周的会议。",
-        "[Charlie] 这个功能太棒了！",
-        "[Alice] 大家好！",  # duplicate
-        # "[Bob] 需要安排一下下周的会议。",  # duplicate
-        # "[Dave] @Alice 我觉得这个问题很严重，需要尽快修复！",
+        "[Alice] 大家好",
+        "[Alice] 今天下午需要开会",
+        "[Alice] 1点种",
+        "[Alice] 在我办公室",  # duplicate
+        "[Alice] 张三和李四需要来开会",  # duplicate
+        "[Alice] 王五也要来"
+        "[Bob] 午饭的牛肉真好吃",
+        "[Alice] 赵六也来听一下"
+        "[李四] 我要来吗？"
+        "[Peter] 笑死我了哈哈哈哈"
     ]
-    result = detect_candidates(test_messages, candidate_threshold=0.01)
-    print("Detect End")
+    result = detect_candidates(test_messages)
+    print("Detect End：{}".format(result))

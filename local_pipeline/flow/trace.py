@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import os
 import sys
+import time
 from threading import Lock
 from collections import OrderedDict
 
@@ -48,6 +49,17 @@ def _format_step_name(node: str) -> str:
     return _STEP_NAMES.get(node, node)
 
 
+def _format_timeline(timeline: list[tuple[str, int | None]]) -> str:
+    parts: list[str] = []
+    for node, elapsed_ms in timeline:
+        name = _format_step_name(node)
+        if elapsed_ms is None:
+            parts.append(name)
+        else:
+            parts.append(f"{name}({elapsed_ms})")
+    return " → ".join(parts)
+
+
 def _format_step_path(nodes: list[str]) -> str:
     return " → ".join(_format_step_name(node) for node in nodes)
 
@@ -64,7 +76,7 @@ def _render_progress() -> None:
             current_step = task["current_step"]
             status = "完成" if task["completed"] else "执行中"
             rows.append(f"[{status}] {content}")
-            rows.append(f"当前步骤: {current_step}")
+            rows.append(f"{current_step}")
             rows.append("")
 
         _clear_screen()
@@ -82,6 +94,8 @@ def trace_start(*, message_id: str, chat_id: str, content: str) -> None:
             "chat_id": chat_id,
             "content": short_content,
             "nodes": [],
+            "timeline": [],
+            "last_tick": 0.0,
         }
 
         # 加入任务追踪
@@ -106,6 +120,7 @@ def trace_node(*, message_id: str, node_name: str) -> None:
         state = _TRACE_STATE.get(message_id)
         if not state:
             return
+        now = time.perf_counter()
         nodes = state.get("nodes")
         if isinstance(nodes, list):
             nodes.append(node_name)
@@ -113,7 +128,18 @@ def trace_node(*, message_id: str, node_name: str) -> None:
             content = str(state.get("content", ""))
             LOGGER.info(f"[{content}] 执行中: {path}")
 
-            current_step = _format_step_path(nodes)
+            timeline = state.get("timeline")
+            if not isinstance(timeline, list):
+                timeline = []
+            last_tick = state.get("last_tick")
+            if isinstance(last_tick, (int, float)) and timeline and timeline[-1][1] is None:
+                prev_node = str(timeline[-1][0])
+                elapsed_ms = max(0, int(round((now - float(last_tick)) * 1000)))
+                timeline[-1] = (prev_node, elapsed_ms)
+            timeline.append((node_name, None))
+            state["timeline"] = timeline
+            state["last_tick"] = now
+            current_step = _format_timeline(timeline)
 
             # 更新任务追踪中的当前步骤完整路径
             if message_id in _TRACKING_TASKS:
@@ -128,6 +154,7 @@ def trace_finish(*, message_id: str, suffix_status: str = "ok") -> None:
         state = _TRACE_STATE.pop(message_id, None)
         if not state:
             return
+        now = time.perf_counter()
         content = str(state.get("content", ""))
         nodes = state.get("nodes", [])
         if not isinstance(nodes, list):
@@ -148,6 +175,14 @@ def trace_finish(*, message_id: str, suffix_status: str = "ok") -> None:
         line = f"[{content}] 完成: {path}"
         LOGGER.info(line)
         display_path = _format_step_path(unique_nodes) if unique_nodes else "无节点"
+        timeline = state.get("timeline")
+        if isinstance(timeline, list) and timeline:
+            last_tick = state.get("last_tick")
+            if isinstance(last_tick, (int, float)) and timeline[-1][1] is None:
+                prev_node = str(timeline[-1][0])
+                elapsed_ms = max(0, int(round((now - float(last_tick)) * 1000)))
+                timeline[-1] = (prev_node, elapsed_ms)
+            display_path = _format_timeline(timeline)
 
         # 更新任务状态为已完成
         if message_id in _TRACKING_TASKS:

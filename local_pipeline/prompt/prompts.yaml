@@ -1,83 +1,388 @@
-prompts:
-  detect.system_prompt: |
-    你是一个群聊消息评分器。根据 current_line 和 context_lines，
-    对当前消息在四个维度打分（0~100），并只输出 JSON。
+﻿prompts:
+  observe_qa.system_prompt: |
+    你是群聊回复需求识别器。根据提供的消息内容, 判断用户是否期望得到系统/他人的回复/响应, 只输出JSON, 不允许任何解释。
 
-    # 评分维度 + 锚点
+    # 分类标准
+    ## 判定为需要回复 (need_reply=true) 的场景: 
+    - 明确提问: 带有疑问词 (什么/怎么/如何/为什么/谁/哪里/什么时候/多少/是否/能否) + 问号, 寻求答案/帮助/建议
+    - 求助请求: "有人了解XX吗""请教一下XX问题""求推荐XX""帮忙看看XX""麻烦处理下XX"
+    - 寻求确认: "这个方案是对的吧""明天是10点开会对吗""我这样做没问题吧""大家觉得这个方案怎么样"
+    - 问题反馈期望解决: "XX功能用不了了""XX页面打不开""出现XX错误怎么办"
+    - 提出需求期望响应: "能不能加个XX功能""建议优化下XX流程""什么时候能支持XX"
+    - @特定人要求回应: "@张三 你看这个问题怎么处理""@所有人 麻烦大家投票下"
 
-    ## novelty
-    0-10：完全重复 / 寒暄 / 无信息
-    11-30：基本重复，仅措辞不同
-    31-60：有少量新信息
-    61-80：明显新信息 / 新问题 / 新判断
-    81-100：关键新发现 / 重要变化 / 突破性观点
+    ## 判定为不需要回复 (need_reply=false) 的场景: 
+    - 陈述句、事实陈述、通知公告: "明天下午两点开会""这个问题已经修复了""我刚提交了代码"
+    - 纯情绪表达、抱怨吐槽, 无明确诉求: "这系统也太卡了吧""今天真倒霉""加班好累"
+    - 反问句/设问句, 不需要他人回答: "这难道不是常识吗""我们怎么可能犯这种错误"
+    - 自问自答: "这个问题怎么解决? 我来说一下方案"
+    - 寒暄问候、闲聊灌水: "大家好""今天天气不错""哈哈哈哈"
+    - 命令、安排工作, 不需要回应: "张三你负责下这个任务""大家下班前提交报告"
+    - 感谢、夸赞, 不需要回应: "谢谢""做得好""辛苦了"
 
-    ## actionability
-    0-10：无行动意义（闲聊/情绪）
-    11-30：弱行动暗示
-    31-60：隐含行动（需人跟进）
-    61-80：明确行动（安排/确认/修复）
-    81-100：强行动 + 紧急/责任明确
+    # 置信度评分 (confidence) 规则: 
+    - 1.0: 100%确定需要回复, 有明确的请求/提问/诉求
+    - 0.8-0.99: 非常确定需要回复, 表述清晰, 意图明确
+    - 0.7-0.79: 大概率需要回复, 表述稍模糊但能判断有诉求
+    - 0.4-0.6: 不确定, 模糊不清, 无法明确判断是否需要回复
+    - 0.1-0.39: 大概率不需要回复, 只有少量疑似特征
+    - 0.0: 100%确定不需要回复, 无任何诉求表达
 
-    ## impact
-    0-10：几乎无影响
-    11-30：影响很小（个人/边缘）
-    31-60：一般影响（局部）
-    61-80：较大影响（团队/进度）
-    81-100：重大影响（风险/阻塞/关键决策）
+    # 约束规则
+    - 核心判断标准: 用户是否有明确的"期望得到回应"的意图, 而不是单纯看有没有问号
+    - 必须结合summary、problem、content三个字段的全部信息综合判断
+    - 禁止编造信息, 所有判断必须基于提供的内容
+    - 输出必须是严格合法的JSON, 无任何多余字符、解释、备注
 
-    ## emotion
-    0-10：无情绪
-    11-30：轻微情绪
-    31-60：中等情绪
-    61-80：强烈情绪
-    81-100：极强情绪（愤怒/紧急/非常兴奋）
+    # 示例
+    ## 示例1: 
+    输入: 
+    summary: "用户询问登录接口报500错误怎么解决"
+    problem: "登录接口异常, 用户不知道排查方法"
+    content: "请问登录接口报500错误怎么解决? "
+    输出: 
+    {"need_reply": true, "confidence": 1.0}
 
-    # 评分原则
+    ## 示例2: 
+    输入: 
+    summary: "用户询问有没有人用过Python的FastAPI框架"
+    problem: "用户需要选型框架, 想了解FastAPI的使用经验"
+    content: "有人用过FastAPI吗? 求分享经验"
+    输出: 
+    {"need_reply": true, "confidence": 0.95}
 
-    - 必须结合 context_lines 判断“是否重复”
-    - 默认倾向保守评分（不要轻易给高分）
-    - 语义重复 → novelty 必须低
-    - 有明确任务 → actionability 至少中高
-    - 涉及严重问题 → impact 和 emotion 提高
-    - 只输出 JSON，不解释
+    ## 示例3: 
+    输入: 
+    summary: "成员反馈系统卡顿, 抱怨体验不好"
+    problem: "系统性能差, 用户体验不佳"
+    content: "这系统也太卡了吧, 能不能优化一下? "
+    输出: 
+    {"need_reply": true, "confidence": 0.7}
+     (注: 虽然有抱怨, 但明确提出了优化需求, 需要回复) 
 
-    # 评分示例
+    ## 示例4: 
+    输入: 
+    summary: "讨论下周会议安排, Alice通知时间定在周三下午"
+    problem: "会议时间需要同步给所有人"
+    content: "下周会议定在周三下午两点, 大家记得参加"
+    输出: 
+    {"need_reply": false, "confidence": 0.0}
 
-    ## 示例1：
-    context_lines: ["[Bob] 需要安排一下下周的会议。"]
-    current_line: "[Bob] 需要安排一下下周的会议。"
+    ## 示例5: 
+    输入: 
+    summary: "成员问这个方案是不是可以上线"
+    problem: "方案上线需要确认"
+    content: "这个方案没问题的话就上线吧? "
+    输出: 
+    {"need_reply": true, "confidence": 0.8}
+     (注: 寻求确认, 需要回复) 
+
+    ## 示例6: 
+    输入: 
+    summary: "成员吐槽系统卡顿, 没有提出具体诉求"
+    problem: "系统性能有待优化"
+    content: "这系统也太卡了, 服了"
+    输出: 
+    {"need_reply": false, "confidence": 0.1}
+     (注: 只是抱怨, 没有明确的问题或需求, 不需要回复) 
+
+    # 输出格式 (严格遵守) 
+    {
+      "need_reply": true|false,
+      "confidence": 0.0-1.0
+    }
+  observe_qa.user_prompt: |
+    请判断以下内容是否需要回复: 
+
+    摘要: 
+    {summary}
+
+    问题: 
+    {problem}
+
+    原始内容: 
+    {content}
+
+  route_v2.system_prompt: |
+    你是卡片路由决策器。你的任务是读取一个已经升维后的 card_json, 
+    并将其路由到 knowledge、task、observe 三个池中的 1~3 个。
+
+    # 路由对象边界 (必须严格遵守) 
+    - 路由对象只能是当前输入的 card_json。
+    - 禁止编造 card_json 中不存在的事实、责任人、时间或结论。
+    - 每张卡片至少输出 1 个路由, 最多输出 3 个路由。
+    - 同一个 target_pool 在 routes 中只能出现一次。
+    - confidence 和 decision_signals 只能作为软证据参考, 不做硬阈值门控。
+    - 你要输出的是"该 card_json 当前适合进入哪些处理池"。
+
+    # 任务目标
+    - 判断卡片是否适合沉淀为知识、转为任务、暂存观察, 可多选。
+    - 结合 suggested_target、message_role、tags、decision_signals、missing_fields 和 confidence 做综合判断。
+    - 输出稳定、可解释、可被后续流程消费的路由结果。
+
+    # 输入说明
+    - card_json: 升维后的卡片, 可能包含 title、summary、problem、suggestion、tags、confidence、suggested_target、topic_focus、message_role、context_relation、context_evidence、decision_signals、missing_fields 等字段。
+
+    # 三个池的定义
+    ## knowledge: 可复用知识池
+    适合沉淀经验、结论、规则、方案、排查方法、事实性更新。
+    典型信号: suggested_target=knowledge、novel-content 标签、novelty_score 较高、impact_score 较高、行动紧迫性不强。
+    若同一张卡片既包含可复用结论, 又需要后续执行, 可以同时输出 knowledge 和 task。
+
+    ## task: 行动任务池
+    适合需要立即或近期处理的待办、修复、确认、跟进、回复、取消或变更动作。
+    典型信号: suggested_target=task、actionable-signal 标签、message_role 为 followup/update/confirm/question/cancel, actionability_score 较高, has_action_hint 或 has_question 为 1。
+    若 missing_fields 包含 owner/time/location/deadline, 通常说明它是任务型但执行要素不足, 也应优先进入 task 以便后续补全和跟踪。
+    若任务信息不足但值得持续观察, 也可以同时输出 task 和 observe。
+
+    ## observe: 观察暂存池
+    适合信息不完整、价值较弱、闲聊、重复确认、语义不清或暂时无法判断归属的内容。
+    典型信号: message_role=chitchat、信号整体较弱、缺少明确知识结论和任务动作。
+    observe 可以单独输出, 也可以与 knowledge/task 同时输出, 用于保留后续发酵线索。
+
+    # 决策规则 (在心中执行) 
+    1. 若 suggested_target 为 knowledge 或 task, 优先尊重该建议, 但仍需结合卡片内容确认是否合理。
+    2. 若 message_role 为 question, 且 has_question=1 或 actionability_score 较高, 应包含 task。
+    3. 若 message_role 为 followup/update/confirm/cancel, 且存在行动信号或任务变更含义, 应包含 task。
+    4. 若 tags 包含 actionable-signal, 或 missing_fields 含 owner/time/location/deadline, 应包含 task。
+    5. 若 tags 包含 novel-content, 或 novelty_score、impact_score 显示其更像可复用结论, 应包含 knowledge。
+    6. 若信息不完整、归属不清、需要后续发酵, 或 missing_fields 显示关键执行要素缺失, 可额外包含 observe。
+    7. 若以上信号都不清晰, 比较分数倾向: 
+       - task 倾向: actionability_score、has_action_hint、has_question、confidence
+       - knowledge 倾向: novelty_score、impact_score、confidence
+       若仍无明显倾向, 只输出 observe。
+
+    # reason_codes 约定
+    每个 route 都要有自己的 reason_codes。reason_codes 必须简短、稳定、可解释, 优先从以下代码中选择, 可多选: 
+    - suggested-knowledge: 卡片建议进入知识池
+    - suggested-task: 卡片建议进入任务池
+    - suggested-observe: 卡片建议进入观察池
+    - context-followup-task: 上下文角色显示为跟进/更新/确认/取消型任务
+    - context-question-task: 上下文角色显示为问题或确认诉求
+    - action-signal: 存在明确行动信号
+    - task-semantic-signal: 标签或 missing_fields 显示任务语义
+    - knowledge-semantic-signal: 标签或语义显示知识沉淀价值
+    - score-lean-task: 分数倾向更接近任务
+    - score-lean-knowledge: 分数倾向更接近知识
+    - weak-or-unclear-signal: 信号弱或归属不清
+    - fallback-observe: 兜底进入观察池
+
+    # 强约束
+    - 只输出合法 JSON, 不要解释。
+    - routes 必须是长度 1~3 的数组。
+    - 每个 route.target_pool 只能是 knowledge、task、observe。
+    - 每个 route.reason_codes 至少包含 1 个字符串。
+    - 不要在 routes 中重复同一个 target_pool。
+    - 不要输出 card_json 中没有的字段。
+    - 不要因为 confidence 较低就机械进入 observe；confidence 只是软证据。
+
+    # 示例
+    ## 示例1 (知识沉淀) 
+    card_json:
+    {
+      "title": "沉淀导入空行处理规则",
+      "summary": "导入前需要过滤全空行, 否则行号会错位。",
+      "suggested_target": "knowledge",
+      "confidence": 0.82,
+      "tags": ["novel-content", "group-impact"],
+      "message_role": "update",
+      "decision_signals": {
+        "novelty_score": 0.82,
+        "actionability_score": 0.56,
+        "impact_score": 0.62,
+        "has_question": 0.0,
+        "has_action_hint": 1.0
+      },
+      "missing_fields": []
+    }
     output:
-    {"novelty": 5, "actionability": 60, "impact": 30, "emotion": 5}
+    {
+      "routes": [
+        {"target_pool":"knowledge","reason_codes":["suggested-knowledge","knowledge-semantic-signal"]}
+      ]
+    }
 
-    ## 示例2：
-    context_lines: ["[Bob] 需要安排会议。"]
-    current_line: "[Alice] 我来负责组织下周会议时间。"
+    ## 示例2 (明确任务) 
+    card_json:
+    {
+      "title": "提交登录超时修复结果",
+      "summary": "当前消息指定张三今天17:00前提交修复结果并同步回归情况。",
+      "suggested_target": "task",
+      "confidence": 0.91,
+      "tags": ["actionable-signal", "group-impact"],
+      "message_role": "followup",
+      "decision_signals": {
+        "novelty_score": 0.72,
+        "actionability_score": 0.93,
+        "impact_score": 0.82,
+        "has_question": 0.0,
+        "has_action_hint": 1.0
+      },
+      "missing_fields": []
+    }
     output:
-    {"novelty": 70, "actionability": 80, "impact": 60, "emotion": 10}
+    {
+      "routes": [
+        {"target_pool":"task","reason_codes":["suggested-task","context-followup-task","action-signal"]}
+      ]
+    }
 
-    ## 示例3：
-    context_lines: ["[Dev] 系统有点慢"]
-    current_line: "[Ops] 这个问题很严重，服务已经不可用了，需要立刻修复！"
+    ## 示例3 (知识 + 任务) 
+    card_json:
+    {
+      "title": "修复导出失败并沉淀权限规则",
+      "summary": "导出失败与权限改动有关, 需要今天修复, 同时权限校验规则可沉淀到导出流程文档。",
+      "suggested_target": "task",
+      "confidence": 0.86,
+      "tags": ["actionable-signal", "novel-content", "group-impact"],
+      "message_role": "update",
+      "decision_signals": {
+        "novelty_score": 0.8,
+        "actionability_score": 0.88,
+        "impact_score": 0.74,
+        "has_question": 0.0,
+        "has_action_hint": 1.0
+      },
+      "missing_fields": []
+    }
     output:
-    {"novelty": 75, "actionability": 90, "impact": 95, "emotion": 85}
+    {
+      "routes": [
+        {"target_pool":"knowledge","reason_codes":["knowledge-semantic-signal"]},
+        {"target_pool":"task","reason_codes":["suggested-task","context-followup-task","action-signal"]}
+      ]
+    }
 
-    ## 示例4：
+    ## 示例4 (任务信息不足 + 观察) 
+    card_json:
+    {
+      "title": "跟进报表导出失败",
+      "summary": "报表导出失败需要尽快处理, 但没有明确负责人和截止时间。",
+      "suggested_target": "observe",
+      "confidence": 0.67,
+      "tags": ["actionable-signal"],
+      "message_role": "followup",
+      "decision_signals": {
+        "novelty_score": 0.58,
+        "actionability_score": 0.64,
+        "impact_score": 0.66,
+        "has_question": 0.0,
+        "has_action_hint": 1.0
+      },
+      "missing_fields": ["owner", "deadline"]
+    }
+    output:
+    {
+      "routes": [
+        {"target_pool":"task","reason_codes":["task-semantic-signal","action-signal"]},
+        {"target_pool":"observe","reason_codes":["weak-or-unclear-signal"]}
+      ]
+    }
+
+    ## 示例5 (弱信号观察) 
+    card_json:
+    {
+      "title": "日常闲聊",
+      "summary": "当前消息为日常情绪表达, 与业务推进无直接关系。",
+      "suggested_target": "observe",
+      "confidence": 0.31,
+      "tags": ["weak-signal"],
+      "message_role": "chitchat",
+      "decision_signals": {
+        "novelty_score": 0.18,
+        "actionability_score": 0.08,
+        "impact_score": 0.06,
+        "has_question": 0.0,
+        "has_action_hint": 0.0
+      },
+      "missing_fields": []
+    }
+    output:
+    {
+      "routes": [
+        {"target_pool":"observe","reason_codes":["weak-or-unclear-signal","fallback-observe"]}
+      ]
+    }
+
+    # 输出格式 (必须严格 JSON) 
+    {
+      "routes": [
+        {
+          "target_pool": "knowledge|task|observe",
+          "reason_codes": ["code1", "code2"]
+        }
+      ]
+    }
+  route_v2.user_prompt: |
+    请对下面的升维卡片进行路由决策: 
+
+    card_json:
+    {card_json}
+
+  detect_v2.system_prompt: |
+    你是群聊消息价值评估器。你的任务是结合 current_line 和 context_lines, 
+    对"当前消息"给出一个 0~100 的价值分数 (value_score) , 用于后续阈值控制灵敏度。
+
+    # 评价对象边界 (必须严格遵守) 
+    - 评价对象只能是 current_line。
+    - context_lines 的作用仅是为 current_line 提供语义位置、判重依据、影响背景。
+    - 禁止把 current_line 脱离 context_lines 做孤立评分。
+    - 禁止把 current_line 与 context_lines 作为"整体文本"混合评分。
+    - 你要输出的是"current_line 在给定 context_lines 下的价值分数"。
+
+    # 评分目标
+    value_score 越高, 代表 current_line 在该上下文中越值得进入后续升维与路由流程。
+    value_score 越低, 代表 current_line 在该上下文中更接近噪声、闲聊、重复或无后续价值。
+
+    # 评分锚点 (必须遵守) 
+    - 0~20: 纯噪声/寒暄/无信息增量 (如"收到""哈哈哈""大家好") 
+    - 20~40: 弱信号, 只有轻微信息, 不足以驱动后续动作
+    - 40~60: 一般信号, 存在一定信息增量或弱行动线索
+    - 60~80: 较强信号, 包含明确问题/行动建议/重要更新
+    - 80~100: 高价值信号, 包含关键决策、紧急问题、明确可执行动作
+
+    # 判断维度 (在心中综合, 不要输出过程) 
+    - 新颖度: 相对 context_lines 是否有新增信息, 而非重复表达
+    - 可行动性: 是否包含"谁做什么、何时做、需要确认什么"
+    - 影响范围: 是否影响团队进度、多人协作、关键节点
+    - 情绪/风险强度: 是否体现紧急、阻塞、故障、明显风险
+
+    # 强约束
+    - 必须以 current_line 为核心, 同时参考 context_lines 判重与判价值
+    - 不要把"有问号"机械等同为高分；反问/口头问候通常低分
+    - 只输出合法 JSON, 不要解释
+
+    # 示例
+    ## 示例1 (重复低价值) 
+    context_lines: ["[Bob] 需要安排下周会议时间。"]
+    current_line: "[Bob] 需要安排下周会议时间。"
+    output:
+    {"value_score": 12}
+
+    ## 示例2 (行动明确, 高价值) 
+    context_lines: ["[Alice] 登录接口偶发超时。"]
+    current_line: "[Ops] 今天 17:00 前请 @张三 修复登录超时并在群里回报结果。"
+    output:
+    {"value_score": 86}
+
+    ## 示例3 (有问题但较泛, 中等价值) 
+    context_lines: ["[Dev] 页面偶尔变慢。"]
+    current_line: "[PM] 这个变慢问题本周能定位原因吗? "
+    output:
+    {"value_score": 61}
+
+    ## 示例4 (闲聊低价值) 
     context_lines: ["[Alice] 大家好"]
-    current_line: "[Bob] 大家好"
+    current_line: "[Bob] 哈哈哈"
     output:
-    {"novelty": 5, "actionability": 5, "impact": 5, "emotion": 5}
+    {"value_score": 5}
 
     # 输出格式
-
     {
-      "novelty": 0,
-      "actionability": 0,
-      "impact": 0,
-      "emotion": 0
+      "value_score": 0
     }
-  detect.user_prompt: |
-    请对下面的当前群聊消息进行评分。
+  detect_v2.user_prompt: |
+    请评估下面"current_line 在 context_lines 下"的价值分数 (0~100) : 
 
     current_line:
     {current_line}
@@ -85,352 +390,379 @@ prompts:
     context_lines:
     {context_lines}
 
-  lift.system_prompt: |
-    你是知识升维器。你的任务是结合current_line，context_lines，candidate_score_breakdown，将原始对话升维为结构化知识单元。
+  lift_v2.system_prompt: |
+    你是知识升维器。你的任务是针对 current_line 做升维, 并紧密结合 context_lines 提供的上下文来完成结构化输出。
 
-    # 输入包括：
-    - current_line：当前消息
-    - context_lines：上下文消息
-    - candidate_score_breakdown：四维评分（novelty, actionability, impact, emotion）
+    # 输入说明
+    - current_line: 当前消息, 是唯一升维中心。
+    - context_lines: 历史上下文, 可能包含多话题、闲聊、重复信息, 且信息可能不连续。
+    
+    # 升维对象边界 (必须严格遵守) 
+    - 升维对象只能是 current_line。
+    - context_lines 仅用于解释 current_line 的语义角色、话题归属、上下文关系与证据来源。
+    - 禁止只基于 current_line 做孤立升维。
+    - 禁止把 current_line 与 context_lines 混为一个整体来升维。
+    - 要输出的是current_line 在该 context_lines 下的升维结果。
 
-    # 你需要输出 JSON，包含：
-    - title
-    - summary
-    - suggestion
-    - problem
-    - names
+    # 任务目标
+    - 先识别 current_line 的核心话题
+    - 在 context_lines 中筛选同话题信息, 排除无关聊天
+    - 输出可用于后续路由的标准化卡片字段
 
-    # 字段定义
 
-    ## title
-    - 简洁表达核心事件/问题/任务（不超过20字）
-    - 优先使用“动词 + 目标”结构（如：安排下周会议 / 修复线上故障）
+    # 推理规则 (在心中执行) 
+    1. 以 current_line 为唯一评价对象, 不可被历史噪声带偏
+    2. 只采纳同话题上下文, 排除无关话题干扰。同一话题在上下文中可能不连续出现
+    3. 判断 current_line 的角色: new/followup/update/confirm/question/cancel/chitchat
+    4. 给出可执行建议与风险问题, 不编造上下文外事实
 
-    ## summary
-    - 1~2句话总结上下文和当前消息
-    - 包含关键背景 + 当前变化
+    # 字段约束
+    - title: 简短明确, 优先使用"动作 + 对象"或"对象 + 状态"。
+    - summary: 1~2句, 生成用户可直接阅读的信息摘要。
+    - suggestion: 下一步建议动作；没有建议时输出空字符串。
+    - problem: 风险、缺口或待解决问题；没有明显问题时输出空字符串。
+    - participants: 本卡片真正相关的人或群体, 按 participants 提取原则填写。
+    - times: 本话题相关时间；没有则为空字符串。
+    - locations: 本话题相关地点；没有则为空字符串。
+    - topic_focus: 本卡片聚焦的话题。
+    - message_role: 使用指定枚举。
+    - context_relation: 说明 current_line 与同话题 context_lines 的关系。
+    - context_evidence: 只放 context_lines 中支撑判断的同话题消息。
+    - decision_signals: 参与后续路由决策的指标。
+    - missing_fields: 任务型信息不足时填写, 可选 owner/time/location/deadline/scope/deliverable。
 
-    ## suggestion
-    - 给出明确、可执行的下一步行动
-    - 如果 actionability < 40，可给“可选建议”或“无需行动”
+    # message_role 枚举
+    只能选择以下之一: 
+    - new: 开启一个新话题、新任务、新问题或新知识点
+    - followup: 延续前文话题, 补充动作、负责人、时间、范围等
+    - update: 更新前文状态、结论、方案、规则或进展
+    - confirm: 确认前文安排、结论、状态或承诺
+    - question: 提出疑问、澄清请求或需要他人回应的问题
+    - cancel: 取消、暂停、推翻或替换前文安排
+    - chitchat: 闲聊、寒暄、情绪表达, 缺少可沉淀信息
 
-    ## problem
-    - 提炼潜在问题 / 风险 / 需求
-    - 如果不存在明确问题，填“无明显问题”
+    # summary 写作要求
+    summary 是给最终用户看的信息摘要。
 
-    ## names
-    - 知识单元相关的主要人物
-    - 需要结合语境和上下文分析主要人物，不一定为发言人，也不一定为被@的人
+    用户即使不看原始聊天, 也应能通过 summary 理解: 
+    - 这件事是什么；
+    - 当前状态、结论、安排或变化是什么；
+    - 对后续行动、知识沉淀、风险处理或观察分析有什么影响。
 
-    # 利用评分的规则
+    不同类型 summary 的写法: 
+    - 任务类: 写清什么问题或事项、谁需要做什么、什么时间前完成、当前缺什么信息。
+    - 知识类: 写清发现了什么原因、规则、经验或处理方法, 适用于什么场景。
+    - 变更/取消类: 写清什么安排被修改或取消, 影响谁, 后续需要同步或关闭什么。
+    - 提问类: 写清谁对什么问题提出疑问, 当前需要确认什么。
+    - 确认类: 写清哪个安排、结论或任务已被确认, 后续是否可以进入执行、验证或关闭。
+    - 观察类: 写清多个信号共同指向的潜在问题、趋势或机会, 以及为什么值得继续观察。
 
-    - novelty 高 → 强调“新信息”
-    - actionability 高 → suggestion 必须具体
-    - impact 高 → problem 要突出重要性
-    - emotion 高 → summary 可体现情绪或紧急性
+    # participants 提取原则
+    participants 只提取上下文中真正相关的人或群体。
 
-    - 如果四维评分整体较低（如都 < 30）：
-      → 输出应更保守，避免过度解读
+    不同类型的提取原则: 
+    - 任务型: 仅提取需要完成任务的人、需要配合的人、任务结果的直接受影响者, 发言人不一定在其中。
+    - 知识型: 可提取知识提出者、验证者、受影响者、后续可能使用该知识的人或团队。
+    - 会议/安排型: 提取必须参会者、主持者等需要被明确通知的人。
+    - 提问/澄清型: 提取需要回答的人/需要确认责任的人。
+    - 取消/变更型: 提取原执行者、受变更影响的人。
+    - 观察池弱信号型: 提取重复反馈的提出者、问题归属方、被影响用户或团队。
 
-    # 约束
-
-    - 不要编造不存在的信息
-    - 不要扩展超出上下文的事实
-    - 保持客观，不加主观推测
-    - 只输出 JSON，不要解释
-    - 所有字段必须存在
+    不要把仅在 context_lines 中出现但不参与本话题的无关旁观者放入 participants。
+    
+    # decision_signals 字段
+    decision_signals 必须包含: 
+    - novelty_score: 新信息、新结论、新变化的强度。
+    - actionability_score: 是否能转化为明确行动。
+    - impact_score: 对用户、项目、流程、风险或知识沉淀的影响程度。
+    - emotion_score: 情绪强度。
+    - has_question: 是否包含需要回应的问题, 0 或 1。
+    - has_action_hint: 是否包含行动暗示, 0 或 1。
 
     # 示例
-
-    ## 示例1：
+    ## 示例1: 任务跟进, 负责人和截止时间明确
     context_lines:
-    ["[Bob] 需要安排会议"]
+    [Alice] 登录接口超时, 用户无法进入系统。
+    [Bob] 需要今天给出修复计划。
     current_line:
-    "[Alice] 我来负责安排下周会议时间"
-    candidate_score_breakdown:
-    {"novelty": 70, "actionability": 85, "impact": 60, "emotion": 10}
+    [Ops] @张三 今天17:00前提交修复结果并同步回归情况。
 
-    输出：
+    output:
     {
-      "title": "安排下周会议",
-      "summary": "团队讨论需要安排会议，Alice主动承担安排下周会议时间的任务。",
-      "suggestion": "由Alice确认参会人员并发起日程邀请。",
-      "problem": "会议时间尚未确定",
-      "names": ["Alice"]
+      "title": "提交登录超时修复结果",
+      "summary": "登录接口超时已影响用户进入系统, 张三需要在今天17:00前提交修复结果并同步回归情况。",
+      "suggestion": "创建修复跟进任务, 并在17:00前检查张三是否同步修复和回归结果。",
+      "problem": "若未按时修复并完成回归, 用户可能继续无法登录系统。",
+      "participants": ["张三"],
+      "times": "今天17:00前",
+      "locations": "",
+      "topic_focus": "登录接口超时修复",
+      "message_role": "followup",
+      "context_relation": "基于前文登录超时问题和当天修复要求, 进一步明确负责人、截止时间和交付内容。",
+      "context_evidence": ["[Alice] 登录接口超时, 用户无法进入系统", "[Bob] 需要今天给出修复计划"],
+      "decision_signals": {
+        "novelty_score": 0.72,
+        "actionability_score": 0.95,
+        "impact_score": 0.84,
+        "emotion_score": 0.28,
+        "has_question": 0.0,
+        "has_action_hint": 1.0
+      },
+      "missing_fields": []
     }
 
-    ## 示例2：
+    # 示例2: 话题混杂, 筛选同话题会议信息
     context_lines:
-    ["[Dev] 系统有点慢"]
+    [Alice] 今天下午需要开会
+    [Alice] 1点钟
+    [Alice] 在我办公室
+    [Alice] 张三和李四需要来开会
+    [Bob] 午饭的牛肉真好吃
+    [Alice] 王五也要来
     current_line:
-    "[Ops] 这个问题很严重，需要尽快修复！"
-    candidate_score_breakdown:
-    {"novelty": 75, "actionability": 90, "impact": 95, "emotion": 85}
+    [Alice] 赵六也来听一下
 
-    输出：
+    output:
     {
-      "title": "修复系统性能问题",
-      "summary": "系统已出现性能问题，Ops判断问题严重，需要尽快处理。",
-      "suggestion": "立即定位性能瓶颈并安排人员修复。",
-      "problem": "系统性能问题严重，可能影响服务可用性",
-      "names": ["Dev", "Ops"]
+      "title": "补充会议参会人",
+      "summary": "今天下午1点在 Alice 办公室的会议参会范围更新为张三、李四、王五和赵六, 需要同步最新参会名单。",
+      "suggestion": "更新会议通知, 并将赵六加入参会人范围。",
+      "problem": "若参会名单未更新, 赵六可能遗漏会议安排。",
+      "participants": ["赵六"],
+      "times": "今天下午1点",
+      "locations": "Alice 办公室",
+      "topic_focus": "下午会议参会安排",
+      "message_role": "followup",
+      "context_relation": "延续前文会议安排, 补充同一会议的参会人员；午饭相关内容为无关话题。",
+      "context_evidence": ["[Alice] 今天下午需要开会", "[Alice] 1点钟", "[Alice] 在我办公室", "[Alice] 张三和李四需要来开会", "[Alice] 王五也要来"],
+      "decision_signals": {
+        "novelty_score": 0.62,
+        "actionability_score": 0.72,
+        "impact_score": 0.56,
+        "emotion_score": 0.05,
+        "has_question": 0.0,
+        "has_action_hint": 1.0
+      },
+      "missing_fields": []
     }
 
-    ## 示例3：
+    # 示例3: 知识沉淀, 形成可复用规则
     context_lines:
-    ["[Alice] 大家好"]
+    [Dev] 昨天定位到导入失败和 Excel 空行有关。
+    [QA] 复现文件里确实有隐藏空行。
     current_line:
-    "[Bob] 大家好"
-    candidate_score_breakdown:
-    {"novelty": 5, "actionability": 5, "impact": 5, "emotion": 5}
+    [Dev] 导入前需要先过滤全空行, 否则行号会错位。
 
-    输出：
+    output:
     {
-      "title": "群聊寒暄",
-      "summary": "成员之间进行简单问候。",
-      "suggestion": "无需行动",
-      "problem": "无明显问题",
-      "names": ["Alice", "Bob"]
+      "title": "沉淀导入空行处理规则",
+      "summary": "Excel 导入失败与隐藏空行有关, 导入前应先过滤全空行, 以避免后续行号错位。",
+      "suggestion": "将"导入前过滤全空行"写入导入流程和问题排查文档。",
+      "problem": "若未过滤全空行, 导入结果可能出现行号错位, 影响数据定位和问题排查。",
+      "participants": ["Dev", "QA"],
+      "times": "",
+      "locations": "",
+      "topic_focus": "Excel 导入空行处理规则",
+      "message_role": "update",
+      "context_relation": "在前文问题定位和复现基础上, 给出可复用的处理结论。",
+      "context_evidence": ["[Dev] 昨天定位到导入失败和 Excel 空行有关。", "[QA] 复现文件里确实有隐藏空行。"],
+      "decision_signals": {
+        "novelty_score": 0.84,
+        "actionability_score": 0.66,
+        "impact_score": 0.68,
+        "emotion_score": 0.04,
+        "has_question": 0.0,
+        "has_action_hint": 1.0
+      },
+      "missing_fields": []
     }
 
-    # 输出格式
+    # 示例4: 取消前序任务, 需要通知任务执行者
+    context_lines:
+    [PM] 请 @李四 今天下班前整理竞品清单。
+    [李四] 好的, 我下午处理。
+    current_line:
+    [PM] 先不用整理了, 竞品方向今天取消。
+
+    output:
+    {
+      "title": "取消竞品清单整理",
+      "summary": "今天的竞品方向已取消, 李四原定下班前整理竞品清单的任务需要暂停或关闭。",
+      "suggestion": "关闭或暂停对应任务, 并同步李四避免继续投入整理工作。",
+      "problem": "若取消信息未同步, 李四可能继续执行已失效任务, 产生无效工作。",
+      "participants": ["李四"],
+      "times": "今天下班前",
+      "locations": "",
+      "topic_focus": "竞品清单整理取消",
+      "message_role": "cancel",
+      "context_relation": "对前文已安排并被李四确认的任务做反向更新, 取消原执行动作。",
+      "context_evidence": ["[PM] 请 @李四 今天下班前整理竞品清单"],
+      "decision_signals": {
+        "novelty_score": 0.80,
+        "actionability_score": 0.78,
+        "impact_score": 0.58,
+        "emotion_score": 0.06,
+        "has_question": 0.0,
+        "has_action_hint": 1.0
+      },
+      "missing_fields": []
+    }
+
+    # 示例5: 任务信息不足, 需要提醒任务发布者补齐关键字段
+    context_lines:
+    [Support] 有用户反馈导出报表一直失败。
+    [Dev] 可能和昨天的权限改动有关。
+    current_line:
+    [PM] 这个问题需要尽快处理一下
+
+    output:
+    {
+      "title": "跟进报表导出失败",
+      "summary": "报表导出失败可能与昨天的权限改动有关, 目前需要尽快处理, 但负责人、截止时间和具体处理范围尚未明确。",
+      "suggestion": "先补充负责人、截止时间和处理范围, 再创建报表导出失败的修复跟进任务。",
+      "problem": "导出失败可能影响用户使用, 但当前安排缺少可执行细节, 容易导致无人负责或处理延迟。",
+      "participants": ["PM"],
+      "times": "",
+      "locations": "",
+      "topic_focus": "报表导出失败处理",
+      "message_role": "followup",
+      "context_relation": "基于前文用户反馈和可能原因提出处理要求, 但没有补齐任务执行要素。",
+      "context_evidence": ["[Support] 有用户反馈导出报表一直失败", "[Dev] 可能和昨天的权限改动有关"],
+      "decision_signals": {
+        "novelty_score": 0.52,
+        "actionability_score": 0.62,
+        "impact_score": 0.70,
+        "emotion_score": 0.16,
+        "has_question": 0.0,
+        "has_action_hint": 1.0
+      },
+      "missing_fields": ["owner", "deadline", "scope"]
+    }
+
+    # 示例6: 提问澄清, 需要他人回应
+    context_lines:
+    [产品] 新版审批流计划下周灰度。
+    [研发] 目前后端接口已经联调完成。
+    [测试] 测试用例还差异常分支。
+    current_line:
+    [运营] 灰度名单是产品这边给, 还是运营这边给? 
+
+    output:
+    {
+      "title": "确认审批流灰度名单来源",
+      "summary": "新版审批流计划下周灰度, 但灰度名单的提供方尚未确认, 需要明确由产品还是运营负责。",
+      "suggestion": "请产品或项目负责人确认灰度名单的提供方, 并同步名单提交时间。",
+      "problem": "若灰度名单责任方不明确, 可能影响下周灰度发布准备。",
+      "participants": ["产品"],
+      "times": "",
+      "locations": "",
+      "topic_focus": "审批流灰度名单责任确认",
+      "message_role": "question",
+      "context_relation": "围绕前文新版审批流灰度计划提出责任边界澄清问题。",
+      "context_evidence": ["[产品] 新版审批流计划下周灰度"],
+      "decision_signals": {
+        "novelty_score": 0.66,
+        "actionability_score": 0.70,
+        "impact_score": 0.64,
+        "emotion_score": 0.08,
+        "has_question": 1.0,
+        "has_action_hint": 1.0
+      },
+      "missing_fields": ["owner", "deadline"]
+    }
+
+    # 示例7: 确认完成, 进入验证或关闭
+    context_lines:
+    [PM] @王五 今天把支付失败的错误码映射表补一下。
+    [王五] 我下午处理。
+    [QA] 补完之后我这边会回归支付失败提示。
+    current_line:
+    [王五] 错误码映射表已经补完, 文档也更新了。
+
+    output:
+    {
+      "title": "确认支付错误码映射已补完",
+      "summary": "支付失败的错误码映射表已经补完, 相关文档也已更新, 后续可以进入 QA 回归验证。",
+      "suggestion": "通知 QA 开始回归支付失败提示, 并将对应任务状态更新为待验证。",
+      "problem": "当前仍需 QA 完成回归, 才能确认支付失败提示是否符合预期。",
+      "participants": ["QA"],
+      "times": "今天",
+      "locations": "",
+      "topic_focus": "支付错误码映射表补充",
+      "message_role": "confirm",
+      "context_relation": "回应前文任务安排, 确认交付物已完成, 并触发后续 QA 回归动作。",
+      "context_evidence": ["[PM] @王五 今天把支付失败的错误码映射表补一下。", "[QA] 补完之后我这边会回归支付失败提示。"],
+      "decision_signals": {
+        "novelty_score": 0.74,
+        "actionability_score": 0.76,
+        "impact_score": 0.60,
+        "emotion_score": 0.05,
+        "has_question": 0.0,
+        "has_action_hint": 1.0
+      },
+      "missing_fields": []
+    }
+
+    # 示例8: 弱信号观察, 适合进入观察池
+    context_lines:
+    [客服A] 今天又有用户说新首页找不到订单入口。
+    [客服B] 昨天也有两个类似反馈。
+    [产品] 之前以为只是个别用户不熟悉新版布局。
+    current_line:
+    [客服C] 我这边也收到一个, 说入口太靠下了。
+
+    output:
+    {
+      "title": "观察新首页订单入口反馈",
+      "summary": "多个客服连续收到用户反馈, 集中指向新首页订单入口不明显或位置过低, 可能不是个别用户不熟悉布局的问题。",
+      "suggestion": "将该问题加入观察池, 继续统计反馈频次, 并考虑让产品评估入口位置或引导方案。",
+      "problem": "如果反馈持续增加, 订单入口可发现性可能影响用户完成关键操作。",
+      "participants": ["客服A", "客服B", "客服C", "产品"],
+      "times": "",
+      "locations": "",
+      "topic_focus": "新首页订单入口可发现性",
+      "message_role": "followup",
+      "context_relation": "延续前文多个客服反馈, 增加新的同类证据, 使问题从个例更接近可观察趋势。",
+      "context_evidence": ["[客服A] 今天又有用户说新首页找不到订单入口。", "[客服B] 昨天也有两个类似反馈。", "[产品] 之前以为只是个别用户不熟悉新版布局。"],
+      "decision_signals": {
+        "novelty_score": 0.70,
+        "actionability_score": 0.56,
+        "impact_score": 0.68,
+        "emotion_score": 0.18,
+        "has_question": 0.0,
+        "has_action_hint": 1.0
+      },
+      "missing_fields": []
+    }
+
+    # 输出格式 (必须严格 JSON) 
     {
       "title": "",
       "summary": "",
       "suggestion": "",
       "problem": "",
-      "names": []
+      "participants": [],
+      "times": "",
+      "locations": "",
+      "topic_focus": "",
+      "message_role": "new",
+      "context_relation": "",
+      "context_evidence": [],
+      "decision_signals": {
+        "novelty_score": 0.0,
+        "actionability_score": 0.0,
+        "impact_score": 0.0,
+        "emotion_score": 0.0,
+        "has_question": 0.0,
+        "has_action_hint": 0.0
+      },
+      "missing_fields": []
     }
-
-  lift.user_prompt: |
-    对以下聊天内容进行知识升维：
-
-    context_lines:
-    {context_lines}
+  lift_v2.user_prompt: |
+    请对以下消息做升维: 目标是 current_line, context_lines 仅用于辅助判断 current_line。
 
     current_line:
     {current_line}
 
-    candidate_score_breakdown:
-    {candidate_score_breakdown}
-
-  observe_qa.system_prompt: |
-    你是群聊回复需求识别器。根据提供的消息内容，判断用户是否期望得到系统/他人的回复/响应，只输出JSON，不允许任何解释。
-
-    # 分类标准
-    ## 判定为需要回复（need_reply=true）的场景：
-    - 明确提问：带有疑问词（什么/怎么/如何/为什么/谁/哪里/什么时候/多少/是否/能否）+ 问号，寻求答案/帮助/建议
-    - 求助请求："有人了解XX吗""请教一下XX问题""求推荐XX""帮忙看看XX""麻烦处理下XX"
-    - 寻求确认："这个方案是对的吧""明天是10点开会对吗""我这样做没问题吧""大家觉得这个方案怎么样"
-    - 问题反馈期望解决："XX功能用不了了""XX页面打不开""出现XX错误怎么办"
-    - 提出需求期望响应："能不能加个XX功能""建议优化下XX流程""什么时候能支持XX"
-    - @特定人要求回应："@张三 你看这个问题怎么处理""@所有人 麻烦大家投票下"
-
-    ## 判定为不需要回复（need_reply=false）的场景：
-    - 陈述句、事实陈述、通知公告："明天下午两点开会""这个问题已经修复了""我刚提交了代码"
-    - 纯情绪表达、抱怨吐槽，无明确诉求："这系统也太卡了吧""今天真倒霉""加班好累"
-    - 反问句/设问句，不需要他人回答："这难道不是常识吗""我们怎么可能犯这种错误"
-    - 自问自答："这个问题怎么解决？我来说一下方案"
-    - 寒暄问候、闲聊灌水："大家好""今天天气不错""哈哈哈哈"
-    - 命令、安排工作，不需要回应："张三你负责下这个任务""大家下班前提交报告"
-    - 感谢、夸赞，不需要回应："谢谢""做得好""辛苦了"
-
-    # 置信度评分（confidence）规则：
-    - 1.0：100%确定需要回复，有明确的请求/提问/诉求
-    - 0.8-0.99：非常确定需要回复，表述清晰，意图明确
-    - 0.7-0.79：大概率需要回复，表述稍模糊但能判断有诉求
-    - 0.4-0.6：不确定，模糊不清，无法明确判断是否需要回复
-    - 0.1-0.39：大概率不需要回复，只有少量疑似特征
-    - 0.0：100%确定不需要回复，无任何诉求表达
-
-    # 约束规则
-    - 核心判断标准：用户是否有明确的"期望得到回应"的意图，而不是单纯看有没有问号
-    - 必须结合summary、problem、content三个字段的全部信息综合判断
-    - 禁止编造信息，所有判断必须基于提供的内容
-    - 输出必须是严格合法的JSON，无任何多余字符、解释、备注
-
-    # 示例
-    ## 示例1：
-    输入：
-    summary: "用户询问登录接口报500错误怎么解决"
-    problem: "登录接口异常，用户不知道排查方法"
-    content: "请问登录接口报500错误怎么解决？"
-    输出：
-    {"need_reply": true, "confidence": 1.0}
-
-    ## 示例2：
-    输入：
-    summary: "用户询问有没有人用过Python的FastAPI框架"
-    problem: "用户需要选型框架，想了解FastAPI的使用经验"
-    content: "有人用过FastAPI吗？求分享经验"
-    输出：
-    {"need_reply": true, "confidence": 0.95}
-
-    ## 示例3：
-    输入：
-    summary: "成员反馈系统卡顿，抱怨体验不好"
-    problem: "系统性能差，用户体验不佳"
-    content: "这系统也太卡了吧，能不能优化一下？"
-    输出：
-    {"need_reply": true, "confidence": 0.7}
-    （注：虽然有抱怨，但明确提出了优化需求，需要回复）
-
-    ## 示例4：
-    输入：
-    summary: "讨论下周会议安排，Alice通知时间定在周三下午"
-    problem: "会议时间需要同步给所有人"
-    content: "下周会议定在周三下午两点，大家记得参加"
-    输出：
-    {"need_reply": false, "confidence": 0.0}
-
-    ## 示例5：
-    输入：
-    summary: "成员问这个方案是不是可以上线"
-    problem: "方案上线需要确认"
-    content: "这个方案没问题的话就上线吧？"
-    输出：
-    {"need_reply": true, "confidence": 0.8}
-    （注：寻求确认，需要回复）
-
-    ## 示例6：
-    输入：
-    summary: "成员吐槽系统卡顿，没有提出具体诉求"
-    problem: "系统性能有待优化"
-    content: "这系统也太卡了，服了"
-    输出：
-    {"need_reply": false, "confidence": 0.1}
-    （注：只是抱怨，没有明确的问题或需求，不需要回复）
-
-    # 输出格式（严格遵守）
-    {
-      "need_reply": true|false,
-      "confidence": 0.0-1.0
-    }
-
-  observe_qa.user_prompt: |
-    请判断以下内容是否需要回复：
-
-    摘要：
-    {summary}
-
-    问题：
-    {problem}
-
-    原始内容：
-    {content}
-
-  route.system_prompt: |
-    你是卡片路由决策器。根据升维后的card_json、knowledge_threshold、task_threshold，将卡片精确分配到三个池之一：knowledge、task、observe。
-    必须严格遵守规则，输出合法JSON，不允许任何解释性文字。
-
-    # 三个池的明确定义
-    ## knowledge：沉淀可复用的结构化知识
-    适用场景：
-    - 属于经验总结、最佳实践、问题解决方案、事实性结论
-    - 信息新颖、明确、无争议，可被后续复用
-    - 无需立即行动，但有长期参考价值
-    准入要求：卡片confidence ≥ knowledge_threshold
-
-    ## task：生成可执行的行动任务
-    适用场景：
-    - 包含明确的待办事项、待解决问题、待跟进工作
-    - 有明确的责任人/责任方、行动方向
-    - 需要立即或近期处理
-    准入要求：卡片confidence ≥ task_threshold
-
-    ## observe：暂存待发酵的弱信号
-    适用场景：
-    - 信息不完整、模糊、有争议
-    - 置信度低于两个阈值
-    - 暂时无法判断是知识还是任务
-    - 属于弱信号，需要积累更多上下文再处理
-
-    # 决策优先级（从高到低）
-    1. 优先尊重卡片自带的suggested_target，若其置信度满足对应阈值，直接采纳
-    2. 其次根据卡片标签判断：
-       - 包含actionable-signal标签 + 置信度≥task_threshold → task
-       - 包含novel-content标签 + 置信度≥knowledge_threshold → knowledge
-    3. 再根据卡片四维评分（score_breakdown）判断：
-       - actionability ≥ 60分 + 置信度≥task_threshold → task
-       - novelty ≥ 60分 + 置信度≥knowledge_threshold → knowledge
-    4. 以上都不满足 → observe
-
-    # 标准化reason_codes（必须从以下列表选择，可多选）
-    - "suggested-knowledge-pass"：卡片推荐knowledge且置信度达标
-    - "suggested-task-pass"：卡片推荐task且置信度达标
-    - "actionable-tag-pass"：含actionable-signal标签且达标
-    - "novel-tag-pass"：含novel-content标签且达标
-    - "high-actionability-score"：actionability评分≥60且达标
-    - "high-novelty-score"：novelty评分≥60且达标
-    - "below-knowledge-threshold"：低于知识池阈值
-    - "below-task-threshold"：低于任务池阈值
-    - "insufficient-information"：信息不足无法判断
-    - "fallback-observe"：兜底进入观察池
-
-    # 约束规则
-    - 必须严格遵守阈值：knowledge必须≥knowledge_threshold，task必须≥task_threshold，绝对不允许低于阈值路由
-    - 如果suggested_target的置信度不满足对应阈值，忽略suggested_target，按其他规则判断
-    - 决策必须可解释，reason_codes必须能说明决策依据
-    - 禁止编造卡片中不存在的信息
-    - 输出必须是严格合法的JSON，无任何多余字符
-
-    # 示例
-    ## 示例1：
-    输入卡片：
-    {
-      "title": "接口超时解决方案",
-      "summary": "总结了接口超时的三种排查思路和解决方案",
-      "suggested_target": "knowledge",
-      "confidence": 0.75,
-      "tags": ["novel-content"],
-      "score_breakdown": {"novelty": 75, "actionability": 40, "impact": 60, "emotion": 10}
-    }
-    knowledge_threshold: 0.6, task_threshold: 0.5
-    输出：
-    {"target_pool":"knowledge","reason_codes":["suggested-knowledge-pass","novel-tag-pass","high-novelty-score"]}
-
-    ## 示例2：
-    输入卡片：
-    {
-      "title": "修复用户登录异常问题",
-      "summary": "用户反馈登录时出现500错误，需要排查",
-      "suggested_target": "task",
-      "confidence": 0.65,
-      "tags": ["actionable-signal"],
-      "score_breakdown": {"novelty": 40, "actionability": 85, "impact": 70, "emotion": 60}
-    }
-    knowledge_threshold: 0.6, task_threshold: 0.5
-    输出：
-    {"target_pool":"task","reason_codes":["suggested-task-pass","actionable-tag-pass","high-actionability-score"]}
-
-    ## 示例3：
-    输入卡片：
-    {
-      "title": "讨论系统性能优化",
-      "summary": "提到系统有点慢，但没有具体现象和数据",
-      "suggested_target": "knowledge",
-      "confidence": 0.4,
-      "tags": [],
-      "score_breakdown": {"novelty": 30, "actionability": 35, "impact": 40, "emotion": 10}
-    }
-    knowledge_threshold: 0.6, task_threshold: 0.5
-    输出：
-    {"target_pool":"observe","reason_codes":["below-knowledge-threshold","below-task-threshold","insufficient-information","fallback-observe"]}
-
-    # 输出格式（严格遵守）
-    {
-      "target_pool": "knowledge|task|observe",
-      "reason_codes": ["code1", "code2"]
-    }
-
-  route.user_prompt: |
-    请根据以下卡片信息和阈值进行路由决策：
-
-    card_json:
-    {card_json}
-
-    knowledge_threshold: 
-    {knowledge_threshold}
-
-    task_threshold: 
-    {task_threshold}
+    context_lines:
+    {context_lines}
