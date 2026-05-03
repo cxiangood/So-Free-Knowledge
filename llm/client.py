@@ -1,7 +1,6 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import logging
-import time
 from dataclasses import dataclass, field
 from typing import Any, Literal, TypeVar
 
@@ -12,28 +11,6 @@ from utils import getenv
 
 
 LOGGER = logging.getLogger(__name__)
-
-
-def _log_llm_metric(
-    *,
-    kind: str,
-    model_id: str,
-    elapsed_ms: float,
-    success: bool,
-    schema_name: str = "",
-    usage: dict[str, Any] | None = None,
-    error: str = "",
-) -> None:
-    payload = {
-        "kind": kind,
-        "model": model_id,
-        "schema": schema_name,
-        "elapsed_ms": round(elapsed_ms, 2),
-        "success": success,
-        "usage": usage or {},
-        "error": error,
-    }
-    LOGGER.info("llm_metric %s", payload)
 
 
 class DetectScores(BaseModel):
@@ -116,6 +93,7 @@ class LLMConfig:
             top_p=top_p,
             extra_body=dict(extra_body or {}),
         )
+
     def missing_fields(self) -> list[str]:
         missing = []
         if not self.api_key:
@@ -125,6 +103,66 @@ class LLMConfig:
         if not self.base_url:
             missing.append("llm_base_url")
         return missing
+
+
+def _is_timeout_error(exc: Exception) -> bool:
+    if isinstance(exc, requests.Timeout):
+        return True
+    name = type(exc).__name__.lower()
+    return "timeout" in name or "timed out" in str(exc).lower()
+
+
+def _is_rate_limit_error(exc: Exception) -> bool:
+    status_code = getattr(exc, "status_code", None)
+    if status_code == 429:
+        return True
+    response = getattr(exc, "response", None)
+    if response is not None and getattr(response, "status_code", None) == 429:
+        return True
+    text = str(exc).lower()
+    return "ratelimit" in text or "too many requests" in text or "rpm" in text
+
+
+def _is_endpoint_restricted_error(exc: Exception) -> bool:
+    response = getattr(exc, "response", None)
+    status_code = getattr(response, "status_code", None)
+    if status_code in {401, 403}:
+        return True
+    text = str(exc).lower()
+    return "permission" in text or "forbidden" in text or "unauthorized" in text
+
+
+def _log_structured_error(*, exc: Exception, model_id: str, schema_name: str) -> None:
+    if _is_timeout_error(exc):
+        LOGGER.warning(
+            "structured llm timeout; fallback expected (model=%s, schema=%s): %s",
+            model_id,
+            schema_name,
+            exc,
+        )
+        return
+    if _is_rate_limit_error(exc):
+        LOGGER.warning(
+            "structured llm rate limited; fallback expected (model=%s, schema=%s): %s",
+            model_id,
+            schema_name,
+            exc,
+        )
+        return
+    if _is_endpoint_restricted_error(exc):
+        LOGGER.warning(
+            "structured llm endpoint restricted; fallback expected (model=%s, schema=%s): %s",
+            model_id,
+            schema_name,
+            exc,
+        )
+        return
+    LOGGER.error(
+        "structured llm invocation failed with unknown cause (model=%s, schema=%s)",
+        model_id,
+        schema_name,
+        exc_info=True,
+    )
 
 
 def invoke_structured(
@@ -137,8 +175,7 @@ def invoke_structured(
 ) -> StructuredModel | None:
     if config.missing_fields():
         return None
-    start = time.perf_counter()
-    schema_name = getattr(schema, "__name__", "")
+    schema_name = getattr(schema, "__name__", "unknown")
     try:
         from langchain_openai import ChatOpenAI
 
@@ -159,60 +196,16 @@ def invoke_structured(
             ]
         )
     except Exception as exc:
-        elapsed_ms = (time.perf_counter() - start) * 1000
-        _log_llm_metric(
-            kind="structured",
-            model_id=config.model_id,
-            schema_name=schema_name,
-            elapsed_ms=elapsed_ms,
-            success=False,
-            error=type(exc).__name__,
-        )
-        LOGGER.exception("structured llm invocation failed")
+        _log_structured_error(exc=exc, model_id=config.model_id, schema_name=schema_name)
         return None
 
     if isinstance(response, schema):
-        elapsed_ms = (time.perf_counter() - start) * 1000
-        _log_llm_metric(
-            kind="structured",
-            model_id=config.model_id,
-            schema_name=schema_name,
-            elapsed_ms=elapsed_ms,
-            success=True,
-        )
         return response
     if isinstance(response, dict):
         try:
-            parsed = schema(**response)
-            elapsed_ms = (time.perf_counter() - start) * 1000
-            _log_llm_metric(
-                kind="structured",
-                model_id=config.model_id,
-                schema_name=schema_name,
-                elapsed_ms=elapsed_ms,
-                success=True,
-            )
-            return parsed
-        except Exception as exc:
-            elapsed_ms = (time.perf_counter() - start) * 1000
-            _log_llm_metric(
-                kind="structured",
-                model_id=config.model_id,
-                schema_name=schema_name,
-                elapsed_ms=elapsed_ms,
-                success=False,
-                error=type(exc).__name__,
-            )
+            return schema(**response)
+        except Exception:
             return None
-    elapsed_ms = (time.perf_counter() - start) * 1000
-    _log_llm_metric(
-        kind="structured",
-        model_id=config.model_id,
-        schema_name=schema_name,
-        elapsed_ms=elapsed_ms,
-        success=False,
-        error=f"unexpected_response:{type(response).__name__}",
-    )
     return None
 
 
@@ -243,41 +236,29 @@ class LLMClient:
             "Content-Type": "application/json",
         }
 
-        start = time.perf_counter()
         try:
             response = requests.post(endpoint, json=payload, headers=headers, timeout=600)
             response.raise_for_status()
             data = response.json()
-        except requests.RequestException as exc:
-            elapsed_ms = (time.perf_counter() - start) * 1000
-            _log_llm_metric(
-                kind="chat",
-                model_id=self.config.model_id,
-                elapsed_ms=elapsed_ms,
-                success=False,
-                error=type(exc).__name__,
-            )
+        except requests.Timeout as exc:
+            LOGGER.warning("chat llm timeout (model=%s): %s", self.config.model_id, exc)
             return f"LLM 调用失败: {exc}"
-        except ValueError as exc:
-            elapsed_ms = (time.perf_counter() - start) * 1000
-            _log_llm_metric(
-                kind="chat",
-                model_id=self.config.model_id,
-                elapsed_ms=elapsed_ms,
-                success=False,
-                error=type(exc).__name__,
-            )
+        except requests.HTTPError as exc:
+            status = exc.response.status_code if exc.response is not None else None
+            if status == 429:
+                LOGGER.warning("chat llm rate limited (model=%s, status=429): %s", self.config.model_id, exc)
+            elif status in {401, 403}:
+                LOGGER.warning("chat llm endpoint restricted (model=%s, status=%s): %s", self.config.model_id, status, exc)
+            else:
+                LOGGER.error("chat llm http error (model=%s, status=%s)", self.config.model_id, status, exc_info=True)
+            return f"LLM 调用失败: {exc}"
+        except requests.RequestException as exc:
+            LOGGER.error("chat llm request failed with unknown cause (model=%s)", self.config.model_id, exc_info=True)
+            return f"LLM 调用失败: {exc}"
+        except ValueError:
+            LOGGER.error("chat llm response json parse failed (model=%s)", self.config.model_id, exc_info=True)
             return "LLM 返回内容解析失败。"
 
-        elapsed_ms = (time.perf_counter() - start) * 1000
-        usage = data.get("usage") if isinstance(data.get("usage"), dict) else {}
-        _log_llm_metric(
-            kind="chat",
-            model_id=self.config.model_id,
-            elapsed_ms=elapsed_ms,
-            success=True,
-            usage=usage,
-        )
         content = extract_llm_text(data)
         if content:
             return content
