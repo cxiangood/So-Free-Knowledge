@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import re
 from typing import Any
+from utils import getenv
 
 from ..shared.models import LiftedCard
 from ..shared.utils import now_utc_iso
@@ -96,8 +97,8 @@ def _load_feishu_client_class():
 def _temporary_feishu_credentials(app_id: str, app_secret: str):
     import os
 
-    old_app_id = os.environ.get("FEISHU_APP_ID")
-    old_app_secret = os.environ.get("FEISHU_APP_SECRET")
+    old_app_id = getenv("FEISHU_APP_ID")
+    old_app_secret = getenv("FEISHU_APP_SECRET")
     os.environ["FEISHU_APP_ID"] = app_id
     os.environ["FEISHU_APP_SECRET"] = app_secret
     try:
@@ -510,7 +511,7 @@ def push_task_card_to_user_targets(
     any_failed = False
     first_message_id = ""
     failed_rows: list[dict[str, str]] = []
-    target_receive_id_type = (os.getenv("TASK_PUSH_RECEIVE_ID_TYPE", "user_id") or "user_id").strip()
+    target_receive_id_type = (getenv("TASK_PUSH_RECEIVE_ID_TYPE", "user_id") or "user_id").strip()
     for audience_name, receive_id, resolve_error_code in targets:
         if receive_id:
             sent = push_message_by_receive_id(

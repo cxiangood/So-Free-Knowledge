@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import sys
 from pathlib import Path
 from typing import Any
@@ -48,8 +49,12 @@ from .lingo_context import (
     publishable_lingo_judgements,
 )
 from .lingo_store import LingoStore
+from .logging_config import configure_logging, get_logger
 from .policy import KnowledgePolicyStore, VALID_SCOPES
 from . import wikisheet as wikisheet_module
+
+
+LOGGER = get_logger(__name__)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -59,8 +64,18 @@ def main(argv: list[str] | None = None) -> int:
         parser.print_help()
         return 2
     try:
+        configure_logging(
+            level=args.log_level,
+            log_file=args.log_file,
+            app_name="SOFREE-CLI",
+            quiet=args.quiet,
+            force=True,
+        )
+        LOGGER.debug("running command: %s", args.command)
         result = args.func(args)
     except Exception as exc:
+        if logging.getLogger().handlers:
+            LOGGER.exception("command failed")
         print(json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False), file=sys.stderr)
         return 1
     print(json.dumps(result, ensure_ascii=False, indent=2))
@@ -73,6 +88,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output-dir", default=".", help="Archive and policy root directory.")
     parser.add_argument("--token-file", default="", help="Optional user token file path.")
     parser.add_argument("--user-open-id", default="", help="Optional user scope. Runtime state will be isolated under output-dir/users/<open_id>.")
+    parser.add_argument("--log-level", default="", help="Logging level. Defaults to SOFREE_LOG_LEVEL or INFO.")
+    parser.add_argument("--log-file", default="", help="Optional path for persistent logs. Defaults to SOFREE_LOG_FILE.")
+    parser.add_argument("--quiet", action="store_true", help="Disable terminal logs; file logs still work when --log-file is set.")
     subparsers = parser.add_subparsers(dest="command")
 
     collect = subparsers.add_parser("collect-messages", help="Collect Feishu messages.")

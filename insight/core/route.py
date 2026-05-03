@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 
 import llm.client as llm_client
 
@@ -9,6 +10,7 @@ from ..shared.models import LiftedCard, RouteDecision
 
 
 _ROUTE_ORDER = ("knowledge", "task", "observe")
+LOGGER = logging.getLogger(__name__)
 
 
 def _normalize_routes(routes: list[tuple[str, list[str]]]) -> list[tuple[str, list[str]]]:
@@ -106,12 +108,21 @@ def _route_by_llm(
 
 def route_cards(
     cards: list[LiftedCard],
+    *,
+    message_id: str = "",
+    chat_id: str = "",
 ) -> list[RouteDecision]:
     decisions: list[RouteDecision] = []
     snapshot = {"routing_mode": "semantic_with_score_reference"}
     for card in cards:
         routes = _route_by_llm(card)
         if routes is None:
+            LOGGER.warning(
+                "fallback module=route reason=llm_failed strategy=rule_routing message_id=%s chat_id=%s card_id=%s",
+                message_id or "-",
+                chat_id or "-",
+                card.card_id,
+            )
             routes = _route_by_rule(card)
         for target, reason_codes in routes:
             decisions.append(

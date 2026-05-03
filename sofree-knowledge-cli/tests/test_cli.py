@@ -27,6 +27,45 @@ def test_auth_status_cli_outputs_json(tmp_path, capsys):
     assert out["exists"] is False
 
 
+def test_cli_logs_to_file_without_polluting_stdout(tmp_path, capsys):
+    token_file = tmp_path / "missing.json"
+    log_file = tmp_path / "logs" / "cli.log"
+
+    code = main(
+        [
+            "--log-level",
+            "DEBUG",
+            "--log-file",
+            str(log_file),
+            "--quiet",
+            "auth-status",
+            "--token-file",
+            str(token_file),
+        ]
+    )
+
+    captured = capsys.readouterr()
+    out = json.loads(captured.out)
+    assert code == 0
+    assert out["ok"] is True
+    assert captured.err == ""
+    assert log_file.exists()
+    assert "running command: auth-status" in log_file.read_text(encoding="utf-8")
+
+
+def test_cli_quiet_failure_keeps_stderr_machine_readable(tmp_path, capsys):
+    missing_file = tmp_path / "missing.txt"
+
+    code = main(["--quiet", "confused", "parse-judgement", "--judgement-file", str(missing_file)])
+
+    captured = capsys.readouterr()
+    err = json.loads(captured.err)
+    assert code == 1
+    assert captured.out == ""
+    assert err["ok"] is False
+    assert "Traceback" not in captured.err
+
+
 def test_auth_login_no_wait_cli_outputs_json(monkeypatch, capsys):
     monkeypatch.setattr(
         cli_module,

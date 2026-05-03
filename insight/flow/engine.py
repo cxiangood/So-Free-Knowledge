@@ -286,7 +286,11 @@ class Engine:
         result = state["result"]
         if self.config.step_trace_enabled:
             trace_node(message_id=message.message_id, node_name="signal_detect")
-        detection = detect_candidates(state.get("simple_messages", []))
+        detection = detect_candidates(
+            state.get("simple_messages", []),
+            message_id=message.message_id,
+            chat_id=message.chat_id,
+        )
         detect_score = float(detection.value_score)
         result.candidate_count = 1 if detect_score >= float(self.config.detect_threshold) else 0
         return {"result": result, "detect_score": detect_score}
@@ -309,7 +313,11 @@ class Engine:
         result = state["result"]
         if self.config.step_trace_enabled:
             trace_node(message_id=message.message_id, node_name="route")
-        decisions = route_cards(state.get("cards", []))
+        decisions = route_cards(
+            state.get("cards", []),
+            message_id=message.message_id,
+            chat_id=message.chat_id,
+        )
         for decision in decisions:
             result.routed_counts[decision.target_pool] = result.routed_counts.get(decision.target_pool, 0) + 1
         return {"result": result, "decisions": decisions, "decision_index": 0}
@@ -427,7 +435,13 @@ class Engine:
         decision, card = self._current_decision_and_card(state)
         if decision is not None and card is not None:
             answered_this_decision = False
-            should_question = is_question_with_llm(summary=card.summary, problem=card.problem, content=message.content_text)
+            should_question = is_question_with_llm(
+                summary=card.summary,
+                problem=card.problem,
+                content=message.content_text,
+                message_id=message.message_id,
+                chat_id=message.chat_id,
+            )
             if should_question:
                 result.observe_question_count += 1
             if should_question and self.config.observe_auto_reply_enabled and self.config.rag_enabled:
@@ -528,7 +542,11 @@ class Engine:
             if self.config.step_trace_enabled:
                 trace_node(message_id=message.message_id, node_name="observe_pop_route")
             observe_card = self._build_observe_card(item)
-            decisions = route_cards([observe_card])
+            decisions = route_cards(
+                [observe_card],
+                message_id=message.message_id,
+                chat_id=message.chat_id,
+            )
             if not decisions:
                 continue
             decision = next((item for item in decisions if item.target_pool != "observe"), decisions[0])

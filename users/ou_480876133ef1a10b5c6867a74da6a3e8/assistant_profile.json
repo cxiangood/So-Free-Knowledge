@@ -1,0 +1,20 @@
+{
+  "profile": {
+    "display_name": "",
+    "role": "知识协同用户",
+    "persona": "近期关注发布流程、审批后发布的务实推进型",
+    "businesses": [
+      "发布流程",
+      "审批后发布"
+    ],
+    "interests": [
+      "发布流程",
+      "审批后发布",
+      "周会纪要",
+      "例行同步"
+    ],
+    "require_user_confirmation": true
+  },
+  "schedule": {},
+  "retrieval": {}
+}

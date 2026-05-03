@@ -1,5 +1,6 @@
 ﻿from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass
 
@@ -14,12 +15,13 @@ ACTION_TERMS = ("需要", "建议", "请", "安排", "修复", "改进", "优化
 IMPACT_TERMS = ("大家", "我们", "各位", "同学", "团队", "全员")
 EMOTION_TERMS = ("吐槽", "抱怨", "卡住", "着急", "崩溃", "问题", "失败", "超时")
 
+LOGGER = logging.getLogger(__name__)
+
 
 @dataclass(slots=True)
 class DetectionResult:
     messages: list[str]
     value_score: float
-
 
 
 def _is_noise(text: str) -> bool:
@@ -72,7 +74,6 @@ def _rule_value_score(content: str) -> float:
 
 
 def _detect_with_llm(*, context_lines: list[str], current_line: str) -> float | None:
-    # 信号检测任务：输出 0~100 的价值分数，供后续阈值调灵敏度。
     config = llm_client.LLMConfig.from_env(
         max_tokens=64,
         temperature=0.0,
@@ -97,33 +98,23 @@ def _detect_with_llm(*, context_lines: list[str], current_line: str) -> float | 
     return float(max(0.0, min(100.0, payload.value_score)))
 
 
-def detect_candidates(messages: list[str]) -> DetectionResult:
+def detect_candidates(messages: list[str], *, message_id: str = "", chat_id: str = "") -> DetectionResult:
     filtered = [msg for msg in messages if not _is_noise(msg)]
     if not filtered:
         return DetectionResult(messages=[], value_score=0.0)
 
     current_content = _message_content(filtered[-1])
-
     context_raw = filtered[:-1]
     value_score = _detect_with_llm(context_lines=context_raw, current_line=current_content)
     if value_score is None:
+        LOGGER.warning(
+            "fallback module=signal_detect reason=llm_failed strategy=rule_scoring message_id=%s chat_id=%s",
+            message_id or "-",
+            chat_id or "-",
+        )
         value_score = _rule_value_score(current_content)
 
     return DetectionResult(messages=filtered, value_score=float(max(0.0, min(100.0, value_score))))
+
+
 __all__ = ["DetectionResult", "detect_candidates"]
-    
-if __name__ == "__main__":
-    test_messages = [
-        "[Alice] 大家好",
-        "[Alice] 今天下午需要开会",
-        "[Alice] 1点种",
-        "[Alice] 在我办公室",  # duplicate
-        "[Alice] 张三和李四需要来开会",  # duplicate
-        "[Alice] 王五也要来"
-        "[Bob] 午饭的牛肉真好吃",
-        "[Alice] 赵六也来听一下"
-        "[李四] 我要来吗？"
-        "[Peter] 笑死我了哈哈哈哈"
-    ]
-    result = detect_candidates(test_messages)
-    print("Detect End：{}".format(result))
