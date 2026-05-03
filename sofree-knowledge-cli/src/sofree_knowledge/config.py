@@ -6,11 +6,21 @@ import re
 from pathlib import Path
 from typing import Any
 
+try:
+    from utils import getenv as _getenv
+    from utils import load_env_file as _shared_load_env_file
+except ModuleNotFoundError:  # pragma: no cover
+    _getenv = os.getenv
+    _shared_load_env_file = None
+
 
 DEFAULT_TOKEN_FILE = Path.home() / ".feishu" / "token.json"
 
 
 def load_env_file(path: str | Path | None) -> None:
+    if _shared_load_env_file is not None:
+        _shared_load_env_file(path, override=False)
+        return
     if not path:
         return
     env_path = Path(path).expanduser()
@@ -29,7 +39,7 @@ def load_env_file(path: str | Path | None) -> None:
 
 def first_env(*names: str) -> str | None:
     for name in names:
-        value = os.getenv(name)
+        value = _getenv(name)
         if value:
             return value
     return None
@@ -60,7 +70,7 @@ def resolve_env_file(path: str | Path | None, output_dir: str | Path = ".") -> s
 
 
 def get_user_access_token(token_file: str | Path | None = None) -> str | None:
-    env_token = os.getenv("FEISHU_ACCESS_TOKEN")
+    env_token = _getenv("FEISHU_ACCESS_TOKEN")
     if env_token:
         return env_token
     path = Path(token_file).expanduser() if token_file else DEFAULT_TOKEN_FILE

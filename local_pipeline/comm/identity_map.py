@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import ast
-import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
 from threading import RLock
 from typing import Any
+from utils import getenv
 
 from ..msg.types import MessageEvent
 from ..store.io import read_json, write_json
@@ -313,9 +313,9 @@ def resolve_identity_map_config(*, state_dir: str | Path, env_file: str = "") ->
     return IdentityMapConfig(
         state_dir=state_dir,
         env_file=env_file,
-        receive_id_type=(os.getenv("TASK_PUSH_RECEIVE_ID_TYPE", "user_id") or "user_id").strip(),
-        bootstrap_on_empty=(os.getenv("TASK_PUSH_BOOTSTRAP_ON_EMPTY", "true").strip().lower() not in {"0", "false", "no", "off"}),
-        bootstrap_max_chats=max(1, int(os.getenv("TASK_PUSH_BOOTSTRAP_MAX_CHATS", "200") or 200)),
+        receive_id_type=(getenv("TASK_PUSH_RECEIVE_ID_TYPE", "user_id") or "user_id").strip(),
+        bootstrap_on_empty=(getenv("TASK_PUSH_BOOTSTRAP_ON_EMPTY", "true").strip().lower() not in {"0", "false", "no", "off"}),
+        bootstrap_max_chats=max(1, int(getenv("TASK_PUSH_BOOTSTRAP_MAX_CHATS", "200") or 200)),
     )
 
 

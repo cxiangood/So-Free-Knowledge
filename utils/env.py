@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 from typing import Optional, Any
 from dotenv import load_dotenv
 
@@ -55,3 +56,23 @@ def getenv(name: str, default: Any = None) -> Optional[str]:
         环境变量值，如果不存在则返回default
     """
     return env_manager.getenv(name, default)
+
+
+def load_env_file(path: str | Path | None, override: bool = False) -> None:
+    """Load key-value pairs from an env file into process environment."""
+    if not path:
+        return
+    env_path = Path(path).expanduser()
+    if not env_path.exists():
+        return
+    for raw_line in env_path.read_text(encoding="utf-8-sig").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if not key:
+            continue
+        value = value.strip().strip('"').strip("'")
+        if override or key not in os.environ:
+            os.environ[key] = value

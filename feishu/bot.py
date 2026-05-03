@@ -13,7 +13,7 @@ import logging
 
 import lark_oapi as lark
 
-from utils import getenv
+from utils import getenv, load_env_file
 
 from feishu.apis import (
     BotProfile,
@@ -50,25 +50,8 @@ DEFAULT_CONFUSED_REACTION_KEYS = {
 }
 
 
-def load_env_file(path: str | Path | None) -> None:
-    if not path:
-        return
-    env_path = Path(path).expanduser()
-    if not env_path.exists():
-        return
-    for raw_line in env_path.read_text(encoding="utf-8-sig").splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        name, value = line.split("=", 1)
-        name = name.strip()
-        value = value.strip().strip('"').strip("'")
-        if name and name not in os.environ:
-            os.environ[name] = value
-
-
 def resolve_env_file() -> str:
-    configured = os.getenv("SOFREE_ENV_FILE", "").strip()
+    configured = getenv("SOFREE_ENV_FILE", "").strip()
     if configured:
         return str(Path(configured).expanduser())
     root = Path(__file__).resolve().parents[1]
@@ -524,7 +507,7 @@ if __name__ == "__main__":
         force=True,
     )
     load_env_file(resolve_env_file())
-    if parse_env_bool(os.getenv("SOFREE_SINGLE_INSTANCE", "1"), default=True):
+    if parse_env_bool(getenv("SOFREE_SINGLE_INSTANCE", "1"), default=True):
         ensure_single_instance(logging.getLogger(__name__))
 
     role_prompt = "你是群聊助手。"
@@ -534,23 +517,23 @@ if __name__ == "__main__":
         "display_name": getenv("SOFREE_BOT_DISPLAY_NAME", "listener_host"),
         "role_name": "listener",
         "role_prompt": role_prompt,
-        "app_id": os.getenv("SOFREE_FEISHU_APP_ID") or os.getenv("FEISHU_APP_ID", ""),
-        "app_secret": os.getenv("SOFREE_FEISHU_APP_SECRET") or os.getenv("FEISHU_APP_SECRET", ""),
-        "llm_api_key": os.getenv("LLM_API_KEY", "") or os.getenv("ANTHROPIC_API_KEY", ""),
-        "llm_model_id": os.getenv("LLM_MODEL_ID", "") or os.getenv("ANTHROPIC_ENDPOINT", ""),
-        "llm_base_url": os.getenv("LLM_BASE_URL", "") or os.getenv("ANTHROPIC_BASE_URL", "https://ark.cn-beijing.volces.com/api/v3"),
-        "reply_type": os.getenv("SOFREE_BOT_REPLY_TYPE", "llm"),
+        "app_id": getenv("SOFREE_FEISHU_APP_ID") or getenv("FEISHU_APP_ID", ""),
+        "app_secret": getenv("SOFREE_FEISHU_APP_SECRET") or getenv("FEISHU_APP_SECRET", ""),
+        "llm_api_key": getenv("LLM_API_KEY", "") or getenv("ANTHROPIC_API_KEY", ""),
+        "llm_model_id": getenv("LLM_MODEL_ID", "") or getenv("ANTHROPIC_ENDPOINT", ""),
+        "llm_base_url": getenv("LLM_BASE_URL", "") or getenv("ANTHROPIC_BASE_URL", "https://ark.cn-beijing.volces.com/api/v3"),
+        "reply_type": getenv("SOFREE_BOT_REPLY_TYPE", "llm"),
         "reply_on_normal_message": parse_env_bool(
-            os.getenv("SOFREE_REPLY_ON_NORMAL_MESSAGE", "0"),
+            getenv("SOFREE_REPLY_ON_NORMAL_MESSAGE", "0"),
             default=False,
         ),
-        "confused_output_mode": os.getenv("SOFREE_CONFUSED_OUTPUT_MODE", "silent"),
+        "confused_output_mode": getenv("SOFREE_CONFUSED_OUTPUT_MODE", "silent"),
         "confused_feature_enabled": parse_env_bool(
-            os.getenv("SOFREE_CONFUSED_ENABLED", "1"),
+            getenv("SOFREE_CONFUSED_ENABLED", "1"),
             default=True,
         ),
         "confused_enabled_chat_ids": parse_chat_id_set(
-            os.getenv("SOFREE_CONFUSED_CHAT_IDS", "oc_f482e00e55461a4d343f21334c9a96d7")
+            getenv("SOFREE_CONFUSED_CHAT_IDS", "oc_f482e00e55461a4d343f21334c9a96d7")
         ),
         "confused_reaction_keys": DEFAULT_CONFUSED_REACTION_KEYS,
         "gateway": None,

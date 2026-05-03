@@ -1,3 +1,3 @@
-from .env import getenv, EnvManager
+from .env import getenv, EnvManager, load_env_file
 
-__all__ = ["getenv", "EnvManager"]
+__all__ = ["getenv", "EnvManager", "load_env_file"]

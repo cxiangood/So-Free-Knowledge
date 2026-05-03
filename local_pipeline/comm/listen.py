@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import logging
-import os
 from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from threading import RLock
 from typing import Any
+from utils import getenv, load_env_file as _load_env_file
 
 from ..msg.parse import parse_message_event, should_accept_message_event
 from ..msg.types import MessageEvent
@@ -98,26 +98,16 @@ def dispatch_message_event(bus: MessageEventBus, event: MessageEvent) -> None:
 
 def load_listener_env(path: str = "") -> None:
     env_path = Path(path).expanduser() if path.strip() else Path.cwd() / ".env"
-    if not env_path.exists():
-        return
-    for raw_line in env_path.read_text(encoding="utf-8-sig").splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        key = key.strip()
-        value = value.strip().strip('"').strip("'")
-        if key and key not in os.environ:
-            os.environ[key] = value
+    _load_env_file(env_path)
 
 
 def resolve_listener_credentials(env_file: str = "") -> tuple[str, str]:
     load_listener_env(env_file)
-    app_id = (_safe_text(os.getenv("LISTENER_APP_ID")) or _safe_text(os.getenv("SOFREE_FEISHU_APP_ID")) or _safe_text(os.getenv("FEISHU_APP_ID")))
+    app_id = (_safe_text(getenv("LISTENER_APP_ID")) or _safe_text(getenv("SOFREE_FEISHU_APP_ID")) or _safe_text(getenv("FEISHU_APP_ID")))
     app_secret = (
-        _safe_text(os.getenv("LISTENER_APP_SECRET"))
-        or _safe_text(os.getenv("SOFREE_FEISHU_APP_SECRET"))
-        or _safe_text(os.getenv("FEISHU_APP_SECRET"))
+        _safe_text(getenv("LISTENER_APP_SECRET"))
+        or _safe_text(getenv("SOFREE_FEISHU_APP_SECRET"))
+        or _safe_text(getenv("FEISHU_APP_SECRET"))
     )
     if not app_id or not app_secret:
         raise ValueError(
