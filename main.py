@@ -15,6 +15,7 @@ start(
         chat_history_limit=100,
         context_window_size=10,
         task_push_enabled=True,
+        detect_threshold=40.0,
         task_push_chat_id="oc_9663f97db577d40181f3ccc9a4ef4b03",
         step_trace_enabled=True,  # print message path
         rag_enabled=True,

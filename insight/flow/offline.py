@@ -19,7 +19,7 @@ class OfflineConfig:
     chat_history_path: str | Path = "outputs/local_pipeline/state/chat_message_store.json"
     chat_history_limit: int = 100
     context_window_size: int = 20
-    detect_threshold: float = 45.0
+    detect_threshold: float = 40.0
     task_push_enabled: bool = False
     task_push_chat_id: str = ""
     env_file: str = ""
