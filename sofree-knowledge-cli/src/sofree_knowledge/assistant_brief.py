@@ -209,7 +209,12 @@ def build_personal_brief(
         if candidate.retrieval_debug.dual_tower_ready:
             recommend_score = min(100, recommend_score + int(candidate.retrieval_debug.dual_tower_score * 20))
         if candidate.retrieval_debug.model_applied:
-            recommend_score = min(100, recommend_score + int(candidate.retrieval_debug.trained_dual_tower_score * 5))
+            trained_bonus = max(
+                0.0,
+                float(candidate.retrieval_debug.trained_dual_tower_score)
+                - float(candidate.retrieval_debug.dual_tower_score),
+            )
+            recommend_score = min(100, recommend_score + int(trained_bonus * 20))
         todo_items = _extract_todo_items(doc, related_messages)
         ranked_docs.append(
             {

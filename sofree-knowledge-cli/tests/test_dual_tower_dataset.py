@@ -1,7 +1,12 @@
 import json
 
 from sofree_knowledge.assistant.dual_tower_dataset import build_weak_supervision_samples
-from sofree_knowledge.assistant.training import load_dual_tower_samples, score_dual_tower_with_model, train_dual_tower_baseline
+from sofree_knowledge.assistant.training import (
+    load_dual_tower_samples,
+    score_dual_tower_bonus,
+    score_dual_tower_with_model,
+    train_dual_tower_baseline,
+)
 
 
 def test_build_weak_supervision_samples_emits_positive_and_negatives():
@@ -48,6 +53,8 @@ def test_train_dual_tower_baseline_outputs_model(tmp_path):
 
     assert result["model_type"] == "dual_tower_baseline_term_weight"
     assert result["sample_summary"]["sample_count"] == 1
+    assert "bonus_scale" in result
+    assert "top_pair_features" in result
     assert result["quality"]["evaluated_samples"] == 1
     assert (tmp_path / "model.json").exists()
 
@@ -74,3 +81,52 @@ def test_score_dual_tower_with_model_filters_url_noise_and_caps_bonus():
     )
 
     assert score < 20
+
+
+def test_score_dual_tower_bonus_only_returns_positive_increment():
+    model = {
+        "bonus_scale": 0.1,
+        "token_weights": {
+            "release": 2.0,
+            "rollback": 1.5,
+            "noise": -4.0,
+        },
+    }
+
+    bonus = score_dual_tower_bonus(
+        "title: release rollback | summary: release checklist",
+        model,
+    )
+
+    assert bonus > 0
+
+    negative_only_bonus = score_dual_tower_bonus(
+        "title: noise | summary: noise",
+        model,
+    )
+    assert negative_only_bonus == 0
+
+
+def test_score_dual_tower_with_model_can_use_pair_feature_bonus():
+    model = {
+        "bonus_scale": 0.2,
+        "token_weights": {},
+        "pair_feature_weights": {
+            "role::qa": 1.0,
+            "signal::acceptance": 1.0,
+            "role::qa__signal::acceptance": 4.0,
+        },
+    }
+
+    matched = score_dual_tower_with_model(
+        "role: 测试保障岗 | interests: 回归验证, 验收条件",
+        "title: release validation | summary: 需要补充验收标准和回归验证 case",
+        model,
+    )
+    unmatched = score_dual_tower_with_model(
+        "role: 后端工程岗 | interests: 接口, 数据库",
+        "title: release validation | summary: 需要补充验收标准和回归验证 case",
+        model,
+    )
+
+    assert matched > unmatched

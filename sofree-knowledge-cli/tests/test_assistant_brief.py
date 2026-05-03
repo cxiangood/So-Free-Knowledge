@@ -152,6 +152,46 @@ def test_build_personal_brief_applies_trained_dual_tower_model(tmp_path):
     assert report["retrieval_plan"]["model_file"] == str(model_file)
 
 
+def test_build_personal_brief_uses_trained_dual_tower_as_bonus_only(tmp_path):
+    model_file = tmp_path / "dual_tower_model.json"
+    model_file.write_text(
+        json.dumps(
+            {
+                "model_type": "dual_tower_baseline_term_weight",
+                "bonus_scale": 0.1,
+                "token_weights": {"release": 2.0, "rollback": 1.5},
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    base_report = build_personal_brief(
+        documents=[{"doc_id": "d1", "title": "Release Flow", "summary": "Rollback checklist for release"}],
+        messages=[{"message_id": "m1", "chat_id": "oc_x", "content": "Release due today"}],
+        user_profile={"role": "PM", "persona": "冷静分析", "businesses": ["Release"], "interests": ["release", "risk"]},
+        dual_tower_config={
+            "enabled": True,
+            "embedding_model": "text-embedding-3-large",
+        },
+    )
+    trained_report = build_personal_brief(
+        documents=[{"doc_id": "d1", "title": "Release Flow", "summary": "Rollback checklist for release"}],
+        messages=[{"message_id": "m1", "chat_id": "oc_x", "content": "Release due today"}],
+        user_profile={"role": "PM", "persona": "冷静分析", "businesses": ["Release"], "interests": ["release", "risk"]},
+        dual_tower_config={
+            "enabled": True,
+            "embedding_model": "text-embedding-3-large",
+            "model_file": str(model_file),
+        },
+    )
+
+    base_doc = base_report["documents"][0]
+    trained_doc = trained_report["documents"][0]
+    assert trained_doc["recommend_score"] >= base_doc["recommend_score"]
+    assert trained_doc["recommend_score"] - base_doc["recommend_score"] < 20
+
+
 def test_interest_digest_filters_noise_messages():
     report = build_personal_brief(
         documents=[{"doc_id": "d1", "title": "Release Plan", "summary": "Tonight release"}],
