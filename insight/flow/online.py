@@ -92,6 +92,7 @@ def start(config: OnlineConfig | None = None) -> None:
         app_secret=app_secret,
         bus=bus,
         compact=cfg.compact,
+        event_types=cfg.event_types,
     )
     LOGGER.info("Online pipeline started with async message processing (8 workers)")
     listener.start()
