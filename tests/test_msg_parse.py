@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import json
 
-from local_pipeline.msg.parse import event_row_to_message_event, plain_message_to_event
-from local_pipeline.msg.types import PlainMessage
+from insight.msg.parse import event_row_to_message_event, plain_message_to_event
+from insight.msg.types import PlainMessage
 
 
 def test_event_row_to_message_event_preserves_sender_name() -> None:

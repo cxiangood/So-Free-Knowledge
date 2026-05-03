@@ -1,4 +1,4 @@
-from local_pipeline.flow.online import OnlineConfig, start
+from insight.flow.online import OnlineConfig, start
 
 start(
     OnlineConfig(

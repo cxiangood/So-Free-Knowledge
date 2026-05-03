@@ -4,9 +4,9 @@ import json
 import shutil
 from pathlib import Path
 
-from local_pipeline.comm.send import TaskPushAttempt
-from local_pipeline.flow.engine import Engine, EngineConfig
-from local_pipeline.msg.types import MessageEvent
+from insight.comm.send import TaskPushAttempt
+from insight.flow.engine import Engine, EngineConfig
+from insight.msg.types import MessageEvent
 
 
 TEST_ROOT = Path("outputs/test_flow_engine_langgraph")
@@ -95,9 +95,9 @@ def test_engine_graph_task_route_stores_task(monkeypatch) -> None:
 
 
 def test_engine_graph_multi_route_stores_each_target(monkeypatch) -> None:
-    from local_pipeline.core.detect import DetectionResult
-    from local_pipeline.core.lift import LiftResult
-    from local_pipeline.shared.models import LiftedCard, RouteDecision
+    from insight.core.detect import DetectionResult
+    from insight.core.lift import LiftResult
+    from insight.shared.models import LiftedCard, RouteDecision
 
     card = LiftedCard(
         card_id="card-multi",

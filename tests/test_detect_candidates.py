@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from llm.client import DetectValueScore
-from local_pipeline.core.detect import detect_candidates
+from insight.core.detect import detect_candidates
 
 
 def test_detect_candidates_only_checks_last_message_with_llm(monkeypatch) -> None:
