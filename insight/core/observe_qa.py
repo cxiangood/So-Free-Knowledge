@@ -1,5 +1,6 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 
 import llm.client as llm_client
@@ -8,6 +9,7 @@ from ..prompt import get_prompt
 from ..shared.models import RagHit
 
 QUESTION_MARKERS = ("?", "？", "请问", "怎么", "如何", "吗", "是否", "能否", "为什么", "求助")
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -23,7 +25,7 @@ def is_question_by_rule(*, summary: str, problem: str, content: str) -> bool:
     return any(marker in text for marker in QUESTION_MARKERS)
 
 
-def is_question_with_llm(*, summary: str, problem: str, content: str) -> bool:
+def is_question_with_llm(*, summary: str, problem: str, content: str, message_id: str = "", chat_id: str = "") -> bool:
     rule_guess = is_question_by_rule(summary=summary, problem=problem, content=content)
     config = llm_client.LLMConfig.from_env(
         max_tokens=64,
@@ -45,6 +47,11 @@ def is_question_with_llm(*, summary: str, problem: str, content: str) -> bool:
         schema=llm_client.ObserveQuestionOutput,
     )
     if payload is None:
+        LOGGER.warning(
+            "fallback module=observe_qa reason=llm_failed strategy=rule_question_detection message_id=%s chat_id=%s",
+            message_id or "-",
+            chat_id or "-",
+        )
         return rule_guess
     if payload.is_question is not None:
         return bool(payload.is_question)

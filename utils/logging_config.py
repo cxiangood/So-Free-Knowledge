@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import os
 import sys
+from datetime import datetime
 from pathlib import Path
 
 
@@ -69,7 +70,7 @@ def configure_logging(
         root_logger.addHandler(console_handler)
 
     if resolved_log_file:
-        log_path = Path(resolved_log_file).expanduser()
+        log_path = _with_timestamp_suffix(Path(resolved_log_file).expanduser())
         log_path.parent.mkdir(parents=True, exist_ok=True)
         if not _has_file_handler(root_logger, log_path):
             file_handler = logging.FileHandler(log_path, encoding="utf-8")
@@ -101,3 +102,15 @@ def _has_handler(logger: logging.Logger, marker: str) -> bool:
 def _has_file_handler(logger: logging.Logger, path: Path) -> bool:
     resolved = str(path.resolve())
     return any(getattr(handler, "_sofree_file_path", "") == resolved for handler in logger.handlers)
+
+
+def _with_timestamp_suffix(path: Path) -> Path:
+    """Append per-run timestamp suffix before extension.
+
+    Example: logs/sofree.log -> logs/sofree_20260503_181530.log
+    """
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    suffix = "".join(path.suffixes)
+    stem = path.name[: -len(suffix)] if suffix else path.name
+    filename = f"{stem}_{stamp}{suffix}"
+    return path.with_name(filename)

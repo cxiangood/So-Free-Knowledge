@@ -2,7 +2,7 @@ from insight.flow.online import OnlineConfig, start
 from utils import configure_logging
 
 
-configure_logging(app_name="INSIGHT")
+configure_logging(app_name="INSIGHT",quiet=True)
 
 start(
     OnlineConfig(
