@@ -8,9 +8,11 @@ skills-lock.json
 message_archive/
 **/.pytest_tmp/
 **/.pytest_cache/
+pytest-cache-files-*/
 token_classify/outputs/
 .claude/
 outputs/
+logs/
 PLAN.md
 PLAN_detail.md
 PLAN_V2_detail.md

@@ -2,11 +2,16 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import sys
 from typing import Any
 
 from .config import load_env_file, resolve_env_file
 from .feishu_client import FeishuAPIError, FeishuClient, MissingFeishuConfigError
+from .logging_config import configure_logging, get_logger
+
+
+LOGGER = get_logger(__name__)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -19,6 +24,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--env-file", default="", help="Path to .env file.")
     parser.add_argument("--output-dir", default=".", help="Used for .env auto-discovery.")
+    parser.add_argument("--log-level", default="", help="Logging level. Defaults to SOFREE_LOG_LEVEL or INFO.")
+    parser.add_argument("--log-file", default="", help="Optional path for persistent logs. Defaults to SOFREE_LOG_FILE.")
+    parser.add_argument("--quiet", action="store_true", help="Disable terminal logs; file logs still work when --log-file is set.")
     subparsers = parser.add_subparsers(dest="command")
 
     create = subparsers.add_parser("create-sheet", help="Create a sheet node in Wiki.")
@@ -333,8 +341,18 @@ def main(argv: list[str] | None = None) -> int:
         parser.print_help()
         return 2
     try:
+        configure_logging(
+            level=args.log_level,
+            log_file=args.log_file,
+            app_name="SOFREE-WIKISHEET",
+            quiet=args.quiet,
+            force=True,
+        )
+        LOGGER.debug("running command: %s", args.command)
         result = args.func(args)
     except Exception as exc:
+        if logging.getLogger().handlers:
+            LOGGER.exception("command failed")
         print(json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False), file=sys.stderr)
         return 1
     print(json.dumps(result, ensure_ascii=False, indent=2))

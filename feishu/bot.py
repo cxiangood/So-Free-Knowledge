@@ -13,7 +13,7 @@ import logging
 
 import lark_oapi as lark
 
-from utils import getenv, load_env_file
+from utils import configure_logging, getenv, load_env_file
 
 from feishu.apis import (
     BotProfile,
@@ -500,12 +500,7 @@ def _looks_confused_reaction_key(key: str) -> bool:
 
 
 if __name__ == "__main__":
-    logging.basicConfig(
-        level=logging.INFO,
-        format="[BOT] [%(asctime)s] [%(levelname)s] %(message)s",
-        stream=sys.stdout,
-        force=True,
-    )
+    configure_logging(app_name="BOT", force=True)
     load_env_file(resolve_env_file())
     if parse_env_bool(getenv("SOFREE_SINGLE_INSTANCE", "1"), default=True):
         ensure_single_instance(logging.getLogger(__name__))
