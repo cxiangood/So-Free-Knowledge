@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import sys
 from pathlib import Path
 from typing import Any
@@ -47,9 +48,14 @@ from .lingo_context import (
     parse_lingo_judgements,
     publishable_lingo_judgements,
 )
+from .lingo_auto import run_lingo_auto_pipeline
 from .lingo_store import LingoStore
+from .logging_config import configure_logging, get_logger
 from .policy import KnowledgePolicyStore, VALID_SCOPES
 from . import wikisheet as wikisheet_module
+
+
+LOGGER = get_logger(__name__)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -59,8 +65,18 @@ def main(argv: list[str] | None = None) -> int:
         parser.print_help()
         return 2
     try:
+        configure_logging(
+            level=args.log_level,
+            log_file=args.log_file,
+            app_name="SOFREE-CLI",
+            quiet=args.quiet,
+            force=True,
+        )
+        LOGGER.debug("running command: %s", args.command)
         result = args.func(args)
     except Exception as exc:
+        if logging.getLogger().handlers:
+            LOGGER.exception("command failed")
         print(json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False), file=sys.stderr)
         return 1
     print(json.dumps(result, ensure_ascii=False, indent=2))
@@ -73,6 +89,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output-dir", default=".", help="Archive and policy root directory.")
     parser.add_argument("--token-file", default="", help="Optional user token file path.")
     parser.add_argument("--user-open-id", default="", help="Optional user scope. Runtime state will be isolated under output-dir/users/<open_id>.")
+    parser.add_argument("--log-level", default="", help="Logging level. Defaults to SOFREE_LOG_LEVEL or INFO.")
+    parser.add_argument("--log-file", default="", help="Optional path for persistent logs. Defaults to SOFREE_LOG_FILE.")
+    parser.add_argument("--quiet", action="store_true", help="Disable terminal logs; file logs still work when --log-file is set.")
     subparsers = parser.add_subparsers(dest="command")
 
     collect = subparsers.add_parser("collect-messages", help="Collect Feishu messages.")
@@ -184,6 +203,33 @@ def build_parser() -> argparse.ArgumentParser:
     lingo_sync.add_argument("--remote", action=argparse.BooleanOptionalAction, default=True, help="Write each entry to Feishu Lingo remotely.")
     lingo_sync.add_argument("--write-local", action=argparse.BooleanOptionalAction, default=True, help="Mirror synced entries to local store.")
     lingo_sync.set_defaults(func=cmd_lingo_sync_from_file)
+
+    lingo_auto = lingo_subparsers.add_parser("auto-sync", help="Collect recent messages, mine candidate terms, auto-judge and sync to Lingo.")
+    lingo_auto.add_argument("--recent-days", type=int, default=7, help="How many recent days of chat history to scan.")
+    lingo_auto.add_argument("--min-run-interval-days", type=int, default=7, help="Minimum interval between successful auto-sync runs.")
+    lingo_auto.add_argument("--force", action="store_true", help="Ignore last-run interval guard.")
+    lingo_auto.add_argument("--chat-ids", default="", help="Comma-separated chat IDs. Empty means rely on visible chats.")
+    lingo_auto.add_argument("--include-visible-chats", action=argparse.BooleanOptionalAction, default=True)
+    lingo_auto.add_argument("--start-time", default="", help="Optional explicit start time override.")
+    lingo_auto.add_argument("--end-time", default="", help="Optional explicit end time override.")
+    lingo_auto.add_argument("--max-chats", type=int, default=200)
+    lingo_auto.add_argument("--max-messages-per-chat", type=int, default=500)
+    lingo_auto.add_argument("--page-size", type=int, default=50)
+    lingo_auto.add_argument("--top-keywords", type=int, default=30)
+    lingo_auto.add_argument("--candidate-limit", type=int, default=20)
+    lingo_auto.add_argument("--min-frequency", type=int, default=2)
+    lingo_auto.add_argument("--min-contexts", type=int, default=1)
+    lingo_auto.add_argument("--context-before", type=int, default=1)
+    lingo_auto.add_argument("--context-after", type=int, default=1)
+    lingo_auto.add_argument("--max-contexts", type=int, default=80)
+    lingo_auto.add_argument("--classifier-enabled", action=argparse.BooleanOptionalAction, default=True)
+    lingo_auto.add_argument("--analyzer-enabled", action=argparse.BooleanOptionalAction, default=True)
+    lingo_auto.add_argument("--publishable-only", action="store_true", help="Only keep key/black with non-empty value before syncing.")
+    lingo_auto.add_argument("--source", default="lingo_auto")
+    lingo_auto.add_argument("--force-remote-create", action="store_true")
+    lingo_auto.add_argument("--remote", action=argparse.BooleanOptionalAction, default=True, help="Write judged entries to Feishu Lingo remotely.")
+    lingo_auto.add_argument("--write-local", action=argparse.BooleanOptionalAction, default=True, help="Mirror synced entries to local store.")
+    lingo_auto.set_defaults(func=cmd_lingo_auto_sync)
 
     # Confused conversation detection commands
     confused = subparsers.add_parser("confused", help="Confused conversation detection helpers.")
@@ -1025,6 +1071,105 @@ def cmd_lingo_list(args: argparse.Namespace) -> dict[str, Any]:
     }
 
 
+def _sync_lingo_judgements(
+    *,
+    output_dir: str,
+    judgements: list[dict[str, Any]],
+    publishable_only: bool,
+    source: str,
+    force_remote_create: bool,
+    remote: bool,
+    write_local: bool,
+) -> dict[str, Any]:
+    normalized_judgements = publishable_lingo_judgements(judgements) if publishable_only else judgements
+    store = LingoStore(output_dir)
+    client = _instantiate_feishu_client() if remote else None
+    upserted: list[dict[str, Any]] = []
+    for item in normalized_judgements:
+        if not isinstance(item, dict):
+            continue
+        keyword = str(item.get("keyword") or "").strip()
+        entry_type = str(item.get("type") or "nothing").strip().lower()
+        value = str(item.get("value") or "").strip()
+        aliases = [str(alias).strip() for alias in item.get("aliases", []) if str(alias).strip()]
+        context_ids = [
+            str(context_id).strip()
+            for context_id in item.get("context_ids", [])
+            if str(context_id).strip()
+        ]
+        entity_id = ""
+        remote_created: dict[str, Any] | None = None
+        remote_create_skipped = False
+        remote_skip_reason = ""
+        existing = store.get_entry(keyword)
+        if (
+            client is not None
+            and not force_remote_create
+            and existing
+            and str(existing.get("entity_id") or "").strip()
+            and str(existing.get("type") or "").strip().lower() == entry_type
+            and str(existing.get("value") or "").strip() == value
+        ):
+            remote_create_skipped = True
+            remote_skip_reason = "duplicate_guard: same keyword/type/value already has remote entity_id in local mirror"
+            entity_id = str(existing.get("entity_id") or "")
+        if client is not None:
+            if remote_create_skipped:
+                pass
+            elif entry_type in {"key", "black"} and value:
+                remote_created = client.create_lingo_entity(
+                    key=keyword,
+                    description=value,
+                    aliases=aliases,
+                    provider="sofree-knowledge-cli",
+                    outer_id=keyword,
+                )
+                entity_id = str(remote_created.get("entity_id") or "")
+            else:
+                remote_create_skipped = True
+                remote_skip_reason = "remote_create_skipped: only key/black with non-empty value are written remotely"
+
+        local_entry: dict[str, Any] | None = None
+        if write_local:
+            local_entry = store.upsert_entry(
+                keyword=keyword,
+                entry_type=entry_type,
+                value=value,
+                aliases=aliases,
+                source=source,
+                entity_id=entity_id,
+                context_ids=context_ids,
+            )
+        upserted.append(
+            {
+                "keyword": keyword,
+                "type": entry_type,
+                "value": value,
+                "aliases": aliases,
+                "entity_id": entity_id,
+                "remote_created": remote_created,
+                "remote_create_skipped": remote_create_skipped,
+                "remote_create_skip_reason": remote_skip_reason,
+                "assume_success": bool(remote_created is not None),
+                "entry": local_entry,
+            }
+        )
+
+    return {
+        "assume_success": True,
+        "remote_enabled": bool(remote),
+        "local_enabled": bool(write_local),
+        "verify_after_create": False,
+        "note": (
+            "Remote create success is accepted as final success by default. "
+            "No post-create list/search verification is performed."
+        ),
+        "count": len(upserted),
+        "entries": upserted,
+        "lingo_store_file": str(store.path),
+    }
+
+
 def cmd_lingo_sync_from_file(args: argparse.Namespace) -> dict[str, Any]:
     prepare_env(args)
     raw = load_text_file(args.input_file)
@@ -1044,91 +1189,61 @@ def cmd_lingo_sync_from_file(args: argparse.Namespace) -> dict[str, Any]:
     else:
         judgements = parse_lingo_judgements(parsed)
 
-    if args.publishable_only:
-        judgements = publishable_lingo_judgements(judgements)
+    result = _sync_lingo_judgements(
+        output_dir=args.output_dir,
+        judgements=judgements,
+        publishable_only=bool(args.publishable_only),
+        source=args.source,
+        force_remote_create=bool(args.force_remote_create),
+        remote=bool(args.remote),
+        write_local=bool(args.write_local),
+    )
+    result["ok"] = True
+    return result
 
-    store = LingoStore(args.output_dir)
-    client = _instantiate_feishu_client() if args.remote else None
-    upserted: list[dict[str, Any]] = []
-    for item in judgements:
-        if not isinstance(item, dict):
-            continue
-        keyword = str(item.get("keyword") or "").strip()
-        entry_type = str(item.get("type") or "nothing").strip().lower()
-        value = str(item.get("value") or "").strip()
-        context_ids = [
-            str(context_id).strip()
-            for context_id in item.get("context_ids", [])
-            if str(context_id).strip()
-        ]
-        entity_id = ""
-        remote_created: dict[str, Any] | None = None
-        remote_create_skipped = False
-        remote_skip_reason = ""
-        existing = store.get_entry(keyword)
-        if (
-            client is not None
-            and not args.force_remote_create
-            and existing
-            and str(existing.get("entity_id") or "").strip()
-            and str(existing.get("type") or "").strip().lower() == entry_type
-            and str(existing.get("value") or "").strip() == value
-        ):
-            remote_create_skipped = True
-            remote_skip_reason = "duplicate_guard: same keyword/type/value already has remote entity_id in local mirror"
-            entity_id = str(existing.get("entity_id") or "")
-        if client is not None:
-            if remote_create_skipped:
-                pass
-            elif entry_type in {"key", "black"} and value:
-                remote_created = client.create_lingo_entity(
-                    key=keyword,
-                    description=value,
-                    aliases=[],
-                    provider="sofree-knowledge-cli",
-                    outer_id=keyword,
-                )
-                entity_id = str(remote_created.get("entity_id") or "")
-            else:
-                remote_create_skipped = True
-                remote_skip_reason = "remote_create_skipped: only key/black with non-empty value are written remotely"
 
-        local_entry: dict[str, Any] | None = None
-        if args.write_local:
-            local_entry = store.upsert_entry(
-                keyword=keyword,
-                entry_type=entry_type,
-                value=value,
-                source=args.source,
-                entity_id=entity_id,
-                context_ids=context_ids,
-            )
-        upserted.append(
-            {
-                "keyword": keyword,
-                "type": entry_type,
-                "value": value,
-                "entity_id": entity_id,
-                "remote_created": remote_created,
-                "remote_create_skipped": remote_create_skipped,
-                "remote_create_skip_reason": remote_skip_reason,
-                "assume_success": bool(remote_created is not None),
-                "entry": local_entry,
-            }
-        )
+def cmd_lingo_auto_sync(args: argparse.Namespace) -> dict[str, Any]:
+    prepare_env(args)
+    pipeline_result = run_lingo_auto_pipeline(
+        client=build_user_feishu_client(args, require_token=False),
+        output_dir=args.output_dir,
+        recent_days=args.recent_days,
+        min_run_interval_days=args.min_run_interval_days,
+        force=bool(args.force),
+        chat_ids=args.chat_ids or None,
+        include_visible_chats=bool(args.include_visible_chats),
+        start_time=args.start_time,
+        end_time=args.end_time,
+        max_chats=args.max_chats,
+        max_messages_per_chat=args.max_messages_per_chat,
+        page_size=args.page_size,
+        top_keywords=args.top_keywords,
+        candidate_limit=args.candidate_limit,
+        min_frequency=args.min_frequency,
+        min_contexts=args.min_contexts,
+        context_before=args.context_before,
+        context_after=args.context_after,
+        max_contexts=args.max_contexts,
+        classifier_enabled=bool(args.classifier_enabled),
+        analyzer_enabled=bool(args.analyzer_enabled),
+    )
+    if pipeline_result.get("skipped"):
+        pipeline_result["ok"] = True
+        return pipeline_result
+
+    sync_result = _sync_lingo_judgements(
+        output_dir=args.output_dir,
+        judgements=list(pipeline_result.get("judgements", [])),
+        publishable_only=bool(args.publishable_only),
+        source=args.source,
+        force_remote_create=bool(args.force_remote_create),
+        remote=bool(args.remote),
+        write_local=bool(args.write_local),
+    )
     return {
         "ok": True,
-        "assume_success": True,
-        "remote_enabled": bool(args.remote),
-        "local_enabled": bool(args.write_local),
-        "verify_after_create": False,
-        "note": (
-            "Remote create success is accepted as final success by default. "
-            "No post-create list/search verification is performed."
-        ),
-        "count": len(upserted),
-        "entries": upserted,
-        "lingo_store_file": str(store.path),
+        **pipeline_result,
+        "sync": sync_result,
     }
 
 

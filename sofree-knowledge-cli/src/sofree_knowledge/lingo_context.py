@@ -141,6 +141,13 @@ def parse_lingo_judgements(raw: str | list[dict[str, Any]] | dict[str, Any]) -> 
                 "type": judgement_type,
                 "value": value,
                 "context_ids": [str(context_id) for context_id in context_ids if context_id],
+                "aliases": [
+                    str(alias).strip()
+                    for alias in item.get("aliases", [])
+                    if str(alias).strip()
+                ]
+                if isinstance(item.get("aliases", []), list)
+                else [],
             }
         )
     return [item for item in judgements if item["keyword"]]

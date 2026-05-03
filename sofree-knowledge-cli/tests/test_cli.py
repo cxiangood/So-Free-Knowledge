@@ -27,6 +27,45 @@ def test_auth_status_cli_outputs_json(tmp_path, capsys):
     assert out["exists"] is False
 
 
+def test_cli_logs_to_file_without_polluting_stdout(tmp_path, capsys):
+    token_file = tmp_path / "missing.json"
+    log_file = tmp_path / "logs" / "cli.log"
+
+    code = main(
+        [
+            "--log-level",
+            "DEBUG",
+            "--log-file",
+            str(log_file),
+            "--quiet",
+            "auth-status",
+            "--token-file",
+            str(token_file),
+        ]
+    )
+
+    captured = capsys.readouterr()
+    out = json.loads(captured.out)
+    assert code == 0
+    assert out["ok"] is True
+    assert captured.err == ""
+    assert log_file.exists()
+    assert "running command: auth-status" in log_file.read_text(encoding="utf-8")
+
+
+def test_cli_quiet_failure_keeps_stderr_machine_readable(tmp_path, capsys):
+    missing_file = tmp_path / "missing.txt"
+
+    code = main(["--quiet", "confused", "parse-judgement", "--judgement-file", str(missing_file)])
+
+    captured = capsys.readouterr()
+    err = json.loads(captured.err)
+    assert code == 1
+    assert captured.out == ""
+    assert err["ok"] is False
+    assert "Traceback" not in captured.err
+
+
 def test_auth_login_no_wait_cli_outputs_json(monkeypatch, capsys):
     monkeypatch.setattr(
         cli_module,
@@ -908,6 +947,94 @@ def test_lingo_sync_from_file_cli(tmp_path, capsys):
     assert out["ok"] is True
     assert out["count"] == 1
     assert out["entries"][0]["keyword"] == "A/B实验"
+
+
+def test_lingo_sync_from_file_preserves_aliases(tmp_path, capsys):
+    input_file = tmp_path / "judgements_with_aliases.json"
+    input_file.write_text(
+        json.dumps(
+            [
+                {
+                    "keyword": "JEPA",
+                    "type": "black",
+                    "value": "团队内部使用的模型项目简称",
+                    "aliases": ["Joint Embedding", "jepa"],
+                }
+            ],
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    code = main(
+        [
+            "--output-dir",
+            str(tmp_path),
+            "lingo",
+            "sync-from-file",
+            "--no-remote",
+            "--input-file",
+            str(input_file),
+        ]
+    )
+    out = json.loads(capsys.readouterr().out)
+    assert code == 0
+    assert out["ok"] is True
+    assert out["entries"][0]["aliases"] == ["Joint Embedding", "jepa"]
+    assert out["entries"][0]["entry"]["aliases"] == ["Joint Embedding", "jepa"]
+
+
+def test_lingo_auto_sync_cli_runs_pipeline_and_syncs(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(
+        cli_module,
+        "run_lingo_auto_pipeline",
+        lambda **kwargs: {
+            "ok": True,
+            "skipped": False,
+            "run_id": "20260503T120000Z",
+            "candidate_count": 2,
+            "judgement_count": 2,
+            "publishable_count": 1,
+            "candidates": [
+                {"keyword": "JEPA", "frequency": 5, "context_count": 2},
+                {"keyword": "今天", "frequency": 5, "context_count": 1},
+            ],
+            "judgements": [
+                {
+                    "keyword": "JEPA",
+                    "type": "black",
+                    "value": "团队内部使用的模型项目简称",
+                    "context_ids": ["ctx_1"],
+                    "aliases": ["Joint Embedding"],
+                },
+                {
+                    "keyword": "今天",
+                    "type": "nothing",
+                    "value": "",
+                    "context_ids": ["ctx_2"],
+                    "aliases": [],
+                },
+            ],
+        },
+    )
+
+    code = main(
+        [
+            "--output-dir",
+            str(tmp_path),
+            "lingo",
+            "auto-sync",
+            "--no-remote",
+            "--publishable-only",
+        ]
+    )
+    out = json.loads(capsys.readouterr().out)
+    assert code == 0
+    assert out["ok"] is True
+    assert out["candidate_count"] == 2
+    assert out["sync"]["count"] == 1
+    assert out["sync"]["entries"][0]["keyword"] == "JEPA"
+    assert out["sync"]["entries"][0]["entry"]["aliases"] == ["Joint Embedding"]
 
 
 def test_wikisheet_create_sheet_routed_from_main_cli(monkeypatch, capsys):

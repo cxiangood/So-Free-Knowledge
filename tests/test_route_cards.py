@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from local_pipeline.core.route import route_cards
-from local_pipeline.shared.models import LiftedCard
+from insight.core.route import route_cards
+from insight.shared.models import LiftedCard
 
 
 def _card(**overrides) -> LiftedCard:
