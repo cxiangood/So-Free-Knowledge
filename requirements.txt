@@ -15,3 +15,9 @@ python-dotenv==1.2.2
 numpy==2.4.3
 faiss-cpu==1.13.2
 sentence-transformers==5.4.1
+
+# Harness Agent 可选依赖
+# anthropic-agent-sdk>=0.1.0  # Anthropic内部SDK，未公开发布，已内置兼容层
+# 服务模式可选依赖
+fastapi>=0.100.0
+uvicorn>=0.20.0
