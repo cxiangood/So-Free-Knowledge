@@ -1,7 +1,9 @@
 ﻿from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass, field
+from threading import RLock
 from typing import Any, Literal, TypeVar
 
 import requests
@@ -11,6 +13,11 @@ from utils import getenv
 
 
 LOGGER = logging.getLogger(__name__)
+RATE_LIMIT_LOCK = RLock()
+RATE_LIMIT_ACTIVE = False
+RATE_LIMIT_UNTIL = 0.0
+RATE_LIMIT_COOLDOWN_SECONDS = 60.0
+RATE_LIMIT_SAFETY_SECONDS = 0.0
 
 
 class DetectScores(BaseModel):
@@ -165,6 +172,37 @@ def _log_structured_error(*, exc: Exception, model_id: str, schema_name: str) ->
     )
 
 
+def _cooldown_seconds() -> float:
+    return max(0.0, float(RATE_LIMIT_COOLDOWN_SECONDS) + float(RATE_LIMIT_SAFETY_SECONDS))
+
+
+def _enter_rate_limit_cooldown(seconds: float | None = None) -> None:
+    global RATE_LIMIT_ACTIVE, RATE_LIMIT_UNTIL
+    wait_seconds = _cooldown_seconds() if seconds is None else max(0.0, float(seconds))
+    now = time.monotonic()
+    with RATE_LIMIT_LOCK:
+        if RATE_LIMIT_ACTIVE and RATE_LIMIT_UNTIL > now:
+            return
+        RATE_LIMIT_ACTIVE = True
+        RATE_LIMIT_UNTIL = now + wait_seconds
+    LOGGER.warning("llm global rate-limit cooldown entered for %.2fs", wait_seconds)
+
+
+def _wait_if_rate_limited() -> None:
+    global RATE_LIMIT_ACTIVE, RATE_LIMIT_UNTIL
+    while True:
+        with RATE_LIMIT_LOCK:
+            if not RATE_LIMIT_ACTIVE:
+                return
+            remaining = RATE_LIMIT_UNTIL - time.monotonic()
+            if remaining <= 0:
+                RATE_LIMIT_ACTIVE = False
+                RATE_LIMIT_UNTIL = 0.0
+                return
+        LOGGER.info("llm global rate-limit cooldown active, blocking for %.2fs", remaining)
+        time.sleep(remaining)
+
+
 def invoke_structured(
     *,
     config: LLMConfig,
@@ -176,37 +214,42 @@ def invoke_structured(
     if config.missing_fields():
         return None
     schema_name = getattr(schema, "__name__", "unknown")
-    try:
-        from langchain_openai import ChatOpenAI
-
-        model = ChatOpenAI(
-            model=config.model_id,
-            api_key=config.api_key,
-            base_url=config.base_url,
-            temperature=config.temperature,
-            max_tokens=config.max_tokens,
-            top_p=config.top_p,
-            extra_body=config.extra_body or None,
-        )
-        structured_model = model.with_structured_output(schema, method=method)
-        response = structured_model.invoke(
-            [
-                ("system", system_prompt),
-                ("user", user_prompt),
-            ]
-        )
-    except Exception as exc:
-        _log_structured_error(exc=exc, model_id=config.model_id, schema_name=schema_name)
-        return None
-
-    if isinstance(response, schema):
-        return response
-    if isinstance(response, dict):
+    while True:
+        _wait_if_rate_limited()
         try:
-            return schema(**response)
-        except Exception:
+            from langchain_openai import ChatOpenAI
+
+            model = ChatOpenAI(
+                model=config.model_id,
+                api_key=config.api_key,
+                base_url=config.base_url,
+                temperature=config.temperature,
+                max_tokens=config.max_tokens,
+                top_p=config.top_p,
+                extra_body=config.extra_body or None,
+            )
+            structured_model = model.with_structured_output(schema, method=method)
+            response = structured_model.invoke(
+                [
+                    ("system", system_prompt),
+                    ("user", user_prompt),
+                ]
+            )
+        except Exception as exc:
+            if _is_rate_limit_error(exc):
+                _enter_rate_limit_cooldown()
+                continue
+            _log_structured_error(exc=exc, model_id=config.model_id, schema_name=schema_name)
             return None
-    return None
+
+        if isinstance(response, schema):
+            return response
+        if isinstance(response, dict):
+            try:
+                return schema(**response)
+            except Exception:
+                return None
+        return None
 
 
 class LLMClient:
@@ -236,33 +279,37 @@ class LLMClient:
             "Content-Type": "application/json",
         }
 
-        try:
-            response = requests.post(endpoint, json=payload, headers=headers, timeout=600)
-            response.raise_for_status()
-            data = response.json()
-        except requests.Timeout as exc:
-            LOGGER.warning("chat llm timeout (model=%s): %s", self.config.model_id, exc)
-            return f"LLM 调用失败: {exc}"
-        except requests.HTTPError as exc:
-            status = exc.response.status_code if exc.response is not None else None
-            if status == 429:
-                LOGGER.warning("chat llm rate limited (model=%s, status=429): %s", self.config.model_id, exc)
-            elif status in {401, 403}:
-                LOGGER.warning("chat llm endpoint restricted (model=%s, status=%s): %s", self.config.model_id, status, exc)
-            else:
-                LOGGER.error("chat llm http error (model=%s, status=%s)", self.config.model_id, status, exc_info=True)
-            return f"LLM 调用失败: {exc}"
-        except requests.RequestException as exc:
-            LOGGER.error("chat llm request failed with unknown cause (model=%s)", self.config.model_id, exc_info=True)
-            return f"LLM 调用失败: {exc}"
-        except ValueError:
-            LOGGER.error("chat llm response json parse failed (model=%s)", self.config.model_id, exc_info=True)
-            return "LLM 返回内容解析失败。"
+        while True:
+            _wait_if_rate_limited()
+            try:
+                response = requests.post(endpoint, json=payload, headers=headers, timeout=600)
+                response.raise_for_status()
+                data = response.json()
+            except requests.Timeout as exc:
+                LOGGER.warning("chat llm timeout (model=%s): %s", self.config.model_id, exc)
+                return f"LLM 调用失败: {exc}"
+            except requests.HTTPError as exc:
+                status = exc.response.status_code if exc.response is not None else None
+                if status == 429:
+                    LOGGER.warning("chat llm rate limited (model=%s, status=429): %s", self.config.model_id, exc)
+                    _enter_rate_limit_cooldown()
+                    continue
+                if status in {401, 403}:
+                    LOGGER.warning("chat llm endpoint restricted (model=%s, status=%s): %s", self.config.model_id, status, exc)
+                else:
+                    LOGGER.error("chat llm http error (model=%s, status=%s)", self.config.model_id, status, exc_info=True)
+                return f"LLM 调用失败: {exc}"
+            except requests.RequestException as exc:
+                LOGGER.error("chat llm request failed with unknown cause (model=%s)", self.config.model_id, exc_info=True)
+                return f"LLM 调用失败: {exc}"
+            except ValueError:
+                LOGGER.error("chat llm response json parse failed (model=%s)", self.config.model_id, exc_info=True)
+                return "LLM 返回内容解析失败。"
 
-        content = extract_llm_text(data)
-        if content:
-            return content
-        return "LLM 返回为空。"
+            content = extract_llm_text(data)
+            if content:
+                return content
+            return "LLM 返回为空。"
 
 
 def extract_llm_text(data: dict[str, Any]) -> str:

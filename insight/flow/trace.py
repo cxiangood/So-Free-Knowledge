@@ -124,9 +124,8 @@ def trace_node(*, message_id: str, node_name: str) -> None:
         nodes = state.get("nodes")
         if isinstance(nodes, list):
             nodes.append(node_name)
-            path = "→".join(nodes)
             content = str(state.get("content", ""))
-            LOGGER.info(f"[{content}] 执行中: {path}")
+            LOGGER.info(f"[{content}] 执行中: {node_name}")
 
             timeline = state.get("timeline")
             if not isinstance(timeline, list):
