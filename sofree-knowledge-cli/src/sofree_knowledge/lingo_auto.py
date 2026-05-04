@@ -19,6 +19,7 @@ DEFAULT_MIN_CONTEXTS = 1
 DEFAULT_CONTEXT_BEFORE = 1
 DEFAULT_CONTEXT_AFTER = 1
 DEFAULT_MAX_CONTEXTS = 80
+DEFAULT_OPENCLAW_CHUNK_SIZE = 10
 AUTO_JUDGEMENT_DECISIONS = {"create_entry", "append_new_sense", "skip_duplicate", "skip_noise", "skip_uncertain"}
 
 
@@ -62,8 +63,9 @@ def run_lingo_auto_pipeline(
     context_before: int = DEFAULT_CONTEXT_BEFORE,
     context_after: int = DEFAULT_CONTEXT_AFTER,
     max_contexts: int = DEFAULT_MAX_CONTEXTS,
-    classifier_enabled: bool = True,
+    classifier_enabled: bool = False,
     analyzer_enabled: bool = True,
+    openclaw_chunk_size: int = DEFAULT_OPENCLAW_CHUNK_SIZE,
     classifier_config: dict[str, Any] | None = None,
     analyzer_config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -120,6 +122,7 @@ def run_lingo_auto_pipeline(
             },
         },
     )
+    bert_effective = _classifier_has_effective_bert(classifier_result)
     candidates = build_lingo_candidates(
         messages=messages,
         classifier_result=classifier_result,
@@ -130,8 +133,13 @@ def run_lingo_auto_pipeline(
         context_before=context_before,
         context_after=context_after,
         max_contexts=max_contexts,
+        bert_effective=bert_effective,
     )
-    prompt = build_lingo_openclaw_prompt(candidates)
+    prompt_chunks = build_lingo_openclaw_prompt_chunks(
+        candidates,
+        chunk_size=max(1, int(openclaw_chunk_size)),
+        bert_effective=bert_effective,
+    )
 
     run_dir = output_root / "lingo_auto_runs" / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -140,13 +148,19 @@ def run_lingo_auto_pipeline(
         "candidates_file": str(run_dir / "candidates.json"),
         "classifier_result_file": str(run_dir / "classifier_result.json"),
         "openclaw_prompt_file": str(run_dir / "openclaw_prompt.txt"),
+        "openclaw_prompt_files": [],
     }
     (run_dir / "candidates.json").write_text(json.dumps(candidates, ensure_ascii=False, indent=2), encoding="utf-8")
     (run_dir / "classifier_result.json").write_text(
         json.dumps(classifier_result, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
-    (run_dir / "openclaw_prompt.txt").write_text(prompt, encoding="utf-8")
+    combined_prompt = "\n\n".join(chunk["prompt"] for chunk in prompt_chunks)
+    (run_dir / "openclaw_prompt.txt").write_text(combined_prompt, encoding="utf-8")
+    for chunk in prompt_chunks:
+        chunk_path = run_dir / f"openclaw_prompt_{chunk['chunk_id']}.txt"
+        chunk_path.write_text(str(chunk["prompt"]), encoding="utf-8")
+        artifacts["openclaw_prompt_files"].append(str(chunk_path))
 
     state_store.save(
         {
@@ -172,11 +186,22 @@ def run_lingo_auto_pipeline(
         "archive": archive_manifest,
         "message_count": len(messages),
         "classifier_statistics": classifier_result.get("statistics", {}),
+        "bert": {
+            "requested": bool(analyzer_enabled),
+            "effective": bool(bert_effective),
+            "fallback_mode": not bool(bert_effective),
+            "note": (
+                "BERT semantic scores unavailable; skipped semantic-threshold reliance and sent candidates directly to OpenClaw."
+                if not bert_effective
+                else "BERT semantic scores available."
+            ),
+        },
         "candidate_count": len(candidates),
         "candidates": candidates,
         "openclaw": {
             "task": "review_lingo_candidates_and_decide_create_or_append_sense",
-            "prompt": prompt,
+            "prompt": combined_prompt,
+            "prompt_chunks": prompt_chunks,
             "expected_output_schema": {
                 "type": "array",
                 "item_fields": [
@@ -184,9 +209,13 @@ def run_lingo_auto_pipeline(
                     "decision",
                     "type",
                     "value",
+                    "refined_value",
                     "context_ids",
                     "matched_existing_sense_ids",
                     "aliases",
+                    "web_search_needed",
+                    "search_queries",
+                    "search_goal",
                     "reason",
                 ],
             },
@@ -207,6 +236,7 @@ def build_lingo_candidates(
     context_before: int,
     context_after: int,
     max_contexts: int,
+    bert_effective: bool,
 ) -> list[dict[str, Any]]:
     store = LingoStore(output_dir)
     keywords = [
@@ -270,6 +300,7 @@ def build_lingo_candidates(
             "semantic_density": _coerce_float(score_payload.get("semantic_density")),
             "attention_entropy": _coerce_float(score_payload.get("attention_entropy")),
             "bert_score": _coerce_float(score_payload.get("score")),
+            "bert_effective": bool(bert_effective),
             "initial_type": str(top_sense.get("type") or "confused"),
             "initial_value": str(top_sense.get("sense") or "").strip(),
             "initial_ratio": _coerce_float(top_sense.get("ratio")),
@@ -283,16 +314,53 @@ def build_lingo_candidates(
         key=lambda item: (
             -int(item.get("frequency", 0)),
             -int(item.get("context_count", 0)),
-            -_coerce_float(item.get("bert_score")),
+            -(0.0 if not bert_effective else _coerce_float(item.get("bert_score"))),
             str(item.get("keyword") or ""),
         )
     )
     return candidates[: max(0, int(candidate_limit))]
 
 
-def build_lingo_openclaw_prompt(candidates: list[dict[str, Any]]) -> str:
+def build_lingo_openclaw_prompt_chunks(
+    candidates: list[dict[str, Any]],
+    *,
+    chunk_size: int,
+    bert_effective: bool,
+) -> list[dict[str, Any]]:
+    chunks: list[dict[str, Any]] = []
+    if not candidates:
+        return chunks
+    for index in range(0, len(candidates), chunk_size):
+        chunk_items = candidates[index : index + chunk_size]
+        chunk_id = len(chunks) + 1
+        chunks.append(
+            {
+                "chunk_id": chunk_id,
+                "candidate_count": len(chunk_items),
+                "keywords": [str(item.get("keyword") or "") for item in chunk_items],
+                "prompt": build_lingo_openclaw_prompt(
+                    chunk_items,
+                    chunk_id=chunk_id,
+                    total_chunks=(len(candidates) + chunk_size - 1) // chunk_size,
+                    bert_effective=bert_effective,
+                ),
+            }
+        )
+    return chunks
+
+
+def build_lingo_openclaw_prompt(
+    candidates: list[dict[str, Any]],
+    *,
+    chunk_id: int,
+    total_chunks: int,
+    bert_effective: bool,
+) -> str:
     payload = {
         "task": "review_lingo_candidates_and_decide_create_or_append_sense",
+        "chunk_id": chunk_id,
+        "total_chunks": total_chunks,
+        "bert_effective": bert_effective,
         "candidates": [
             {
                 "keyword": item.get("keyword", ""),
@@ -329,9 +397,11 @@ def build_lingo_openclaw_prompt(candidates: list[dict[str, Any]]) -> str:
         "2. 应该给已有词条追加一个新释义。\n"
         "3. 其实和已有释义重复，应跳过。\n"
         "4. 本身是噪音词或证据不足，应跳过。\n\n"
+        "5. 如果你认为上下文不够清晰、释义不够标准、或需要外部资料校正定义，可以要求 web-search 后再决定最终释义。\n\n"
         "词典只收两类内容：\n"
         "- 真正的行业/业务关键名词：例如指标名、流程名、系统名、方法名、岗位协作中反复使用的稳定概念。\n"
         "- 真正的内部黑话：例如缩写、项目代号、团队内默认外人看不懂的术语。\n\n"
+        "如果 bert_effective=false，说明这批候选词没有可用的 BERT 语义分数。此时不要因为 bert_score 为 0 就否决候选词，而是只依据词形、上下文和已有释义做判断。\n\n"
         "以下内容一律不要入库，通常应判为 skip_noise 或 skip_uncertain：\n"
         "- 临时指令句、口头命令、聊天任务安排，例如“代码你改好发给他”。\n"
         "- 普通应答词、语气词、礼貌词，例如“ok”“收到”“好的”。\n"
@@ -346,15 +416,31 @@ def build_lingo_openclaw_prompt(candidates: list[dict[str, Any]]) -> str:
         "- 只有当候选词本身是稳定复用的内部术语/缩写/代号时，才能判为 black。\n"
         "- 不能因为一句话“外人看不懂”就判 black；如果它本质上是临时指令句，仍然应跳过。\n"
         "- 像“代码你改好发给他”这种带动作和对象的聊天指令，不是 black，也不是 key。\n\n"
+        "正例和反例：\n"
+        "- 正例 key: “北极星指标” -> 稳定业务名词，可入词典。\n"
+        "- 正例 black: “llm4rec” -> 连续字母/数字组成，但若上下文明确它是稳定模型名或项目名，可以入词典。\n"
+        "- 反例 skip_noise: “给我代码” -> 指令短语，不是名词概念。\n"
+        "- 反例 skip_noise: “ok” -> 普通应答词，不入词典。\n"
+        "- 反例 skip_noise: “代码你改好发给他” -> 聊天指令，不是术语。\n"
+        "- 多义追加正例 append_new_sense: “SOFREE”已有释义为产品名，而当前上下文稳定表示发版项目代号，则可新增一个释义。\n"
+        "- 不追加反例 skip_duplicate: 候选释义只是把“北极星指标”从“核心增长指标”改写成“增长核心指标”，应视为重复，不新增释义。\n\n"
+        "关于 web-search：\n"
+        "- 如果你已经能仅凭上下文和已有释义给出稳定定义，就不要要求 web-search。\n"
+        "- 如果候选词像外部模型名、行业方法名、产品名，且当前上下文不足以写出标准释义，可以要求 web-search。\n"
+        "- 如果只是聊天指令句或口头语，即使拿不准也不要 web-search，直接 skip_noise 或 skip_uncertain。\n\n"
         "只输出 JSON 数组，不要输出任何额外说明。\n"
         "每个元素必须包含字段：\n"
         "- keyword: 候选词\n"
         "- decision: create_entry / append_new_sense / skip_duplicate / skip_noise / skip_uncertain\n"
         "- type: key / black / confused / nothing\n"
         "- value: 适合飞书词典直接写入的简洁中文释义；如果跳过则为空字符串\n"
+        "- refined_value: 如果你认为 value 需要 web-search 后修订，可先给出一个更标准的候选释义；否则为空字符串\n"
         "- context_ids: 支持该结论的 context_id 列表\n"
         "- matched_existing_sense_ids: 如果和已有释义相关，填命中的 sense_id 列表；否则空数组\n"
         "- aliases: 明确出现的别名列表，没有则空数组\n"
+        "- web_search_needed: 布尔值；是否建议先做 web-search 再决定最终释义\n"
+        "- search_queries: 如果需要检索，给出 1~3 个简短查询词；否则空数组\n"
+        "- search_goal: 一句话说明希望检索补充什么信息；否则空字符串\n"
         "- reason: 不超过 40 字，解释为什么这样判\n\n"
         "判定规则：\n"
         "- create_entry: 新概念或新黑话，需要新建词条\n"
@@ -367,6 +453,7 @@ def build_lingo_openclaw_prompt(candidates: list[dict[str, Any]]) -> str:
         "- type 只能是 key / black / confused / nothing\n"
         "- decision 为 skip_* 时，value 必须为空字符串\n"
         "- decision 为 append_new_sense 或 create_entry 时，value 必须是可直接入库的定义\n\n"
+        "- 如果 web_search_needed=true，且当前定义仍不稳，优先使用 skip_uncertain，等待检索后再入库\n"
         + json.dumps(payload, ensure_ascii=False, indent=2)
     )
 
@@ -410,15 +497,24 @@ def parse_lingo_openclaw_judgements(raw: str | list[dict[str, Any]] | dict[str, 
         aliases = item.get("aliases", [])
         if not isinstance(aliases, list):
             aliases = [aliases] if aliases else []
+        search_queries = item.get("search_queries", [])
+        if not isinstance(search_queries, list):
+            search_queries = [search_queries] if search_queries else []
+        web_search_needed = bool(item.get("web_search_needed", False))
+        refined_value = str(item.get("refined_value") or "").strip()
         parsed.append(
             {
                 "keyword": keyword,
                 "decision": decision,
                 "type": entry_type,
                 "value": value,
+                "refined_value": refined_value,
                 "context_ids": [str(ctx_id).strip() for ctx_id in context_ids if str(ctx_id).strip()],
                 "matched_existing_sense_ids": [str(sense_id).strip() for sense_id in matched_existing_sense_ids if str(sense_id).strip()],
                 "aliases": [str(alias).strip() for alias in aliases if str(alias).strip()],
+                "web_search_needed": web_search_needed,
+                "search_queries": [str(query).strip() for query in search_queries if str(query).strip()],
+                "search_goal": str(item.get("search_goal") or "").strip(),
                 "reason": str(item.get("reason") or "").strip(),
             }
         )
@@ -446,11 +542,26 @@ def sync_openclaw_judgements(
         if not publishable_only or item.get("decision") in created_like
     ]
     remote_client = client if remote else None
+    pending_web_search: list[dict[str, Any]] = []
 
     for item in filtered_judgements:
         decision = str(item.get("decision") or "").strip().lower()
         keyword = str(item.get("keyword") or "").strip()
         if decision not in created_like or not keyword:
+            continue
+        if bool(item.get("web_search_needed")):
+            pending_web_search.append(
+                {
+                    "keyword": keyword,
+                    "decision": decision,
+                    "type": str(item.get("type") or ""),
+                    "value": str(item.get("value") or ""),
+                    "refined_value": str(item.get("refined_value") or ""),
+                    "search_queries": list(item.get("search_queries", [])),
+                    "search_goal": str(item.get("search_goal") or ""),
+                    "reason": str(item.get("reason") or ""),
+                }
+            )
             continue
         entry_type = str(item.get("type") or "nothing").strip().lower()
         value = str(item.get("value") or "").strip()
@@ -536,6 +647,8 @@ def sync_openclaw_judgements(
         "local_enabled": bool(write_local),
         "count": len(upserted),
         "entries": upserted,
+        "pending_web_search_count": len(pending_web_search),
+        "pending_web_search": pending_web_search,
         "publishable_count": len(publishable_entries),
         "lingo_store_file": str(store.path),
     }
@@ -651,9 +764,31 @@ def _is_candidate_keyword(keyword: str) -> bool:
         return False
     if normalized.isdigit():
         return False
-    if normalized.lower() in {"好的", "收到", "今天", "明天", "现在", "这个", "那个"}:
+    lowered = normalized.lower()
+    if lowered.startswith("_user_"):
+        return False
+    if lowered in {"ok", "yes", "no", "hi", "hello"}:
+        return False
+    if normalized.isascii():
+        if len(normalized) <= 2:
+            return False
+        if all(ch.isalpha() for ch in normalized) and normalized.islower() and len(normalized) <= 3:
+            return False
+    if lowered in {"好的", "收到", "今天", "明天", "现在", "这个", "那个"}:
         return False
     return True
+
+
+def _classifier_has_effective_bert(classifier_result: dict[str, Any]) -> bool:
+    token_scores = classifier_result.get("semantic_filter_details", {}).get("token_scores", {})
+    if not isinstance(token_scores, dict) or not token_scores:
+        return False
+    for payload in token_scores.values():
+        if not isinstance(payload, dict):
+            continue
+        if any(abs(_coerce_float(payload.get(key))) > 1e-8 for key in ("semantic_density", "attention_entropy", "score")):
+            return True
+    return False
 
 
 def _coerce_float(value: Any) -> float:

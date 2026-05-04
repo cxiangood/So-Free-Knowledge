@@ -1107,6 +1107,69 @@ def test_lingo_auto_sync_cli_applies_openclaw_judgements_and_appends_sense(tmp_p
     assert entry["senses"][1]["value"] == "团队内部使用的模型项目简称"
 
 
+def test_lingo_auto_sync_cli_keeps_web_search_pending_without_writing(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(
+        cli_module,
+        "run_lingo_auto_pipeline",
+        lambda **kwargs: {
+            "ok": True,
+            "skipped": False,
+            "run_id": "20260504T010000Z",
+            "candidate_count": 1,
+            "candidates": [{"keyword": "llm4rec", "frequency": 4, "context_count": 2}],
+            "openclaw": {"prompt": "review this"},
+        },
+    )
+    scoped_root = tmp_path / "users" / "ou_pending_test"
+    scoped_root.mkdir(parents=True, exist_ok=True)
+    judgements_file = tmp_path / "openclaw_pending.json"
+    judgements_file.write_text(
+        json.dumps(
+            [
+                {
+                    "keyword": "llm4rec",
+                    "decision": "create_entry",
+                    "type": "black",
+                    "value": "团队讨论中的模型名",
+                    "refined_value": "一个用于推荐场景的大语言模型方法名",
+                    "context_ids": ["ctx_1"],
+                    "matched_existing_sense_ids": [],
+                    "aliases": [],
+                    "web_search_needed": True,
+                    "search_queries": ["llm4rec recommendation model", "llm4rec paper"],
+                    "search_goal": "确认该模型名的标准释义",
+                    "reason": "需要外部资料校正定义",
+                }
+            ],
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    code = main(
+        [
+            "--output-dir",
+            str(tmp_path),
+            "--user-open-id",
+            "ou_pending_test",
+            "lingo",
+            "auto-sync",
+            "--no-remote",
+            "--judgements-file",
+            str(judgements_file),
+            "--publishable-only",
+        ]
+    )
+    out = json.loads(capsys.readouterr().out)
+    assert code == 0
+    assert out["ok"] is True
+    assert out["sync"]["performed"] is True
+    assert out["sync"]["count"] == 0
+    assert out["sync"]["pending_web_search_count"] == 1
+    assert out["sync"]["pending_web_search"][0]["keyword"] == "llm4rec"
+    assert not (scoped_root / "lingo_entries.json").exists()
+
+
 def test_wikisheet_create_sheet_routed_from_main_cli(monkeypatch, capsys):
     monkeypatch.setattr(
         cli_module.wikisheet_module,

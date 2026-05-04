@@ -226,7 +226,7 @@ def build_parser() -> argparse.ArgumentParser:
     lingo_auto.add_argument("--context-before", type=int, default=1)
     lingo_auto.add_argument("--context-after", type=int, default=1)
     lingo_auto.add_argument("--max-contexts", type=int, default=80)
-    lingo_auto.add_argument("--classifier-enabled", action=argparse.BooleanOptionalAction, default=True)
+    lingo_auto.add_argument("--classifier-enabled", action=argparse.BooleanOptionalAction, default=False)
     lingo_auto.add_argument("--analyzer-enabled", action=argparse.BooleanOptionalAction, default=True)
     lingo_auto.add_argument("--judgements-file", default="", help="Optional OpenClaw review result JSON file. If omitted, only candidate mining + prompt generation are performed.")
     lingo_auto.add_argument("--publishable-only", action="store_true", help="When --judgements-file is provided, only sync create/append decisions.")
