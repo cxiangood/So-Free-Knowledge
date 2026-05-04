@@ -49,9 +49,9 @@ from .lingo_context import (
     publishable_lingo_judgements,
 )
 from .lingo_auto import (
-    parse_lingo_openclaw_judgements,
+    parse_lingo_ai_review_judgements,
     run_lingo_auto_pipeline,
-    sync_openclaw_judgements,
+    sync_ai_review_judgements,
 )
 from .lingo_store import LingoStore
 from .logging_config import configure_logging, get_logger
@@ -208,7 +208,7 @@ def build_parser() -> argparse.ArgumentParser:
     lingo_sync.add_argument("--write-local", action=argparse.BooleanOptionalAction, default=True, help="Mirror synced entries to local store.")
     lingo_sync.set_defaults(func=cmd_lingo_sync_from_file)
 
-    lingo_auto = lingo_subparsers.add_parser("auto-sync", help="Collect recent messages, mine candidate terms, then emit OpenClaw review prompt and optionally sync reviewed results.")
+    lingo_auto = lingo_subparsers.add_parser("auto-sync", help="Collect recent messages, mine candidate terms, then emit an AI review prompt and optionally sync reviewed results.")
     lingo_auto.add_argument("--recent-days", type=int, default=7, help="How many recent days of chat history to scan.")
     lingo_auto.add_argument("--min-run-interval-days", type=int, default=7, help="Minimum interval between successful auto-sync runs.")
     lingo_auto.add_argument("--force", action="store_true", help="Ignore last-run interval guard.")
@@ -228,7 +228,7 @@ def build_parser() -> argparse.ArgumentParser:
     lingo_auto.add_argument("--max-contexts", type=int, default=80)
     lingo_auto.add_argument("--classifier-enabled", action=argparse.BooleanOptionalAction, default=False)
     lingo_auto.add_argument("--analyzer-enabled", action=argparse.BooleanOptionalAction, default=True)
-    lingo_auto.add_argument("--judgements-file", default="", help="Optional OpenClaw review result JSON file. If omitted, only candidate mining + prompt generation are performed.")
+    lingo_auto.add_argument("--judgements-file", default="", help="Optional AI review result JSON file. If omitted, only candidate mining + prompt generation are performed.")
     lingo_auto.add_argument("--publishable-only", action="store_true", help="When --judgements-file is provided, only sync create/append decisions.")
     lingo_auto.add_argument("--source", default="lingo_auto")
     lingo_auto.add_argument("--force-remote-create", action="store_true")
@@ -1243,13 +1243,13 @@ def cmd_lingo_auto_sync(args: argparse.Namespace) -> dict[str, Any]:
             "sync": {
                 "performed": False,
                 "reason": "missing_judgements_file",
-                "next_step": "Review the emitted openclaw.prompt, let OpenClaw produce JSON judgements, then rerun with --judgements-file.",
+                "next_step": "Review the emitted ai_review_prompt.txt, let your AI reviewer produce JSON judgements, then rerun with --judgements-file.",
             },
         }
 
     raw = load_text_file(args.judgements_file)
-    judgements = parse_lingo_openclaw_judgements(raw)
-    sync_result = sync_openclaw_judgements(
+    judgements = parse_lingo_ai_review_judgements(raw)
+    sync_result = sync_ai_review_judgements(
         output_dir=args.output_dir,
         judgements=judgements,
         source=args.source,

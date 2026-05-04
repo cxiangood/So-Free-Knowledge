@@ -5,6 +5,7 @@ from pathlib import Path
 import sofree_knowledge.cli as cli_module
 from sofree_knowledge.assistant.profile import load_assistant_profile_config
 from sofree_knowledge.cli import main
+from sofree_knowledge.lingo_auto import build_lingo_openclaw_prompt
 
 
 def test_set_knowledge_scope_cli_outputs_json(tmp_path, capsys):
@@ -984,7 +985,7 @@ def test_lingo_sync_from_file_preserves_aliases(tmp_path, capsys):
     assert out["entries"][0]["entry"]["aliases"] == ["Joint Embedding", "jepa"]
 
 
-def test_lingo_auto_sync_cli_emits_openclaw_prompt_without_sync(tmp_path, monkeypatch, capsys):
+def test_lingo_auto_sync_cli_emits_ai_review_prompt_without_sync(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(
         cli_module,
         "run_lingo_auto_pipeline",
@@ -997,7 +998,7 @@ def test_lingo_auto_sync_cli_emits_openclaw_prompt_without_sync(tmp_path, monkey
                 {"keyword": "JEPA", "frequency": 5, "context_count": 2},
                 {"keyword": "今天", "frequency": 5, "context_count": 1},
             ],
-            "openclaw": {"prompt": "review this"},
+            "ai_review": {"prompt": "review this"},
         },
     )
 
@@ -1016,10 +1017,10 @@ def test_lingo_auto_sync_cli_emits_openclaw_prompt_without_sync(tmp_path, monkey
     assert out["ok"] is True
     assert out["candidate_count"] == 2
     assert out["sync"]["performed"] is False
-    assert out["openclaw"]["prompt"] == "review this"
+    assert out["ai_review"]["prompt"] == "review this"
 
 
-def test_lingo_auto_sync_cli_applies_openclaw_judgements_and_appends_sense(tmp_path, monkeypatch, capsys):
+def test_lingo_auto_sync_cli_applies_ai_review_judgements_and_appends_sense(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(
         cli_module,
         "run_lingo_auto_pipeline",
@@ -1029,7 +1030,7 @@ def test_lingo_auto_sync_cli_applies_openclaw_judgements_and_appends_sense(tmp_p
             "run_id": "20260503T120000Z",
             "candidate_count": 1,
             "candidates": [{"keyword": "JEPA", "frequency": 5, "context_count": 2}],
-            "openclaw": {"prompt": "review this"},
+            "ai_review": {"prompt": "review this"},
         },
     )
     scoped_root = tmp_path / "users" / "ou_lingo_test"
@@ -1061,7 +1062,7 @@ def test_lingo_auto_sync_cli_applies_openclaw_judgements_and_appends_sense(tmp_p
         ),
         encoding="utf-8",
     )
-    judgements_file = tmp_path / "openclaw_judgements.json"
+    judgements_file = tmp_path / "ai_review_judgements.json"
     judgements_file.write_text(
         json.dumps(
             [
@@ -1117,12 +1118,12 @@ def test_lingo_auto_sync_cli_keeps_web_search_pending_without_writing(tmp_path, 
             "run_id": "20260504T010000Z",
             "candidate_count": 1,
             "candidates": [{"keyword": "llm4rec", "frequency": 4, "context_count": 2}],
-            "openclaw": {"prompt": "review this"},
+            "ai_review": {"prompt": "review this"},
         },
     )
     scoped_root = tmp_path / "users" / "ou_pending_test"
     scoped_root.mkdir(parents=True, exist_ok=True)
-    judgements_file = tmp_path / "openclaw_pending.json"
+    judgements_file = tmp_path / "ai_review_pending.json"
     judgements_file.write_text(
         json.dumps(
             [
@@ -1168,6 +1169,34 @@ def test_lingo_auto_sync_cli_keeps_web_search_pending_without_writing(tmp_path, 
     assert out["sync"]["pending_web_search_count"] == 1
     assert out["sync"]["pending_web_search"][0]["keyword"] == "llm4rec"
     assert not (scoped_root / "lingo_entries.json").exists()
+
+
+def test_lingo_auto_review_prompt_contains_chinese_noun_positive_example():
+    prompt = build_lingo_openclaw_prompt(
+        [
+            {
+                "keyword": "神经网络",
+                "frequency": 3,
+                "context_count": 2,
+                "context_ids": ["ctx_1"],
+                "semantic_density": 0.0,
+                "attention_entropy": 0.0,
+                "bert_score": 0.0,
+                "initial_type": "key",
+                "initial_value": "机器学习中的一种模型结构",
+                "initial_ratio": 0.8,
+                "existing_entry": None,
+                "related_existing_entries": [],
+                "contexts": [{"context_id": "ctx_1", "text": "这里讨论神经网络模型结构。"}],
+            }
+        ],
+        chunk_id=1,
+        total_chunks=1,
+        bert_effective=False,
+    )
+
+    assert "神经网络" in prompt
+    assert "稳定的技术/行业名词" in prompt
 
 
 def test_wikisheet_create_sheet_routed_from_main_cli(monkeypatch, capsys):

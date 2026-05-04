@@ -19,7 +19,7 @@ DEFAULT_MIN_CONTEXTS = 1
 DEFAULT_CONTEXT_BEFORE = 1
 DEFAULT_CONTEXT_AFTER = 1
 DEFAULT_MAX_CONTEXTS = 80
-DEFAULT_OPENCLAW_CHUNK_SIZE = 10
+DEFAULT_REVIEW_CHUNK_SIZE = 10
 AUTO_JUDGEMENT_DECISIONS = {"create_entry", "append_new_sense", "skip_duplicate", "skip_noise", "skip_uncertain"}
 
 
@@ -65,7 +65,7 @@ def run_lingo_auto_pipeline(
     max_contexts: int = DEFAULT_MAX_CONTEXTS,
     classifier_enabled: bool = False,
     analyzer_enabled: bool = True,
-    openclaw_chunk_size: int = DEFAULT_OPENCLAW_CHUNK_SIZE,
+    openclaw_chunk_size: int = DEFAULT_REVIEW_CHUNK_SIZE,
     classifier_config: dict[str, Any] | None = None,
     analyzer_config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -147,8 +147,8 @@ def run_lingo_auto_pipeline(
         "run_dir": str(run_dir),
         "candidates_file": str(run_dir / "candidates.json"),
         "classifier_result_file": str(run_dir / "classifier_result.json"),
-        "openclaw_prompt_file": str(run_dir / "openclaw_prompt.txt"),
-        "openclaw_prompt_files": [],
+        "ai_review_prompt_file": str(run_dir / "ai_review_prompt.txt"),
+        "ai_review_prompt_files": [],
     }
     (run_dir / "candidates.json").write_text(json.dumps(candidates, ensure_ascii=False, indent=2), encoding="utf-8")
     (run_dir / "classifier_result.json").write_text(
@@ -156,11 +156,11 @@ def run_lingo_auto_pipeline(
         encoding="utf-8",
     )
     combined_prompt = "\n\n".join(chunk["prompt"] for chunk in prompt_chunks)
-    (run_dir / "openclaw_prompt.txt").write_text(combined_prompt, encoding="utf-8")
+    (run_dir / "ai_review_prompt.txt").write_text(combined_prompt, encoding="utf-8")
     for chunk in prompt_chunks:
-        chunk_path = run_dir / f"openclaw_prompt_{chunk['chunk_id']}.txt"
+        chunk_path = run_dir / f"ai_review_prompt_{chunk['chunk_id']}.txt"
         chunk_path.write_text(str(chunk["prompt"]), encoding="utf-8")
-        artifacts["openclaw_prompt_files"].append(str(chunk_path))
+        artifacts["ai_review_prompt_files"].append(str(chunk_path))
 
     state_store.save(
         {
@@ -191,14 +191,14 @@ def run_lingo_auto_pipeline(
             "effective": bool(bert_effective),
             "fallback_mode": not bool(bert_effective),
             "note": (
-                "BERT semantic scores unavailable; skipped semantic-threshold reliance and sent candidates directly to OpenClaw."
+                "BERT semantic scores unavailable; skipped semantic-threshold reliance and sent candidates directly to the AI reviewer."
                 if not bert_effective
                 else "BERT semantic scores available."
             ),
         },
         "candidate_count": len(candidates),
         "candidates": candidates,
-        "openclaw": {
+        "ai_review": {
             "task": "review_lingo_candidates_and_decide_create_or_append_sense",
             "prompt": combined_prompt,
             "prompt_chunks": prompt_chunks,
@@ -418,6 +418,7 @@ def build_lingo_openclaw_prompt(
         "- 像“代码你改好发给他”这种带动作和对象的聊天指令，不是 black，也不是 key。\n\n"
         "正例和反例：\n"
         "- 正例 key: “北极星指标” -> 稳定业务名词，可入词典。\n"
+        "- 正例 key: “神经网络” -> 稳定的技术/行业名词，如果当前讨论语境确实围绕机器学习概念，可以入词典。\n"
         "- 正例 black: “llm4rec” -> 连续字母/数字组成，但若上下文明确它是稳定模型名或项目名，可以入词典。\n"
         "- 反例 skip_noise: “给我代码” -> 指令短语，不是名词概念。\n"
         "- 反例 skip_noise: “ok” -> 普通应答词，不入词典。\n"
@@ -468,7 +469,7 @@ def parse_lingo_openclaw_judgements(raw: str | list[dict[str, Any]] | dict[str, 
         else:
             data = [data]
     if not isinstance(data, list):
-        raise ValueError("openclaw lingo auto judgement output must be a JSON array/object")
+        raise ValueError("AI review output for lingo auto-sync must be a JSON array/object")
 
     parsed: list[dict[str, Any]] = []
     for item in data:
@@ -652,6 +653,10 @@ def sync_openclaw_judgements(
         "publishable_count": len(publishable_entries),
         "lingo_store_file": str(store.path),
     }
+
+
+parse_lingo_ai_review_judgements = parse_lingo_openclaw_judgements
+sync_ai_review_judgements = sync_openclaw_judgements
 
 
 def _classify_messages(messages: list[dict[str, Any]], config: dict[str, Any]) -> dict[str, Any]:
