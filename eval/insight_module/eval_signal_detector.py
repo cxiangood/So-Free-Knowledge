@@ -18,8 +18,6 @@ class SignalDetectorEvaluator(BaseModuleEvaluator):
         false_negatives = 0
         score_errors = []
 
-        counter=0
-
         for case in tqdm(self.test_cases):
             # 构造完整消息列表：上下文 + 触发消息
             all_messages = case.conversation
@@ -53,10 +51,6 @@ class SignalDetectorEvaluator(BaseModuleEvaluator):
                 "actual_high_value": actual_is_high_value,
                 "is_correct": (expected_is_high_value == actual_is_high_value)
             })
-            if counter<10:
-                counter+=1
-            else:
-                break
 
         # 计算指标
         precision = true_positives / (true_positives + false_positives) if (true_positives + false_positives) > 0 else 0
@@ -94,7 +88,7 @@ class SignalDetectorEvaluator(BaseModuleEvaluator):
 
 if __name__ == "__main__":
     from eval.insight_module.eval_utils import load_eval_cases
-    test_cases = load_eval_cases()
+    test_cases = load_eval_cases(csv_path="datas/chat_test_optimized_desensitized_corrected.csv")
     # print(test_cases)
     tester = SignalDetectorEvaluator(test_cases)
     result = tester.run()

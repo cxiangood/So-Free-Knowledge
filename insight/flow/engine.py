@@ -75,6 +75,16 @@ class EngineResult:
     observe_reroute_knowledge_count: int = 0
     denoise_filtered_count: int = 0
     created_at: str = field(default_factory=now_utc_iso)
+    module_traces: dict[str, Any] = field(
+        default_factory=lambda: {
+            "detect": None,
+            "lift": None,
+            "route": None,
+            "kb": None,
+            "obs": None,
+            "task": None,
+        }
+    )
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -97,6 +107,7 @@ class EngineResult:
             "observe_reroute_knowledge_count": self.observe_reroute_knowledge_count,
             "denoise_filtered_count": self.denoise_filtered_count,
             "created_at": self.created_at,
+            "module_traces": self.module_traces,
         }
 
 
@@ -292,7 +303,13 @@ class Engine:
             chat_id=message.chat_id,
         )
         detect_score = float(detection.value_score)
-        result.candidate_count = 1 if detect_score >= float(self.config.detect_threshold) else 0
+        passed_threshold = detect_score >= float(self.config.detect_threshold)
+        result.candidate_count = 1 if passed_threshold else 0
+        result.module_traces["detect"] = {
+            "detect_score": detect_score,
+            "passed_threshold": passed_threshold,
+            "threshold": float(self.config.detect_threshold),
+        }
         return {"result": result, "detect_score": detect_score}
 
     def _after_signal_detect(self, state: EngineGraphState) -> str:
@@ -306,6 +323,10 @@ class Engine:
             trace_node(message_id=message.message_id, node_name="semantic_lift")
         lift_result = lift_candidates(state.get("simple_messages", []))
         result.warnings.extend(lift_result.warnings)
+        result.module_traces["lift"] = {
+            "cards": [card.to_dict() for card in lift_result.cards],
+            "warnings": list(lift_result.warnings),
+        }
         return {"result": result, "cards": lift_result.cards}
 
     def _node_route(self, state: EngineGraphState) -> dict[str, Any]:
@@ -320,6 +341,10 @@ class Engine:
         )
         for decision in decisions:
             result.routed_counts[decision.target_pool] = result.routed_counts.get(decision.target_pool, 0) + 1
+        result.module_traces["route"] = {
+            "decisions": [decision.to_dict() for decision in decisions],
+            "routed_counts_snapshot": dict(result.routed_counts),
+        }
         return {"result": result, "decisions": decisions, "decision_index": 0}
 
     @staticmethod
@@ -357,6 +382,18 @@ class Engine:
             if self.config.step_trace_enabled:
                 trace_node(message_id=message.message_id, node_name="knowledge_store")
             decision.stored_id = save_knowledge(self.state_store, card, vector_store=self.vector_store)
+            kb_trace = result.module_traces.get("kb")
+            if not isinstance(kb_trace, list):
+                kb_trace = []
+            kb_trace.append(
+                {
+                    "card_id": card.card_id,
+                    "stored_id": decision.stored_id,
+                    "target_pool": decision.target_pool,
+                    "reason_codes": list(decision.reason_codes),
+                }
+            )
+            result.module_traces["kb"] = kb_trace
             if self.config.step_trace_enabled:
                 trace_node(message_id=message.message_id, node_name="observe_logic2_check")
             for item in apply_logic2_on_knowledge(
@@ -400,6 +437,20 @@ class Engine:
                 identity_map=self.identity_map,
             )
             decision.stored_id = task_result.task_id
+            task_trace = result.module_traces.get("task")
+            if not isinstance(task_trace, list):
+                task_trace = []
+            task_trace.append(
+                {
+                    "card_id": card.card_id,
+                    "stored_id": task_result.task_id,
+                    "target_pool": decision.target_pool,
+                    "reason_codes": list(decision.reason_codes),
+                    "rag_enhanced": task_card is not card,
+                    "push_attempt": task_result.push_attempt.to_dict() if task_result.push_attempt else None,
+                }
+            )
+            result.module_traces["task"] = task_trace
             if self.config.step_trace_enabled:
                 trace_node(message_id=message.message_id, node_name="observe_logic3_check")
             for item in apply_logic3_on_task(
@@ -435,6 +486,17 @@ class Engine:
         decision, card = self._current_decision_and_card(state)
         if decision is not None and card is not None:
             answered_this_decision = False
+            observe_trace: dict[str, Any] = {
+                "card_id": card.card_id,
+                "target_pool": decision.target_pool,
+                "reason_codes": list(decision.reason_codes),
+                "is_question": False,
+                "auto_reply_attempted": False,
+                "auto_reply_sent": False,
+                "fallback_to_observe_store": False,
+                "stored_id": "",
+                "rag_hit_count": 0,
+            }
             should_question = is_question_with_llm(
                 summary=card.summary,
                 problem=card.problem,
@@ -444,7 +506,9 @@ class Engine:
             )
             if should_question:
                 result.observe_question_count += 1
+                observe_trace["is_question"] = True
             if should_question and self.config.observe_auto_reply_enabled and self.config.rag_enabled:
+                observe_trace["auto_reply_attempted"] = True
                 if self.config.step_trace_enabled:
                     trace_node(message_id=message.message_id, node_name="rag_retrieve_observe")
                 observe_query = f"{card.summary} {card.problem} {message.content_text}".strip()
@@ -455,6 +519,7 @@ class Engine:
                     result.warnings.append(f"observe rag retrieval failed: {exc}")
                 if hits:
                     result.rag_retrieval_count += 1
+                observe_trace["rag_hit_count"] = len(hits)
                 answer_result = try_answer_with_rag(observe_query, hits)
                 if answer_result.can_answer:
                     if self.config.step_trace_enabled:
@@ -474,6 +539,7 @@ class Engine:
                     if sent.status == "sent":
                         result.observe_answered_count += 1
                         answered_this_decision = True
+                        observe_trace["auto_reply_sent"] = True
                     else:
                         result.errors.append(sent.error)
                         trace_status = "failed"
@@ -485,6 +551,8 @@ class Engine:
                 if self.config.step_trace_enabled:
                     trace_node(message_id=message.message_id, node_name="observe_store")
                 decision.stored_id = save_observe(self.state_store, card)
+                observe_trace["fallback_to_observe_store"] = True
+                observe_trace["stored_id"] = decision.stored_id
                 if self.config.step_trace_enabled:
                     trace_node(message_id=message.message_id, node_name="observe_logic1_check")
                 ferment_result = apply_logic1_on_observe_add(
@@ -497,6 +565,11 @@ class Engine:
                 if ferment_result is not None:
                     self._append_observe_ferment_event(message.message_id, card.card_id, ferment_result.to_dict())
                 self._process_observe_pop(message=message, result=result)
+            obs_trace_list = result.module_traces.get("obs")
+            if not isinstance(obs_trace_list, list):
+                obs_trace_list = []
+            obs_trace_list.append(observe_trace)
+            result.module_traces["obs"] = obs_trace_list
         return {"result": result, "trace_status": trace_status, "decision_index": int(state.get("decision_index", 0)) + 1}
 
     def _node_finalize(self, state: EngineGraphState) -> dict[str, Any]:
