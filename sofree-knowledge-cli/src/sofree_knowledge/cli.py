@@ -164,13 +164,13 @@ def build_parser() -> argparse.ArgumentParser:
     extract_contexts.add_argument("--max-contexts", type=int, default=30, help="Maximum number of contexts to return.")
     extract_contexts.set_defaults(func=cmd_lingo_extract_contexts)
 
-    build_prompt = lingo_subparsers.add_parser("build-judge-prompt", help="Build LLM prompt for lingo judgement.")
+    build_prompt = lingo_subparsers.add_parser("build-judge-prompt", help="Build an AI review prompt for lingo judgement.")
     build_prompt.add_argument("--keywords", required=True, help="Comma-separated keywords.")
     build_prompt.add_argument("--contexts-file", required=True, help="JSON file containing contexts array from extract-contexts.")
     build_prompt.set_defaults(func=cmd_lingo_build_judge_prompt)
 
-    parse_judgements = lingo_subparsers.add_parser("parse-judgements", help="Parse LLM judgement output.")
-    parse_judgements.add_argument("--judgements-file", required=True, help="File containing raw LLM output (JSON or text with code fences).")
+    parse_judgements = lingo_subparsers.add_parser("parse-judgements", help="Parse AI review judgement output.")
+    parse_judgements.add_argument("--judgements-file", required=True, help="File containing raw AI review output (JSON or text with code fences).")
     parse_judgements.add_argument("--publishable-only", action="store_true", help="Only return publishable judgements (key/black types with value).")
     parse_judgements.set_defaults(func=cmd_lingo_parse_judgements)
 
@@ -226,7 +226,6 @@ def build_parser() -> argparse.ArgumentParser:
     lingo_auto.add_argument("--context-before", type=int, default=1)
     lingo_auto.add_argument("--context-after", type=int, default=1)
     lingo_auto.add_argument("--max-contexts", type=int, default=80)
-    lingo_auto.add_argument("--classifier-enabled", action=argparse.BooleanOptionalAction, default=False)
     lingo_auto.add_argument("--analyzer-enabled", action=argparse.BooleanOptionalAction, default=True)
     lingo_auto.add_argument("--judgements-file", default="", help="Optional AI review result JSON file. If omitted, only candidate mining + prompt generation are performed.")
     lingo_auto.add_argument("--publishable-only", action="store_true", help="When --judgements-file is provided, only sync create/append decisions.")
@@ -1229,7 +1228,6 @@ def cmd_lingo_auto_sync(args: argparse.Namespace) -> dict[str, Any]:
         context_before=args.context_before,
         context_after=args.context_after,
         max_contexts=args.max_contexts,
-        classifier_enabled=bool(args.classifier_enabled),
         analyzer_enabled=bool(args.analyzer_enabled),
     )
     if pipeline_result.get("skipped"):

@@ -63,7 +63,7 @@ def test_collect_messages_can_only_collect_explicit_chat(tmp_path):
     assert {message["chat_id"] for message in messages} == {"oc_explicit"}
 
 
-def test_collect_messages_filters_raw_card_content(tmp_path):
+def test_collect_messages_filters_interactive_and_system_messages(tmp_path):
     class CardClient(FakeClient):
         def list_chat_messages(
             self,
@@ -79,17 +79,24 @@ def test_collect_messages_filters_raw_card_content(tmp_path):
                     {
                         "message_id": f"{chat_id}_card",
                         "chat_id": chat_id,
-                        "msg_type": "post",
+                        "msg_type": "interactive",
                         "create_time": "1710000001",
-                        "card_msg_content_type": "raw_card_content",
                         "sender": {"id": "ou_user", "sender_type": "user"},
                         "body": {"content": '{"title":"card"}'},
+                    },
+                    {
+                        "message_id": f"{chat_id}_system",
+                        "chat_id": chat_id,
+                        "msg_type": "system",
+                        "create_time": "1710000002",
+                        "sender": {"id": "ou_system", "sender_type": "app"},
+                        "body": {"content": '{"template":"from_user invited {to_chatters}"}'},
                     },
                     {
                         "message_id": f"{chat_id}_m1",
                         "chat_id": chat_id,
                         "msg_type": "text",
-                        "create_time": "1710000002",
+                        "create_time": "1710000003",
                         "sender": {"id": "ou_user", "sender_type": "user"},
                         "body": {"content": '{"text":"保留文本"}'},
                     },

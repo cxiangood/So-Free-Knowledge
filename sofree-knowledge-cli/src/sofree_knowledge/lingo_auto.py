@@ -21,6 +21,18 @@ DEFAULT_CONTEXT_AFTER = 1
 DEFAULT_MAX_CONTEXTS = 80
 DEFAULT_REVIEW_CHUNK_SIZE = 10
 AUTO_JUDGEMENT_DECISIONS = {"create_entry", "append_new_sense", "skip_duplicate", "skip_noise", "skip_uncertain"}
+SYSTEM_TEMPLATE_KEYWORD_BLACKLIST = {
+    "from_user",
+    "to_chatters",
+    "template",
+    "divider_text",
+    "members",
+    "member",
+    "group",
+    "chatters",
+    "fromuser",
+    "tochatters",
+}
 
 
 class LingoAutoStateStore:
@@ -63,10 +75,8 @@ def run_lingo_auto_pipeline(
     context_before: int = DEFAULT_CONTEXT_BEFORE,
     context_after: int = DEFAULT_CONTEXT_AFTER,
     max_contexts: int = DEFAULT_MAX_CONTEXTS,
-    classifier_enabled: bool = False,
     analyzer_enabled: bool = True,
     openclaw_chunk_size: int = DEFAULT_REVIEW_CHUNK_SIZE,
-    classifier_config: dict[str, Any] | None = None,
     analyzer_config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     output_root = Path(output_dir).expanduser()
@@ -117,8 +127,7 @@ def run_lingo_auto_pipeline(
             "enable_analyzer": analyzer_enabled,
             "analyzer_config": dict(analyzer_config or {}),
             "classifier_config": {
-                "enabled": classifier_enabled,
-                **dict(classifier_config or {}),
+                "enabled": False,
             },
         },
     )
@@ -200,6 +209,8 @@ def run_lingo_auto_pipeline(
         "candidates": candidates,
         "ai_review": {
             "task": "review_lingo_candidates_and_decide_create_or_append_sense",
+            "authoritative_reviewer": True,
+            "local_classifier_enabled": False,
             "prompt": combined_prompt,
             "prompt_chunks": prompt_chunks,
             "expected_output_schema": {
@@ -283,6 +294,7 @@ def build_lingo_candidates(
         senses = sense_results.get(keyword, [])
         if isinstance(senses, list) and senses:
             top_sense = senses[0] if isinstance(senses[0], dict) else {}
+        top_sense = _normalize_initial_sense(top_sense)
         score_payload = token_scores.get(keyword, {}) if isinstance(token_scores, dict) else {}
         candidate = {
             "keyword": keyword,
@@ -358,6 +370,8 @@ def build_lingo_openclaw_prompt(
 ) -> str:
     payload = {
         "task": "review_lingo_candidates_and_decide_create_or_append_sense",
+        "authoritative_reviewer": True,
+        "local_classifier_enabled": False,
         "chunk_id": chunk_id,
         "total_chunks": total_chunks,
         "bert_effective": bert_effective,
@@ -392,6 +406,8 @@ def build_lingo_openclaw_prompt(
         ],
     }
     return (
+        "本流程已显式禁用本地 LLM/关键词分类器。你就是这批候选词的最终判断者，请直接基于词形、上下文、已有释义和必要时的 web-search 做决定，不要等待上游分类结果。\n"
+        "initial_type / initial_value 只是候选词附带的弱提示；如果为空、模糊或不合理，以你的判断为准。\n"
         "你是 SoFree 的飞书词典审稿助手。目标是审查候选词条，并决定：\n"
         "1. 应该新建词条。\n"
         "2. 应该给已有词条追加一个新释义。\n"
@@ -763,6 +779,17 @@ def _resolve_sender_name(sender: Any) -> str:
     return ""
 
 
+def _normalize_initial_sense(top_sense: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(top_sense, dict):
+        return {}
+    normalized = dict(top_sense)
+    raw_type = str(normalized.get("type") or "").strip().lower()
+    raw_sense = str(normalized.get("sense") or "").strip()
+    if raw_type == "confused" and ("未配置llm分类器" in raw_sense.lower() or "分类失败" in raw_sense):
+        return {"type": "nothing", "sense": "", "ratio": 0.0}
+    return normalized
+
+
 def _is_candidate_keyword(keyword: str) -> bool:
     normalized = str(keyword or "").strip()
     if len(normalized) < 2 or len(normalized) > 40:
@@ -770,6 +797,8 @@ def _is_candidate_keyword(keyword: str) -> bool:
     if normalized.isdigit():
         return False
     lowered = normalized.lower()
+    if lowered in SYSTEM_TEMPLATE_KEYWORD_BLACKLIST:
+        return False
     if lowered.startswith("_user_"):
         return False
     if lowered in {"ok", "yes", "no", "hi", "hello"}:

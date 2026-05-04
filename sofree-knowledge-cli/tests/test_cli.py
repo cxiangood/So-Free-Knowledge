@@ -1197,6 +1197,23 @@ def test_lingo_auto_review_prompt_contains_chinese_noun_positive_example():
 
     assert "神经网络" in prompt
     assert "稳定的技术/行业名词" in prompt
+    assert "你就是这批候选词的最终判断者" in prompt
+    assert "initial_type / initial_value" in prompt
+
+
+def test_lingo_candidate_keyword_filter_rejects_system_template_fields():
+    assert cli_module is not None
+    from sofree_knowledge.lingo_auto import _is_candidate_keyword, _normalize_initial_sense
+
+    assert _is_candidate_keyword("from_user") is False
+    assert _is_candidate_keyword("to_chatters") is False
+    assert _is_candidate_keyword("template") is False
+    assert _is_candidate_keyword("divider_text") is False
+    assert _normalize_initial_sense({"type": "confused", "sense": "未配置LLM分类器"}) == {
+        "type": "nothing",
+        "sense": "",
+        "ratio": 0.0,
+    }
 
 
 def test_wikisheet_create_sheet_routed_from_main_cli(monkeypatch, capsys):
