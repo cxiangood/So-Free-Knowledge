@@ -131,6 +131,7 @@ def run_lingo_auto_pipeline(
             },
         },
     )
+    classifier_result = _sanitize_classifier_result_for_external_review(classifier_result)
     bert_effective = _classifier_has_effective_bert(classifier_result)
     candidates = build_lingo_candidates(
         messages=messages,
@@ -209,8 +210,10 @@ def run_lingo_auto_pipeline(
         "candidates": candidates,
         "ai_review": {
             "task": "review_lingo_candidates_and_decide_create_or_append_sense",
+            "review_mode": "external_ai_only",
             "authoritative_reviewer": True,
             "local_classifier_enabled": False,
+            "do_not_request_local_llm_config": True,
             "prompt": combined_prompt,
             "prompt_chunks": prompt_chunks,
             "expected_output_schema": {
@@ -370,8 +373,10 @@ def build_lingo_openclaw_prompt(
 ) -> str:
     payload = {
         "task": "review_lingo_candidates_and_decide_create_or_append_sense",
+        "review_mode": "external_ai_only",
         "authoritative_reviewer": True,
         "local_classifier_enabled": False,
+        "do_not_request_local_llm_config": True,
         "chunk_id": chunk_id,
         "total_chunks": total_chunks,
         "bert_effective": bert_effective,
@@ -408,6 +413,7 @@ def build_lingo_openclaw_prompt(
     return (
         "本流程已显式禁用本地 LLM/关键词分类器。你就是这批候选词的最终判断者，请直接基于词形、上下文、已有释义和必要时的 web-search 做决定，不要等待上游分类结果。\n"
         "initial_type / initial_value 只是候选词附带的弱提示；如果为空、模糊或不合理，以你的判断为准。\n"
+        "不要要求用户去配置 ~/.sofree/knowledge_config.json、llm_api_key、llm_model_id 或任何本地 LLM 参数；这条链路的设计就是由你直接完成判断。\n"
         "你是 SoFree 的飞书词典审稿助手。目标是审查候选词条，并决定：\n"
         "1. 应该新建词条。\n"
         "2. 应该给已有词条追加一个新释义。\n"
@@ -435,6 +441,9 @@ def build_lingo_openclaw_prompt(
         "正例和反例：\n"
         "- 正例 key: “北极星指标” -> 稳定业务名词，可入词典。\n"
         "- 正例 key: “神经网络” -> 稳定的技术/行业名词，如果当前讨论语境确实围绕机器学习概念，可以入词典。\n"
+        "- 正例 key: “LLM” -> 国际通用技术名词；如果在当前团队语境中稳定指代大语言模型相关能力、方案或模块，可以入词典。\n"
+        "- 正例 key: “GitHub” -> 国际通用产品/平台名词；如果上下文稳定围绕代码托管、PR、Issue、CI 等协作流程，可以入词典。\n"
+        "- 正例 key: “TPM” -> 国际通用岗位缩写；如果当前团队稳定用它表示 Technical Program Manager 等明确角色概念，可以入词典。\n"
         "- 正例 black: “llm4rec” -> 连续字母/数字组成，但若上下文明确它是稳定模型名或项目名，可以入词典。\n"
         "- 反例 skip_noise: “给我代码” -> 指令短语，不是名词概念。\n"
         "- 反例 skip_noise: “ok” -> 普通应答词，不入词典。\n"
@@ -788,6 +797,44 @@ def _normalize_initial_sense(top_sense: dict[str, Any]) -> dict[str, Any]:
     if raw_type == "confused" and ("未配置llm分类器" in raw_sense.lower() or "分类失败" in raw_sense):
         return {"type": "nothing", "sense": "", "ratio": 0.0}
     return normalized
+
+
+def _sanitize_classifier_result_for_external_review(classifier_result: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(classifier_result, dict):
+        return {}
+    sanitized = json.loads(json.dumps(classifier_result, ensure_ascii=False))
+    sanitized["local_classifier_enabled"] = False
+    sanitized["review_mode"] = "external_ai_only"
+    sanitized["review_notice"] = (
+        "Local LLM keyword classification is disabled. Use this file only for token/BERT/context mining, "
+        "and let the external AI reviewer make the final judgement."
+    )
+
+    group_classification = sanitized.get("group_classification")
+    if isinstance(group_classification, dict):
+        for group_id, keyword_map in list(group_classification.items()):
+            if not isinstance(keyword_map, dict):
+                continue
+            group_classification[group_id] = {
+                str(keyword): {"type": "nothing", "sense": ""}
+                for keyword in keyword_map.keys()
+            }
+
+    classification_results = sanitized.get("classification_results")
+    if isinstance(classification_results, dict):
+        for keyword, entries in list(classification_results.items()):
+            if not isinstance(entries, list):
+                classification_results[keyword] = []
+                continue
+            cleaned_entries: list[dict[str, Any]] = []
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    continue
+                cleaned_entry = _normalize_initial_sense(entry)
+                if cleaned_entry:
+                    cleaned_entries.append(cleaned_entry)
+            classification_results[keyword] = cleaned_entries
+    return sanitized
 
 
 def _is_candidate_keyword(keyword: str) -> bool:

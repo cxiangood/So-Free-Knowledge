@@ -1197,13 +1197,21 @@ def test_lingo_auto_review_prompt_contains_chinese_noun_positive_example():
 
     assert "神经网络" in prompt
     assert "稳定的技术/行业名词" in prompt
+    assert "LLM" in prompt
+    assert "GitHub" in prompt
+    assert "TPM" in prompt
     assert "你就是这批候选词的最终判断者" in prompt
     assert "initial_type / initial_value" in prompt
+    assert "不要要求用户去配置 ~/.sofree/knowledge_config.json" in prompt
 
 
 def test_lingo_candidate_keyword_filter_rejects_system_template_fields():
     assert cli_module is not None
-    from sofree_knowledge.lingo_auto import _is_candidate_keyword, _normalize_initial_sense
+    from sofree_knowledge.lingo_auto import (
+        _is_candidate_keyword,
+        _normalize_initial_sense,
+        _sanitize_classifier_result_for_external_review,
+    )
 
     assert _is_candidate_keyword("from_user") is False
     assert _is_candidate_keyword("to_chatters") is False
@@ -1214,6 +1222,16 @@ def test_lingo_candidate_keyword_filter_rejects_system_template_fields():
         "sense": "",
         "ratio": 0.0,
     }
+    sanitized = _sanitize_classifier_result_for_external_review(
+        {
+            "group_classification": {"group-0": {"TPC": {"type": "confused", "sense": "未配置LLM分类器"}}},
+            "classification_results": {"TPC": [{"type": "confused", "sense": "未配置LLM分类器", "ratio": 1.0}]},
+        }
+    )
+    assert sanitized["local_classifier_enabled"] is False
+    assert sanitized["review_mode"] == "external_ai_only"
+    assert sanitized["group_classification"]["group-0"]["TPC"] == {"type": "nothing", "sense": ""}
+    assert sanitized["classification_results"]["TPC"] == [{"type": "nothing", "sense": "", "ratio": 0.0}]
 
 
 def test_wikisheet_create_sheet_routed_from_main_cli(monkeypatch, capsys):
