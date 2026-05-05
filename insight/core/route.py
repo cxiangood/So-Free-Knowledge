@@ -52,8 +52,8 @@ def _route_by_rule(card: LiftedCard) -> list[tuple[str, list[str]]]:
 
     if role in {"followup", "update", "confirm", "cancel"} and (actionability_score >= 0.5 or has_action_hint):
         routes.append(("task", ["context-followup-task", "action-signal"]))
-    if role == "question" and (has_question or actionability_score >= 0.5):
-        routes.append(("task", ["context-question-task", "question-signal"]))
+    if role == "question" or has_question:
+        routes.append(("observe", ["context-question-observe"]))
     if "actionable-signal" in card.tags or is_task_like:
         routes.append(("task", ["task-semantic-signal"]))
     if "novel-content" in card.tags or novelty_score >= 0.6:
@@ -61,7 +61,7 @@ def _route_by_rule(card: LiftedCard) -> list[tuple[str, list[str]]]:
 
     if not routes:
         # Soft score reference (not hard threshold gating): use score tendency as tie-breaker.
-        task_score = actionability_score + (0.15 if has_action_hint else 0.0) + (0.1 if has_question else 0.0) + (0.1 if confidence >= 0.7 else 0.0)
+        task_score = actionability_score + (0.15 if has_action_hint else 0.0) + (0.1 if confidence >= 0.7 else 0.0)
         knowledge_score = novelty_score + (impact_score * 0.4) + (0.1 if confidence >= 0.7 else 0.0)
         if task_score >= 0.85 and task_score >= knowledge_score:
             routes.append(("task", ["score-lean-task"]))
