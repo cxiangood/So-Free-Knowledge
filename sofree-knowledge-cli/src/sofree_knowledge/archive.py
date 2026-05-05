@@ -121,7 +121,11 @@ def list_chat_messages(
             page_token=page_token,
             sort="asc",
         )
-        messages.extend(normalize_chat_message(item, fallback_chat_id=chat_id) for item in page.get("items", []))
+        messages.extend(
+            normalize_chat_message(item, fallback_chat_id=chat_id)
+            for item in page.get("items", [])
+            if not _should_skip_message(item)
+        )
         page_token = str(page.get("page_token", "") or "")
         if not page.get("has_more") or not page_token:
             break
@@ -170,6 +174,15 @@ def normalize_chat_message(item: dict[str, Any], fallback_chat_id: str = "") -> 
         "message_url": build_message_url(chat_id=chat_id, message_id=message_id),
         "raw": item,
     }
+
+
+def _should_skip_message(item: dict[str, Any]) -> bool:
+    if not isinstance(item, dict):
+        return False
+    msg_type = str(item.get("msg_type") or "").strip().lower()
+    if msg_type in {"interactive", "system"}:
+        return True
+    return False
 
 
 def build_message_url(chat_id: str, message_id: str) -> str:

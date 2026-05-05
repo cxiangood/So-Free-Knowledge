@@ -5,6 +5,7 @@ from pathlib import Path
 import sofree_knowledge.cli as cli_module
 from sofree_knowledge.assistant.profile import load_assistant_profile_config
 from sofree_knowledge.cli import main
+from sofree_knowledge.lingo_auto import build_lingo_openclaw_prompt
 
 
 def test_set_knowledge_scope_cli_outputs_json(tmp_path, capsys):
@@ -947,6 +948,290 @@ def test_lingo_sync_from_file_cli(tmp_path, capsys):
     assert out["ok"] is True
     assert out["count"] == 1
     assert out["entries"][0]["keyword"] == "A/B实验"
+
+
+def test_lingo_sync_from_file_preserves_aliases(tmp_path, capsys):
+    input_file = tmp_path / "judgements_with_aliases.json"
+    input_file.write_text(
+        json.dumps(
+            [
+                {
+                    "keyword": "JEPA",
+                    "type": "black",
+                    "value": "团队内部使用的模型项目简称",
+                    "aliases": ["Joint Embedding", "jepa"],
+                }
+            ],
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    code = main(
+        [
+            "--output-dir",
+            str(tmp_path),
+            "lingo",
+            "sync-from-file",
+            "--no-remote",
+            "--input-file",
+            str(input_file),
+        ]
+    )
+    out = json.loads(capsys.readouterr().out)
+    assert code == 0
+    assert out["ok"] is True
+    assert out["entries"][0]["aliases"] == ["Joint Embedding", "jepa"]
+    assert out["entries"][0]["entry"]["aliases"] == ["Joint Embedding", "jepa"]
+
+
+def test_lingo_auto_sync_cli_emits_ai_review_prompt_without_sync(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(
+        cli_module,
+        "run_lingo_auto_pipeline",
+        lambda **kwargs: {
+            "ok": True,
+            "skipped": False,
+            "run_id": "20260503T120000Z",
+            "candidate_count": 2,
+            "candidates": [
+                {"keyword": "JEPA", "frequency": 5, "context_count": 2},
+                {"keyword": "今天", "frequency": 5, "context_count": 1},
+            ],
+            "ai_review": {"prompt": "review this"},
+        },
+    )
+
+    code = main(
+        [
+            "--output-dir",
+            str(tmp_path),
+            "lingo",
+            "auto-sync",
+            "--no-remote",
+            "--publishable-only",
+        ]
+    )
+    out = json.loads(capsys.readouterr().out)
+    assert code == 0
+    assert out["ok"] is True
+    assert out["candidate_count"] == 2
+    assert out["sync"]["performed"] is False
+    assert out["ai_review"]["prompt"] == "review this"
+
+
+def test_lingo_auto_sync_cli_applies_ai_review_judgements_and_appends_sense(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(
+        cli_module,
+        "run_lingo_auto_pipeline",
+        lambda **kwargs: {
+            "ok": True,
+            "skipped": False,
+            "run_id": "20260503T120000Z",
+            "candidate_count": 1,
+            "candidates": [{"keyword": "JEPA", "frequency": 5, "context_count": 2}],
+            "ai_review": {"prompt": "review this"},
+        },
+    )
+    scoped_root = tmp_path / "users" / "ou_lingo_test"
+    scoped_root.mkdir(parents=True, exist_ok=True)
+    existing_file = scoped_root / "lingo_entries.json"
+    existing_file.write_text(
+        json.dumps(
+            {
+                "entries": {
+                    "JEPA": {
+                        "keyword": "JEPA",
+                        "type": "black",
+                        "value": "旧释义",
+                        "aliases": ["old"],
+                        "senses": [
+                            {
+                                "sense_id": "sense_old",
+                                "type": "black",
+                                "value": "旧释义",
+                                "aliases": ["old"],
+                                "entity_id": "",
+                                "context_ids": ["ctx_old"],
+                            }
+                        ],
+                    }
+                }
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    judgements_file = tmp_path / "ai_review_judgements.json"
+    judgements_file.write_text(
+        json.dumps(
+            [
+                {
+                    "keyword": "JEPA",
+                    "decision": "append_new_sense",
+                    "type": "black",
+                    "value": "团队内部使用的模型项目简称",
+                    "context_ids": ["ctx_1"],
+                    "matched_existing_sense_ids": ["sense_old"],
+                    "aliases": ["Joint Embedding"],
+                    "reason": "与旧释义不同",
+                }
+            ],
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    code = main(
+        [
+            "--output-dir",
+            str(tmp_path),
+            "--user-open-id",
+            "ou_lingo_test",
+            "lingo",
+            "auto-sync",
+            "--no-remote",
+            "--judgements-file",
+            str(judgements_file),
+            "--publishable-only",
+        ]
+    )
+    out = json.loads(capsys.readouterr().out)
+    assert code == 0
+    assert out["ok"] is True
+    assert out["sync"]["performed"] is True
+    assert out["sync"]["count"] == 1
+    entry = out["sync"]["entries"][0]["entry"]
+    assert entry["keyword"] == "JEPA"
+    assert len(entry["senses"]) == 2
+    assert entry["senses"][0]["value"] == "旧释义"
+    assert entry["senses"][1]["value"] == "团队内部使用的模型项目简称"
+
+
+def test_lingo_auto_sync_cli_keeps_web_search_pending_without_writing(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(
+        cli_module,
+        "run_lingo_auto_pipeline",
+        lambda **kwargs: {
+            "ok": True,
+            "skipped": False,
+            "run_id": "20260504T010000Z",
+            "candidate_count": 1,
+            "candidates": [{"keyword": "llm4rec", "frequency": 4, "context_count": 2}],
+            "ai_review": {"prompt": "review this"},
+        },
+    )
+    scoped_root = tmp_path / "users" / "ou_pending_test"
+    scoped_root.mkdir(parents=True, exist_ok=True)
+    judgements_file = tmp_path / "ai_review_pending.json"
+    judgements_file.write_text(
+        json.dumps(
+            [
+                {
+                    "keyword": "llm4rec",
+                    "decision": "create_entry",
+                    "type": "black",
+                    "value": "团队讨论中的模型名",
+                    "refined_value": "一个用于推荐场景的大语言模型方法名",
+                    "context_ids": ["ctx_1"],
+                    "matched_existing_sense_ids": [],
+                    "aliases": [],
+                    "web_search_needed": True,
+                    "search_queries": ["llm4rec recommendation model", "llm4rec paper"],
+                    "search_goal": "确认该模型名的标准释义",
+                    "reason": "需要外部资料校正定义",
+                }
+            ],
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    code = main(
+        [
+            "--output-dir",
+            str(tmp_path),
+            "--user-open-id",
+            "ou_pending_test",
+            "lingo",
+            "auto-sync",
+            "--no-remote",
+            "--judgements-file",
+            str(judgements_file),
+            "--publishable-only",
+        ]
+    )
+    out = json.loads(capsys.readouterr().out)
+    assert code == 0
+    assert out["ok"] is True
+    assert out["sync"]["performed"] is True
+    assert out["sync"]["count"] == 0
+    assert out["sync"]["pending_web_search_count"] == 1
+    assert out["sync"]["pending_web_search"][0]["keyword"] == "llm4rec"
+    assert not (scoped_root / "lingo_entries.json").exists()
+
+
+def test_lingo_auto_review_prompt_contains_chinese_noun_positive_example():
+    prompt = build_lingo_openclaw_prompt(
+        [
+            {
+                "keyword": "神经网络",
+                "frequency": 3,
+                "context_count": 2,
+                "context_ids": ["ctx_1"],
+                "semantic_density": 0.0,
+                "attention_entropy": 0.0,
+                "bert_score": 0.0,
+                "initial_type": "key",
+                "initial_value": "机器学习中的一种模型结构",
+                "initial_ratio": 0.8,
+                "existing_entry": None,
+                "related_existing_entries": [],
+                "contexts": [{"context_id": "ctx_1", "text": "这里讨论神经网络模型结构。"}],
+            }
+        ],
+        chunk_id=1,
+        total_chunks=1,
+        bert_effective=False,
+    )
+
+    assert "神经网络" in prompt
+    assert "稳定的技术/行业名词" in prompt
+    assert "LLM" in prompt
+    assert "GitHub" in prompt
+    assert "TPM" in prompt
+    assert "你就是这批候选词的最终判断者" in prompt
+    assert "initial_type / initial_value" in prompt
+    assert "不要要求用户去配置 ~/.sofree/knowledge_config.json" in prompt
+
+
+def test_lingo_candidate_keyword_filter_rejects_system_template_fields():
+    assert cli_module is not None
+    from sofree_knowledge.lingo_auto import (
+        _is_candidate_keyword,
+        _normalize_initial_sense,
+        _sanitize_classifier_result_for_external_review,
+    )
+
+    assert _is_candidate_keyword("from_user") is False
+    assert _is_candidate_keyword("to_chatters") is False
+    assert _is_candidate_keyword("template") is False
+    assert _is_candidate_keyword("divider_text") is False
+    assert _normalize_initial_sense({"type": "confused", "sense": "未配置LLM分类器"}) == {
+        "type": "nothing",
+        "sense": "",
+        "ratio": 0.0,
+    }
+    sanitized = _sanitize_classifier_result_for_external_review(
+        {
+            "group_classification": {"group-0": {"TPC": {"type": "confused", "sense": "未配置LLM分类器"}}},
+            "classification_results": {"TPC": [{"type": "confused", "sense": "未配置LLM分类器", "ratio": 1.0}]},
+        }
+    )
+    assert sanitized["local_classifier_enabled"] is False
+    assert sanitized["review_mode"] == "external_ai_only"
+    assert sanitized["group_classification"]["group-0"]["TPC"] == {"type": "nothing", "sense": ""}
+    assert sanitized["classification_results"]["TPC"] == [{"type": "nothing", "sense": "", "ratio": 0.0}]
 
 
 def test_wikisheet_create_sheet_routed_from_main_cli(monkeypatch, capsys):

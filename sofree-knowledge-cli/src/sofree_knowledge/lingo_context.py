@@ -94,12 +94,20 @@ def build_lingo_judge_prompt(
         ],
     }
     return (
-        "你是企业词典审核助手。根据给定聊天上下文判断候选关键词类型，并只输出 JSON。\n"
-        "类型只能是 key、black、confused、nothing。\n"
-        "key 表示值得沉淀的一般关键词或业务概念；black 表示内部黑话、缩写、项目代号或隐含含义；"
+        "你是企业飞书词典审稿助手。请根据聊天上下文判断候选词是否值得进入词典，并且只输出 JSON。\n"
+        "type 只能是 key、black、confused、nothing。\n"
+        "词典只收两类内容：\n"
+        "1. 真正的关键业务名词：稳定复用的指标名、流程名、系统名、方法名、项目概念。\n"
+        "2. 真正的内部黑话：稳定复用的缩写、项目代号、团队内默认外人看不懂的术语。\n"
+        "不要把以下内容判为 key 或 black：\n"
+        "- 聊天指令句、任务安排、临时口头表达，例如“代码你改好发给他”。\n"
+        "- 普通应答词、语气词、礼貌词，例如“ok”“收到”“好的”。\n"
+        "- 依赖当前聊天上下文才成立的短句，而不是稳定名词。\n"
+        "- 普通动作、通用动词、泛化描述，没有沉淀为术语的价值。\n"
+        "black 必须是稳定复用的内部术语/缩写/代号，不能因为“一句话外人看不懂”就判 black。\n"
         "confused 表示证据不足或含义冲突；nothing 表示不应入库，且 value 必须为空字符串。\n"
-        "如果多个关键词共用同一段上下文，可以一起判断。输出格式必须是数组，每项包含 keyword、type、value、context_ids。"
-        "value 写面向词典的简短中文释义；type 为 nothing 时 value 为空字符串。\n\n"
+        "如果多个关键词共用同一段上下文，可以一起判断。输出格式必须是数组，每项包含 keyword、type、value、context_ids。\n"
+        "value 要写成面向词典的简洁中文释义；type 为 nothing 时，value 必须为空字符串。\n\n"
         + json.dumps(payload, ensure_ascii=False, indent=2)
     )
 
@@ -141,6 +149,13 @@ def parse_lingo_judgements(raw: str | list[dict[str, Any]] | dict[str, Any]) -> 
                 "type": judgement_type,
                 "value": value,
                 "context_ids": [str(context_id) for context_id in context_ids if context_id],
+                "aliases": [
+                    str(alias).strip()
+                    for alias in item.get("aliases", [])
+                    if str(alias).strip()
+                ]
+                if isinstance(item.get("aliases", []), list)
+                else [],
             }
         )
     return [item for item in judgements if item["keyword"]]

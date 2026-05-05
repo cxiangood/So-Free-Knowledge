@@ -174,6 +174,20 @@ sofree-knowledge --output-dir . lingo upsert --no-remote --keyword "北极星指
 sofree-knowledge --output-dir . lingo delete --no-remote --keyword "北极星指标"
 ```
 
+Weekly auto-mining pipeline:
+
+```bash
+sofree-knowledge --env-file ../So-Free-Knowledge/.env --output-dir . lingo auto-sync --recent-days 7 --min-run-interval-days 7
+```
+
+This command stitches the full flow together:
+
+1. Collect recent chat messages.
+2. Run `token_classify` keyword mining with optional analyzer/classifier stages.
+3. Extract keyword contexts from messages.
+4. Ask the built-in LLM/OpenClaw-style judge which candidates should become new lingo entries.
+5. Batch sync publishable entries into local store and Feishu Lingo.
+
 ## Personal Assistant
 
 Recommended final usage for OpenClaw scheduling:
