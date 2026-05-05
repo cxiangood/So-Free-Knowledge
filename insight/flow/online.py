@@ -5,6 +5,8 @@ import logging
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
+from utils import get_config_bool, get_config_float, get_config_int, get_config_str
+
 from ..comm.listen import MessageEventBus, OpenAPIMessageListener, TOPIC_MESSAGE_RECEIVED, resolve_listener_credentials
 from .engine import Engine, EngineConfig
 
@@ -13,28 +15,29 @@ LOGGER = logging.getLogger(__name__)
 
 @dataclass(slots=True)
 class OnlineConfig:
-    env_file: str = ""
-    event_types: str = "im.message.receive_v1"
-    compact: bool = False
-    output_dir: str = "outputs/local_pipeline"
-    state_dir: str = "outputs/local_pipeline/state"
-    chat_history_path: str = "outputs/local_pipeline/state/chat_message_store.json"
-    chat_history_limit: int = 100
-    context_window_size: int = 20
-    detect_threshold: float = 40.0
-    task_push_enabled: bool = False
+    env_file: str = get_config_str("insight.env_file", "")
+    event_types: str = get_config_str("insight.event_types", "im.message.receive_v1")
+    compact: bool = get_config_bool("insight.compact", False)
+    output_dir: str = get_config_str("insight.output_dir", "outputs/local_pipeline")
+    state_dir: str = get_config_str("insight.state_dir", "outputs/local_pipeline/state")
+    chat_history_path: str = get_config_str("insight.chat_history_path", "outputs/local_pipeline/state/chat_message_store.json")
+    chat_history_limit: int = get_config_int("insight.chat_history_limit", 100)
+    context_window_size: int = get_config_int("insight.context_window_size", 20)
+    detect_threshold: float = get_config_float("insight.detect_threshold", 40.0)
+    task_push_enabled: bool = get_config_bool("insight.task_push_enabled", False)
     task_push_chat_id: str = ""
-    step_trace_enabled: bool = True
-    rag_enabled: bool = True
-    rag_top_k: int = 5
-    rag_min_score: float = 0.35
-    rag_embed_model: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
-    observe_auto_reply_enabled: bool = True
-    observe_ferment_threshold: float = 4.0
-    observe_logic1_base: float = 1.0
-    observe_logic2_base: float = 1.5
-    observe_logic3_base: float = 2.0
-    observe_force_non_observe_on_pop: bool = True
+    step_trace_enabled: bool = get_config_bool("insight.step_trace_enabled", True)
+    rag_enabled: bool = get_config_bool("insight.rag_enabled", True)
+    rag_top_k: int = get_config_int("insight.rag_top_k", 5)
+    rag_min_score: float = get_config_float("insight.rag_min_score", 0.35)
+    rag_embed_model: str = get_config_str("insight.rag_embed_model", "BAAI/bge-large-zh")
+    observe_auto_reply_enabled: bool = get_config_bool("insight.observe_auto_reply_enabled", True)
+    observe_ferment_threshold: float = get_config_float("insight.observe_ferment_threshold", 4.0)
+    observe_logic1_base: float = get_config_float("insight.observe_logic1_base", 1.0)
+    observe_logic2_base: float = get_config_float("insight.observe_logic2_base", 1.5)
+    observe_logic3_base: float = get_config_float("insight.observe_logic3_base", 2.0)
+    observe_force_non_observe_on_pop: bool = get_config_bool("insight.observe_force_non_observe_on_pop", True)
+    max_workers: int = get_config_int("insight.online.max_workers", 8)
 
 
 def start(config: OnlineConfig | None = None) -> None:
@@ -66,7 +69,8 @@ def start(config: OnlineConfig | None = None) -> None:
     )
 
     # 初始化线程池实现异步消息处理，避免阻塞WebSocket线程
-    executor = ThreadPoolExecutor(max_workers=8, thread_name_prefix="msg-worker")
+    worker_count = max(1, int(cfg.max_workers or 1))
+    executor = ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="msg-worker")
 
     # 注册进程退出钩子，平滑关闭线程池，等待任务完成
     def _shutdown_executor():
@@ -94,7 +98,7 @@ def start(config: OnlineConfig | None = None) -> None:
         compact=cfg.compact,
         event_types=cfg.event_types,
     )
-    LOGGER.info("Online pipeline started with async message processing (8 workers)")
+    LOGGER.info("Online pipeline started with async message processing (%s workers)", worker_count)
     listener.start()
 
 

@@ -1,0 +1,57 @@
+insight:
+  env_file: ".env"
+  event_types: "im.message.receive_v1"
+  compact: false
+  output_dir: "outputs/local_pipeline"
+  state_dir: "outputs/local_pipeline/state"
+  chat_history_path: "outputs/local_pipeline/state/chat_message_store.json"
+  chat_history_limit: 100
+  context_window_size: 10
+  detect_threshold: 40.0
+  task_push_enabled: true
+  step_trace_enabled: true
+  rag_enabled: true
+  rag_top_k: 5
+  rag_min_score: 0.35
+  rag_embed_model: "BAAI/bge-large-zh"
+  observe_auto_reply_enabled: true
+  observe_ferment_threshold: 4.0
+  observe_logic1_base: 1.0
+  observe_logic2_base: 1.5
+  observe_logic3_base: 2.0
+  observe_force_non_observe_on_pop: true
+
+  logging:
+    app_name: "INSIGHT"
+    quiet: true
+
+  online:
+    max_workers: 8
+
+  offline:
+    messages_file: "message_archive/20260427T043305Z/messages.jsonl"
+
+  prompt:
+    yaml_path: "insight/prompt/prompts.yaml"
+
+  llm:
+    detect:
+      max_tokens: 64
+      temperature: 0.0
+      top_p: 0.1
+      thinking_type: "disabled"
+    lift:
+      max_tokens: 2048
+      temperature: 0.0
+      top_p: 0.1
+      thinking_type: "disabled"
+    route:
+      max_tokens: 256
+      temperature: 0.0
+      top_p: 0.1
+      thinking_type: "disabled"
+    observe_qa:
+      max_tokens: 64
+      temperature: 0.0
+      top_p: 0.1
+      thinking_type: "disabled"

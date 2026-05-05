@@ -5,6 +5,7 @@ import re
 from typing import Any
 
 import llm.client as llm_client
+from utils import get_config_float, get_config_int, get_config_str
 
 from ..prompt import get_prompt
 from ..shared.models import LiftedCard
@@ -97,7 +98,13 @@ def _build_default_parts(current_line: str) -> dict[str, Any]:
 
 
 def _try_llm_parts(*, current_line: str, context_lines: list[str]) -> dict[str, Any] | None:
-    config = llm_client.LLMConfig.from_env(max_tokens=2048, temperature=0.0, top_p=0.1, extra_body={"thinking": {"type": "disabled"}})
+    thinking_type = get_config_str("insight.llm.lift.thinking_type", "disabled").strip()
+    config = llm_client.LLMConfig.from_env(
+        max_tokens=get_config_int("insight.llm.lift.max_tokens", 2048),
+        temperature=get_config_float("insight.llm.lift.temperature", 0.0),
+        top_p=get_config_float("insight.llm.lift.top_p", 0.1),
+        extra_body={"thinking": {"type": thinking_type}} if thinking_type else None,
+    )
     if config.missing_fields():
         return None
     try:

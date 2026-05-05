@@ -4,36 +4,38 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from utils import get_config_bool, get_config_float, get_config_int, get_config_str
+
 from ..msg.parse import load_plain_messages_from_archive, plain_message_to_event
 from .engine import Engine, EngineConfig
 
 
-DEFAULT_MESSAGES_FILE = Path("message_archive/20260427T043305Z/messages.jsonl")
+DEFAULT_MESSAGES_FILE = Path(get_config_str("insight.offline.messages_file", "message_archive/20260427T043305Z/messages.jsonl"))
 
 
 @dataclass(slots=True)
 class OfflineConfig:
     messages_file: str | Path = DEFAULT_MESSAGES_FILE
-    output_dir: str | Path = "outputs/local_pipeline"
-    state_dir: str | Path = "outputs/local_pipeline/state"
-    chat_history_path: str | Path = "outputs/local_pipeline/state/chat_message_store.json"
-    chat_history_limit: int = 100
-    context_window_size: int = 20
-    detect_threshold: float = 40.0
-    task_push_enabled: bool = False
+    output_dir: str | Path = get_config_str("insight.output_dir", "outputs/local_pipeline")
+    state_dir: str | Path = get_config_str("insight.state_dir", "outputs/local_pipeline/state")
+    chat_history_path: str | Path = get_config_str("insight.chat_history_path", "outputs/local_pipeline/state/chat_message_store.json")
+    chat_history_limit: int = get_config_int("insight.chat_history_limit", 100)
+    context_window_size: int = get_config_int("insight.context_window_size", 20)
+    detect_threshold: float = get_config_float("insight.detect_threshold", 40.0)
+    task_push_enabled: bool = get_config_bool("insight.task_push_enabled", False)
     task_push_chat_id: str = ""
-    env_file: str = ""
-    step_trace_enabled: bool = True
-    rag_enabled: bool = True
-    rag_top_k: int = 5
-    rag_min_score: float = 0.35
-    rag_embed_model: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
-    observe_auto_reply_enabled: bool = True
-    observe_ferment_threshold: float = 4.0
-    observe_logic1_base: float = 1.0
-    observe_logic2_base: float = 1.5
-    observe_logic3_base: float = 2.0
-    observe_force_non_observe_on_pop: bool = True
+    env_file: str = get_config_str("insight.env_file", "")
+    step_trace_enabled: bool = get_config_bool("insight.step_trace_enabled", True)
+    rag_enabled: bool = get_config_bool("insight.rag_enabled", True)
+    rag_top_k: int = get_config_int("insight.rag_top_k", 5)
+    rag_min_score: float = get_config_float("insight.rag_min_score", 0.35)
+    rag_embed_model: str = get_config_str("insight.rag_embed_model", "BAAI/bge-large-zh")
+    observe_auto_reply_enabled: bool = get_config_bool("insight.observe_auto_reply_enabled", True)
+    observe_ferment_threshold: float = get_config_float("insight.observe_ferment_threshold", 4.0)
+    observe_logic1_base: float = get_config_float("insight.observe_logic1_base", 1.0)
+    observe_logic2_base: float = get_config_float("insight.observe_logic2_base", 1.5)
+    observe_logic3_base: float = get_config_float("insight.observe_logic3_base", 2.0)
+    observe_force_non_observe_on_pop: bool = get_config_bool("insight.observe_force_non_observe_on_pop", True)
 
 
 def run(config: OfflineConfig | None = None) -> dict[str, Any]:

@@ -5,6 +5,7 @@ import re
 from dataclasses import dataclass
 
 import llm.client as llm_client
+from utils import get_config_float, get_config_int, get_config_str
 
 from ..prompt import get_prompt
 
@@ -74,11 +75,12 @@ def _rule_value_score(content: str) -> float:
 
 
 def _detect_with_llm(*, context_lines: list[str], current_line: str) -> float | None:
+    thinking_type = get_config_str("insight.llm.detect.thinking_type", "disabled").strip()
     config = llm_client.LLMConfig.from_env(
-        max_tokens=64,
-        temperature=0.0,
-        top_p=0.1,
-        extra_body={"thinking": {"type": "disabled"}},
+        max_tokens=get_config_int("insight.llm.detect.max_tokens", 64),
+        temperature=get_config_float("insight.llm.detect.temperature", 0.0),
+        top_p=get_config_float("insight.llm.detect.top_p", 0.1),
+        extra_body={"thinking": {"type": thinking_type}} if thinking_type else None,
     )
     if config.missing_fields():
         return None

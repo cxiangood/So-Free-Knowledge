@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from utils import get_config_path
 
 
 class PromptNotFoundError(KeyError):
@@ -76,7 +77,7 @@ class PromptStore:
         return prompts
 
 
-_DEFAULT_YAML_PATH = Path(__file__).with_name("prompts_compact.yaml")
+_DEFAULT_YAML_PATH = get_config_path("insight.prompt.yaml_path", Path(__file__).with_name("prompts.yaml"))
 _DEFAULT_STORE = PromptStore(yaml_path=_DEFAULT_YAML_PATH)
 
 
