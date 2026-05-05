@@ -164,20 +164,10 @@ sofree-knowledge lingo-write --judgements-file ./ai_review_judgements.json --no-
 
 #### 知识发现与词典同步
 ```bash
-# 从聊天记录中抽取关键词上下文
-sofree-knowledge lingo extract-contexts --keywords "关键词1,关键词2" --messages-file ./messages.json
 
 # 从本地词典文件批量同步到本地+飞书Lingo
 sofree-knowledge lingo sync-from-file --input-file ./dictionary.json
 ```
-
-#### 困惑检测与响应
-```bash
-# 从聊天记录中检测困惑候选
-sofree-knowledge confused detect-candidates --messages-file ./messages.json
-```
-
----
 
 ## 🌟 项目亮点
 1. **完整闭环**：实现了知识发现→结构化→分发→反馈→存储 的完整运营闭环，不仅能把信息变成知识，还能确保知识被有效利用和持续优化
