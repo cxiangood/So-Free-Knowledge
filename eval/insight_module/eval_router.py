@@ -1,15 +1,35 @@
 """
-路由模块测试：路由准确率
+路由模块评估：路由准确率
+直接读取全链路trace结果文件进行评估，无需运行模块
 """
+import json
 from typing import List, Dict, Any
 from eval_utils import TestCase, BaseModuleEvaluator, save_metric_result
-from insight.core.route import route_cards
-from insight.core.lift import lift_candidates
-from insight.core.detect import DetectionResult
+from tqdm import tqdm
 
 class RouterEvaluator(BaseModuleEvaluator):
-    def __init__(self, test_cases: List[TestCase]):
+    def __init__(self, test_cases: List[TestCase], trace_file_path: str = "outputs/insight_module_eval/full_pipeline_trace.jsonl"):
         super().__init__(test_cases)
+        self.trace_file_path = trace_file_path
+        # 预加载所有trace结果
+        self.trace_results = self._load_trace_results()
+
+    def _load_trace_results(self) -> Dict[str, Any]:
+        """加载全链路trace结果，返回case_id到完整trace数据的映射"""
+        trace_map = {}
+        try:
+            with open(self.trace_file_path, 'r', encoding='utf-8') as f:
+                for line in tqdm(f, desc="加载路由trace结果"):
+                    line = line.strip()
+                    if not line:
+                        continue
+                    data = json.loads(line)
+                    case_id = data.get("case_id")
+                    if case_id:
+                        trace_map[case_id] = data
+        except FileNotFoundError:
+            print(f"警告：trace文件 {self.trace_file_path} 不存在，将使用空结果")
+        return trace_map
 
     def parse_expected_route(self, expected_target_pool: str) -> str:
         """解析预期路由目标"""
@@ -20,21 +40,27 @@ class RouterEvaluator(BaseModuleEvaluator):
     def run(self) -> Dict[str, Any]:
         correct_routes = 0
         route_confusion = {}  # 统计错误路由的分布
+        missing_cases = 0
 
-        for case in self.test_cases:
+        for case in tqdm(self.test_cases, desc="评估路由模块"):
             expected_route = self.parse_expected_route(case.expected_target_pool)
 
-            # 构造消息列表
-            messages = case.conversation + [case.trigger_message]
-            # 调用语义升维模块
-            lift_result = lift_candidates(messages)
-            if not lift_result.cards:
-                actual_route = 'finalize'
+            # 从trace结果中读取实际路由
+            trace_data = self.trace_results.get(case.case_id)
+            if trace_data is None or 'route' not in trace_data:
+                missing_cases += 1
+                actual_route = 'missing'
             else:
-                # 调用路由模块
-                route_result = route_cards(lift_result.cards)
-                actual_route = route_result[0].target if route_result else 'finalize'
-            actual_route = actual_route.lower()
+                route_result = trace_data['route']
+                if route_result is None:
+                    decisions = []
+                else:
+                    decisions = route_result.get('decisions', [])
+                if not decisions:
+                    actual_route = 'finalize'
+                else:
+                    # 取第一个路由决策
+                    actual_route = decisions[0].get('target_pool', 'finalize').lower()
 
             # 判断是否正确
             is_correct = expected_route == actual_route
@@ -55,13 +81,16 @@ class RouterEvaluator(BaseModuleEvaluator):
             })
 
         # 计算指标
-        accuracy = correct_routes / len(self.test_cases) if self.test_cases else 0
+        valid_cases = len(self.test_cases) - missing_cases
+        accuracy = correct_routes / valid_cases if valid_cases > 0 else 0
 
         result = {
             "score": self.calculate_score(accuracy),
             "total_cases": len(self.test_cases),
+            "valid_cases": valid_cases,
+            "missing_cases": missing_cases,
             "correct_routes": correct_routes,
-            "incorrect_routes": len(self.test_cases) - correct_routes,
+            "incorrect_routes": valid_cases - correct_routes,
             "accuracy": round(accuracy, 4),
             "route_confusion": route_confusion,
             "details": self.results
@@ -75,11 +104,12 @@ class RouterEvaluator(BaseModuleEvaluator):
         return accuracy * 100
 
 if __name__ == "__main__":
-    from utils import load_test_cases
-    test_cases = load_test_cases()
-    tester = RouterTester(test_cases)
-    result = tester.run()
+    from eval_utils import load_eval_cases
+    test_cases = load_eval_cases()
+    evaluator = RouterEvaluator(test_cases)
+    result = evaluator.run()
     print(f"路由模块得分: {result['score']:.2f}/100")
+    print(f"总用例数: {result['total_cases']}, 有效用例: {result['valid_cases']}, 缺失用例: {result['missing_cases']}")
     print(f"路由准确率: {result['accuracy']:.4f}")
     if result['route_confusion']:
         print("错误路由分布:", result['route_confusion'])

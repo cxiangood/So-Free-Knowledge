@@ -15,6 +15,9 @@ from eval_router import RouterEvaluator
 from eval_observe import ObserveEvaluator
 from eval_rag import RAGEvaluator
 
+# 全链路trace结果文件路径（与run_full_pipeline_trace.py输出保持一致）
+TRACE_FILE_PATH = "outputs/insight_module_eval/insight_full_pipeline_chat_test_2.jsonl"
+
 def main():
     print("=" * 60)
     print("开始Insight模块级评估")
@@ -38,7 +41,7 @@ def main():
 
     for module_name, evaluator_class in evaluators:
         print(f"\n2. 评估{module_name}...")
-        evaluator = evaluator_class(eval_cases)
+        evaluator = evaluator_class(eval_cases, trace_file_path=TRACE_FILE_PATH)
         result = evaluator.run()
         all_results[module_name] = result
         print(f"   {module_name}得分: {result['score']:.2f}/100")

@@ -18,19 +18,30 @@ class TestCase:
     preconditions: str
     conversation: List[str]
     round_count: int
-    trigger_message: str
     expected_detect_score_min: int
     expected_detect_score_max: int
     expected_path: str
     expected_cards: str
     expected_target_pool: str
+    # 新增语义升维预期字段
+    expected_title: str
+    expected_summary: str
+    expected_problem: str
+    expected_suggestion: str
+    expected_participants: List[str]
+    expected_times: str
+    expected_locations: str
+    expected_tags: List[str]
+    expected_decision_signals: Dict[str, Any]
+    expected_missing_fields: List[str]
+    # 原有字段
     status_assertions: str
     engine_result_assertions: str
     failure_assertions: str
     automation_assertions: str
     remark: str
 
-def load_eval_cases(csv_path: str = "D:\\MasterDegreeCandidate\\Projects\\Feishu Competition\\So-Free-Knowledge\\datas\\chat_test.csv") -> List[TestCase]:
+def load_eval_cases(csv_path: str = "D:\\MasterDegreeCandidate\\Projects\\Feishu Competition\\So-Free-Knowledge\\datas\\chat_test_2.csv") -> List[TestCase]:
     """加载评估用例"""
     test_cases = []
     with open(csv_path, 'r', encoding='utf-8-sig') as f:
@@ -42,9 +53,7 @@ def load_eval_cases(csv_path: str = "D:\\MasterDegreeCandidate\\Projects\\Feishu
             for line in row['连续对话（至少10轮）'].split('\n'):
                 line = line.strip()
                 if not line:
-                    continue
-                # 匹配并移除开头的数字序号 + 点号 + 空格格式
-                line = re.sub(r'^\d+\.\s*', '', line)
+                    continue           
                 conversation.append(line)
 
             # 解析预期detect_score范围
@@ -53,9 +62,27 @@ def load_eval_cases(csv_path: str = "D:\\MasterDegreeCandidate\\Projects\\Feishu
                 min_score = 0
                 max_score = 100
             else:
-                score_range = score_str.split('-')
+                # 清洗字符串，只保留数字、点号和分隔符
+                import re
+                score_str_clean = re.sub(r'[^\d.-]', '-', score_str)
+                score_range = [s for s in score_str_clean.split('-') if s.strip()]
                 min_score = int(float(score_range[0])) if len(score_range) > 0 else 0
-                max_score = int(float(score_range[1])) if len(score_range) > 1 else 100
+                max_score = int(float(score_range[1])) if len(score_range) > 1 else min_score if len(score_range) > 0 else 100
+
+            # 解析列表类型字段
+            expected_participants = eval(row.get('预期participants', '[]').strip())
+            
+            expected_tags = eval(row.get('预期tags', '[]').strip())
+            
+            expected_missing_fields = eval(row.get('预期missing_fields', '[]').strip())
+        
+            # 解析JSON类型字段
+            expected_decision_signals = {}
+            if row.get('预期decision_signals_json', '').strip():
+                try:
+                    expected_decision_signals = json.loads(row['预期decision_signals_json'])
+                except:
+                    pass
 
             test_case = TestCase(
                 case_id=row['用例ID'],
@@ -66,12 +93,23 @@ def load_eval_cases(csv_path: str = "D:\\MasterDegreeCandidate\\Projects\\Feishu
                 preconditions=row['前置条件'],
                 conversation=conversation,
                 round_count=int(row['对话轮数']),
-                trigger_message=row['触发消息'],
                 expected_detect_score_min=min_score,
                 expected_detect_score_max=max_score,
                 expected_path=row['预期图路径'],
                 expected_cards=row['预期cards字段'],
                 expected_target_pool=row['预期decisions/target_pool'],
+                # 新增语义升维预期字段
+                expected_title=row.get('预期title', '').strip(),
+                expected_summary=row.get('预期summary', '').strip(),
+                expected_problem=row.get('预期problem', '').strip(),
+                expected_suggestion=row.get('预期suggestion', '').strip(),
+                expected_participants=expected_participants,
+                expected_times=row.get('预期times', '').strip(),
+                expected_locations=row.get('预期locations', '').strip(),
+                expected_tags=expected_tags,
+                expected_decision_signals=expected_decision_signals,
+                expected_missing_fields=expected_missing_fields,
+                # 原有字段
                 status_assertions=row['状态字段断言'],
                 engine_result_assertions=row['EngineResult断言'],
                 failure_assertions=row['失败/告警断言'],
