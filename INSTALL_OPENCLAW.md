@@ -44,12 +44,18 @@ cd So-Free-Knowledge
 
 ## Step 2 - 安装依赖
 
-先安装项目依赖，再安装 CLI。
+OpenClaw / Hermes 场景里，优先只安装 `sofree-knowledge-cli`。
+
+不要先执行仓库根目录的 `pip install -r requirements.txt`。那个文件会安装 `torch`、`torchvision`、`transformers`、`sentence-transformers` 等较重依赖；对于当前这份安装说明覆盖的 CLI 能力，这些并不是必需项，而且在 OpenClaw / Hermes 环境里通常安装慢、体积大、还容易和宿主环境已有依赖冲突。
+
+这份安装说明默认只覆盖当前真实可用的 CLI 流程，因此只安装 CLI 本身：
 
 ```bash
-pip install -r requirements.txt
+pip install httpx>=0.27 jieba==0.42.1
 pip install -e ./sofree-knowledge-cli
 ```
+
+只有当用户明确要求运行依赖根项目模型栈的能力，并且你已经确认必须使用仓库根目录依赖时，才考虑安装 `requirements.txt`。
 
 安装失败就停止。
 
