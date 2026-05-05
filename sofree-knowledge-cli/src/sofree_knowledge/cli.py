@@ -93,8 +93,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output-dir", default=".", help="Archive and policy root directory.")
     parser.add_argument("--token-file", default="", help="Optional user token file path.")
     parser.add_argument("--user-open-id", default="", help="Optional user scope. Runtime state will be isolated under output-dir/users/<open_id>.")
-    parser.add_argument("--log-level", default="", help="Logging level. Defaults to SOFREE_LOG_LEVEL or INFO.")
-    parser.add_argument("--log-file", default="", help="Optional path for persistent logs. Defaults to SOFREE_LOG_FILE.")
+    parser.add_argument("--log-level", default="", help="Logging level. Defaults to config.yaml logging.level.")
+    parser.add_argument("--log-file", default="", help="Optional path for persistent logs. Defaults to config.yaml logging.log_file.")
     parser.add_argument("--quiet", action="store_true", help="Disable terminal logs; file logs still work when --log-file is set.")
     subparsers = parser.add_subparsers(dest="command")
 

@@ -27,7 +27,7 @@ def _with_offline_access(scope: str) -> str:
 def request_device_authorization(scope: str) -> dict[str, Any]:
     app_id, app_secret = get_app_credentials()
     if not app_id or not app_secret:
-        raise MissingFeishuConfigError("FEISHU_APP_ID and FEISHU_APP_SECRET are required.")
+        raise MissingFeishuConfigError("APP_ID and SECRET_ID are required.")
 
     resolved_scope = _with_offline_access(scope)
     basic_auth = base64.b64encode(f"{app_id}:{app_secret}".encode("utf-8")).decode("ascii")
@@ -71,7 +71,7 @@ def poll_device_token(
 ) -> dict[str, Any]:
     app_id, app_secret = get_app_credentials()
     if not app_id or not app_secret:
-        raise MissingFeishuConfigError("FEISHU_APP_ID and FEISHU_APP_SECRET are required.")
+        raise MissingFeishuConfigError("APP_ID and SECRET_ID are required.")
 
     deadline = time.time() + max(1, int(expires_in))
     current_interval = max(1, int(interval))

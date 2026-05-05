@@ -98,11 +98,11 @@ def _build_default_parts(current_line: str) -> dict[str, Any]:
 
 
 def _try_llm_parts(*, current_line: str, context_lines: list[str]) -> dict[str, Any] | None:
-    thinking_type = get_config_str("insight.llm.lift.thinking_type", "disabled").strip()
+    thinking_type = get_config_str("insight.llm.lift.thinking_type").strip()
     config = llm_client.LLMConfig.from_env(
-        max_tokens=get_config_int("insight.llm.lift.max_tokens", 2048),
-        temperature=get_config_float("insight.llm.lift.temperature", 0.0),
-        top_p=get_config_float("insight.llm.lift.top_p", 0.1),
+        max_tokens=get_config_int("insight.llm.lift.max_tokens"),
+        temperature=get_config_float("insight.llm.lift.temperature"),
+        top_p=get_config_float("insight.llm.lift.top_p"),
         extra_body={"thinking": {"type": thinking_type}} if thinking_type else None,
     )
     if config.missing_fields():

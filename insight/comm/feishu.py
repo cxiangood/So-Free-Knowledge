@@ -2,13 +2,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from utils import getenv, load_env_file as _load_env_file
+from utils import getenv_required, load_env_file as _load_env_file
 
 
 def resolve_sender_credentials() -> tuple[str, str]:
-    app_id = (getenv("CARD_SENDER_APP_ID", "") or getenv("FEISHU_APP_ID", "")).strip()
-    app_secret = (getenv("CARD_SENDER_APP_SECRET", "") or getenv("FEISHU_APP_SECRET", "")).strip()
-    return app_id, app_secret
+    return getenv_required("APP_ID"), getenv_required("SECRET_ID")
 
 
 def load_env_file(path: str = "") -> None:

@@ -34,7 +34,7 @@ def build_authorization_url(
 ) -> str:
     app_id, _ = get_app_credentials()
     if not app_id:
-        raise MissingFeishuConfigError("FEISHU_APP_ID is required to build an authorization URL.")
+        raise MissingFeishuConfigError("APP_ID is required to build an authorization URL.")
     params = {
         "client_id": app_id,
         "redirect_uri": redirect_uri,
@@ -165,7 +165,7 @@ def ensure_user_auth(
 def get_app_access_token() -> str:
     app_id, app_secret = get_app_credentials()
     if not app_id or not app_secret:
-        raise MissingFeishuConfigError("FEISHU_APP_ID and FEISHU_APP_SECRET are required.")
+        raise MissingFeishuConfigError("APP_ID and SECRET_ID are required.")
     response = httpx.post(
         "https://open.feishu.cn/open-apis/auth/v3/app_access_token/internal",
         json={"app_id": app_id, "app_secret": app_secret},

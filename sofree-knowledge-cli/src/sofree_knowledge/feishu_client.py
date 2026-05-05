@@ -264,7 +264,7 @@ class FeishuClient:
     def get_app_access_token(self) -> str:
         app_id, app_secret = get_app_credentials()
         if not app_id or not app_secret:
-            raise MissingFeishuConfigError("FEISHU_APP_ID and FEISHU_APP_SECRET are required.")
+            raise MissingFeishuConfigError("APP_ID and SECRET_ID are required.")
         try:
             response = httpx.post(
                 f"{self.base_url}/open-apis/auth/v3/app_access_token/internal",
@@ -382,7 +382,7 @@ class FeishuClient:
             return self._tenant_access_token
         app_id, app_secret = get_app_credentials()
         if not app_id or not app_secret:
-            raise MissingFeishuConfigError("FEISHU_APP_ID and FEISHU_APP_SECRET are required.")
+            raise MissingFeishuConfigError("APP_ID and SECRET_ID are required.")
         try:
             response = httpx.post(
                 f"{self.base_url}/open-apis/auth/v3/tenant_access_token/internal",

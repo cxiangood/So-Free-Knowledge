@@ -77,7 +77,7 @@ class PromptStore:
         return prompts
 
 
-_DEFAULT_YAML_PATH = get_config_path("insight.prompt.yaml_path", Path(__file__).with_name("prompts.yaml"))
+_DEFAULT_YAML_PATH = get_config_path("insight.prompt.yaml_path")
 _DEFAULT_STORE = PromptStore(yaml_path=_DEFAULT_YAML_PATH)
 
 

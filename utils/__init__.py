@@ -1,4 +1,4 @@
-from .env import getenv, EnvManager, load_env_file
+from .env import getenv, getenv_required, EnvManager, load_env_file
 from .logging_config import configure_logging, get_logger, normalize_log_level
 from .config import (
     get_config_bool,
@@ -14,6 +14,7 @@ from .config import (
 
 __all__ = [
     "getenv",
+    "getenv_required",
     "EnvManager",
     "load_env_file",
     "load_config",

@@ -48,8 +48,10 @@ def configure_logging(
     call this function once so stdout remains reserved for command output.
     """
 
-    resolved_level = normalize_log_level(level or os.getenv("SOFREE_LOG_LEVEL") or "INFO")
-    resolved_log_file = str(log_file or os.getenv("SOFREE_LOG_FILE") or "").strip()
+    from .config import get_config_str
+
+    resolved_level = normalize_log_level(level if level is not None else get_config_str("logging.level"))
+    resolved_log_file = str(log_file if log_file is not None else get_config_str("logging.log_file")).strip()
     root_logger = logging.getLogger()
 
     if force:

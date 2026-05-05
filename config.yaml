@@ -1,3 +1,7 @@
+logging:
+  level: "INFO"
+  log_file: "logs/sofree.log"
+
 insight:
   env_file: ".env"
   event_types: "im.message.receive_v1"
@@ -9,6 +13,10 @@ insight:
   context_window_size: 10
   detect_threshold: 40.0
   task_push_enabled: true
+  task_push_receive_id_type: "open_id"
+  task_push_fallback_receive_id_type: "open_id"
+  task_push_bootstrap_on_empty: true
+  task_push_bootstrap_max_chats: 200
   step_trace_enabled: true
   rag_enabled: true
   rag_top_k: 5

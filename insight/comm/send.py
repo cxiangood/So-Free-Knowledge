@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 import re
 from typing import Any
-from utils import getenv
+from utils import get_config_str, getenv, getenv_required
 
 from ..shared.models import LiftedCard
 from ..shared.utils import now_utc_iso
@@ -97,21 +97,21 @@ def _load_feishu_client_class():
 def _temporary_feishu_credentials(app_id: str, app_secret: str):
     import os
 
-    old_app_id = getenv("FEISHU_APP_ID")
-    old_app_secret = getenv("FEISHU_APP_SECRET")
-    os.environ["FEISHU_APP_ID"] = app_id
-    os.environ["FEISHU_APP_SECRET"] = app_secret
+    old_app_id = getenv("APP_ID")
+    old_secret_id = getenv("SECRET_ID")
+    os.environ["APP_ID"] = app_id
+    os.environ["SECRET_ID"] = app_secret
     try:
         yield
     finally:
         if old_app_id is None:
-            os.environ.pop("FEISHU_APP_ID", None)
+            os.environ.pop("APP_ID", None)
         else:
-            os.environ["FEISHU_APP_ID"] = old_app_id
-        if old_app_secret is None:
-            os.environ.pop("FEISHU_APP_SECRET", None)
+            os.environ["APP_ID"] = old_app_id
+        if old_secret_id is None:
+            os.environ.pop("SECRET_ID", None)
         else:
-            os.environ["FEISHU_APP_SECRET"] = old_app_secret
+            os.environ["SECRET_ID"] = old_secret_id
 
 
 def build_task_card_payload(card: LiftedCard, *, run_id: str, task_id: str) -> dict[str, Any]:
@@ -408,7 +408,7 @@ def push_task_card(*, config: TaskPushConfig, run_id: str, task_id: str, card: L
             chat_id=chat_id,
             card_payload=payload,
             status="failed",
-            error="missing credentials: CARD_SENDER_APP_ID/CARD_SENDER_APP_SECRET or FEISHU_APP_ID/FEISHU_APP_SECRET",
+            error="missing credentials: APP_ID/SECRET_ID",
         )
     FeishuClient = _load_feishu_client_class()
     try:
@@ -435,6 +435,47 @@ def push_task_card(*, config: TaskPushConfig, run_id: str, task_id: str, card: L
     )
 
 
+def push_task_card_to_receive_id(
+    *,
+    run_id: str,
+    task_id: str,
+    card: LiftedCard,
+    env_file: str,
+    receive_id: str,
+    receive_id_type: str,
+    detail_name: str = "fallback_card",
+) -> TaskPushAttempt:
+    payload = build_task_card_payload(card, run_id=run_id, task_id=task_id)
+    sent = push_message_by_receive_id(
+        receive_id=receive_id,
+        receive_id_type=receive_id_type,
+        msg_type="interactive",
+        content=payload,
+        env_file=env_file,
+    )
+    return TaskPushAttempt(
+        task_id=task_id,
+        run_id=run_id,
+        chat_id=receive_id,
+        card_payload=payload,
+        status=sent.status,
+        message_id=sent.message_id,
+        error=sent.error,
+        details=[
+            {
+                "name": detail_name,
+                "receive_id": receive_id,
+                "receive_id_type": sent.receive_id_type,
+                "status": sent.status,
+                "message_id": sent.message_id,
+                "error": sent.error,
+                "error_code": _extract_error_code(sent.error),
+                "fallback": True,
+            }
+        ],
+    )
+
+
 def push_message_by_receive_id(
     *,
     receive_id: str,
@@ -453,7 +494,7 @@ def push_message_by_receive_id(
         return TextPushResult(
             chat_id=target,
             status="failed",
-            error="missing credentials: CARD_SENDER_APP_ID/CARD_SENDER_APP_SECRET or FEISHU_APP_ID/FEISHU_APP_SECRET",
+            error="missing credentials: APP_ID/SECRET_ID",
             receive_id_type=rid_type,
         )
     FeishuClient = _load_feishu_client_class()
@@ -511,7 +552,7 @@ def push_task_card_to_user_targets(
     any_failed = False
     first_message_id = ""
     failed_rows: list[dict[str, str]] = []
-    target_receive_id_type = (getenv("TASK_PUSH_RECEIVE_ID_TYPE", "user_id") or "user_id").strip()
+    target_receive_id_type = get_config_str("insight.task_push_receive_id_type").strip()
     for audience_name, receive_id, resolve_error_code in targets:
         if receive_id:
             sent = push_message_by_receive_id(
@@ -642,6 +683,7 @@ __all__ = [
     "TextPushResult",
     "build_task_card_payload",
     "push_task_card",
+    "push_task_card_to_receive_id",
     "push_message_by_receive_id",
     "push_task_card_to_user_targets",
     "push_text_message",

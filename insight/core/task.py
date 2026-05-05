@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any
-from utils import getenv
+from utils import get_config_str, getenv_required
 
 from ..comm.identity_map import UserIdentityMap, parse_participants_names
-from ..comm.send import TaskPushAttempt, TaskPushConfig, push_task_card, push_task_card_to_user_targets
+from ..comm.send import TaskPushAttempt, TaskPushConfig, push_task_card_to_receive_id, push_task_card_to_user_targets
 from ..shared.models import LiftedCard, RagHit
 from ..store.state import LocalStateStore
 
@@ -34,13 +34,11 @@ def save_task(
     task_id = store.add_task(card)
     attempt: TaskPushAttempt | None = None
     if push_config.enabled:
+        fallback_id = getenv_required("TASK_PUSH_FALLBACK_RECEIVE_ID")
+        fallback_id_type = get_config_str("insight.task_push_fallback_receive_id_type").strip()
         names = parse_participants_names(card.participants)
         if identity_map is not None and names and source_chat_id:
             targets: list[tuple[str, str, str]] = []
-            fallback_id = str(getenv("TASK_PUSH_FALLBACK_RECEIVE_ID", "")).strip()
-            fallback_id_type = str(getenv("TASK_PUSH_FALLBACK_RECEIVE_ID_TYPE", "")).strip() or str(
-                getenv("TASK_PUSH_RECEIVE_ID_TYPE", "user_id")
-            ).strip()
             for name in names:
                 rid, err = identity_map.resolve_name_in_chat(chat_id=source_chat_id, name=name)
                 if rid:
@@ -58,17 +56,25 @@ def save_task(
                     fallback_receive_id_type=fallback_id_type,
                 )
             else:
-                attempt = TaskPushAttempt(
-                    task_id=task_id,
+                attempt = push_task_card_to_receive_id(
                     run_id=run_id,
-                    chat_id=source_chat_id,
-                    card_payload={},
-                    status="failed",
-                    error="no_resolvable_target_in_participants",
-                    details=[],
+                    task_id=task_id,
+                    card=card,
+                    env_file=push_config.env_file,
+                    receive_id=fallback_id,
+                    receive_id_type=fallback_id_type,
+                    detail_name="fallback_no_resolvable_target",
                 )
         else:
-            attempt = push_task_card(config=push_config, run_id=run_id, task_id=task_id, card=card)
+            attempt = push_task_card_to_receive_id(
+                run_id=run_id,
+                task_id=task_id,
+                card=card,
+                env_file=push_config.env_file,
+                receive_id=fallback_id,
+                receive_id_type=fallback_id_type,
+                detail_name="fallback_default",
+            )
     return TaskHandleResult(task_id=task_id, push_attempt=attempt)
 
 

@@ -47,8 +47,8 @@ def first_env(*names: str) -> str | None:
 
 def get_app_credentials() -> tuple[str | None, str | None]:
     return (
-        first_env("FEISHU_APP_ID", "SOFREE_FEISHU_APP_ID", "LARKSUITE_CLI_APP_ID", "APP_ID"),
-        first_env("FEISHU_APP_SECRET", "SOFREE_FEISHU_APP_SECRET", "LARKSUITE_CLI_APP_SECRET", "APP_SECRET"),
+        first_env("APP_ID"),
+        first_env("SECRET_ID"),
     )
 
 

@@ -6,9 +6,11 @@ from typing import Any
 
 import yaml
 
+from .logging_config import get_logger
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _DEFAULT_CONFIG_PATH = _REPO_ROOT / "config.yaml"
+LOGGER = get_logger(__name__)
 
 
 def _resolve_path(path: str | Path | None = None) -> Path:
@@ -24,7 +26,8 @@ def _resolve_path(path: str | Path | None = None) -> Path:
 def _load_config_cached(path_str: str) -> dict[str, Any]:
     path = Path(path_str)
     if not path.exists():
-        return {}
+        LOGGER.error("Config file is required but missing: %s", path)
+        raise FileNotFoundError(f"Config file is required but missing: {path}")
     raw = yaml.safe_load(path.read_text(encoding="utf-8-sig")) or {}
     if not isinstance(raw, dict):
         raise ValueError(f"Config root must be a mapping: {path}")
@@ -39,45 +42,53 @@ def reload_config() -> None:
     _load_config_cached.cache_clear()
 
 
-def get_config_value(key: str, default: Any = None, *, path: str | Path | None = None) -> Any:
+def get_config_value(key: str, *, path: str | Path | None = None) -> Any:
     current: Any = _load_config_cached(str(_resolve_path(path)))
     for part in str(key or "").split("."):
         if not part:
             continue
         if not isinstance(current, dict) or part not in current:
-            return default
+            LOGGER.error("Required config key is missing: %s", key)
+            raise KeyError(f"Required config key is missing: {key}")
         current = current[part]
+    if current is None or (isinstance(current, str) and not current.strip()):
+        LOGGER.error("Required config key is empty: %s", key)
+        raise ValueError(f"Required config key is empty: {key}")
     return current
 
 
 def get_config_section(key: str, *, path: str | Path | None = None) -> dict[str, Any]:
-    value = get_config_value(key, {}, path=path)
-    return value if isinstance(value, dict) else {}
+    value = get_config_value(key, path=path)
+    if not isinstance(value, dict):
+        LOGGER.error("Required config section is not a mapping: %s", key)
+        raise TypeError(f"Required config section is not a mapping: {key}")
+    return value
 
 
-def get_config_str(key: str, default: str = "", *, path: str | Path | None = None) -> str:
-    value = get_config_value(key, default, path=path)
-    return str(value if value is not None else default)
+def get_config_str(key: str, *, path: str | Path | None = None) -> str:
+    return str(get_config_value(key, path=path))
 
 
-def get_config_int(key: str, default: int = 0, *, path: str | Path | None = None) -> int:
-    value = get_config_value(key, default, path=path)
+def get_config_int(key: str, *, path: str | Path | None = None) -> int:
+    value = get_config_value(key, path=path)
     try:
         return int(value)
     except (TypeError, ValueError):
-        return int(default)
+        LOGGER.error("Required config key must be an integer: %s value=%r", key, value)
+        raise
 
 
-def get_config_float(key: str, default: float = 0.0, *, path: str | Path | None = None) -> float:
-    value = get_config_value(key, default, path=path)
+def get_config_float(key: str, *, path: str | Path | None = None) -> float:
+    value = get_config_value(key, path=path)
     try:
         return float(value)
     except (TypeError, ValueError):
-        return float(default)
+        LOGGER.error("Required config key must be a float: %s value=%r", key, value)
+        raise
 
 
-def get_config_bool(key: str, default: bool = False, *, path: str | Path | None = None) -> bool:
-    value = get_config_value(key, default, path=path)
+def get_config_bool(key: str, *, path: str | Path | None = None) -> bool:
+    value = get_config_value(key, path=path)
     if isinstance(value, bool):
         return value
     if isinstance(value, (int, float)):
@@ -87,12 +98,13 @@ def get_config_bool(key: str, default: bool = False, *, path: str | Path | None 
         return True
     if normalized in {"0", "false", "no", "off"}:
         return False
-    return bool(default)
+    LOGGER.error("Required config key must be a boolean: %s value=%r", key, value)
+    raise ValueError(f"Required config key must be a boolean: {key}")
 
 
-def get_config_path(key: str, default: str | Path = "", *, path: str | Path | None = None) -> Path:
-    value = get_config_value(key, default, path=path)
-    config_path = Path(str(value if value is not None else default)).expanduser()
+def get_config_path(key: str, *, path: str | Path | None = None) -> Path:
+    value = get_config_value(key, path=path)
+    config_path = Path(str(value)).expanduser()
     if not config_path.is_absolute():
         config_path = _REPO_ROOT / config_path
     return config_path

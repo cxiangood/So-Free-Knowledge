@@ -33,26 +33,25 @@ from .trace import trace_finish, trace_node, trace_start
 
 @dataclass(slots=True)
 class EngineConfig:
-    output_dir: str | Path = get_config_str("insight.output_dir", "outputs/local_pipeline")
-    state_dir: str | Path = get_config_str("insight.state_dir", "outputs/local_pipeline/state")
-    chat_history_path: str | Path = get_config_str("insight.chat_history_path", "outputs/local_pipeline/state/chat_message_store.json")
-    chat_history_limit: int = get_config_int("insight.chat_history_limit", 100)
-    context_window_size: int = get_config_int("insight.context_window_size", 20)
-    detect_threshold: float = get_config_float("insight.detect_threshold", 40.0)
-    task_push_enabled: bool = get_config_bool("insight.task_push_enabled", False)
-    task_push_chat_id: str = ""
-    env_file: str = get_config_str("insight.env_file", "")
-    step_trace_enabled: bool = get_config_bool("insight.step_trace_enabled", True)
-    rag_enabled: bool = get_config_bool("insight.rag_enabled", True)
-    rag_top_k: int = get_config_int("insight.rag_top_k", 5)
-    rag_min_score: float = get_config_float("insight.rag_min_score", 0.35)
-    rag_embed_model: str = get_config_str("insight.rag_embed_model", "BAAI/bge-large-zh")
-    observe_auto_reply_enabled: bool = get_config_bool("insight.observe_auto_reply_enabled", True)
-    observe_ferment_threshold: float = get_config_float("insight.observe_ferment_threshold", 4.0)
-    observe_logic1_base: float = get_config_float("insight.observe_logic1_base", 1.0)
-    observe_logic2_base: float = get_config_float("insight.observe_logic2_base", 1.5)
-    observe_logic3_base: float = get_config_float("insight.observe_logic3_base", 2.0)
-    observe_force_non_observe_on_pop: bool = get_config_bool("insight.observe_force_non_observe_on_pop", True)
+    output_dir: str | Path = get_config_str("insight.output_dir")
+    state_dir: str | Path = get_config_str("insight.state_dir")
+    chat_history_path: str | Path = get_config_str("insight.chat_history_path")
+    chat_history_limit: int = get_config_int("insight.chat_history_limit")
+    context_window_size: int = get_config_int("insight.context_window_size")
+    detect_threshold: float = get_config_float("insight.detect_threshold")
+    task_push_enabled: bool = get_config_bool("insight.task_push_enabled")
+    env_file: str = get_config_str("insight.env_file")
+    step_trace_enabled: bool = get_config_bool("insight.step_trace_enabled")
+    rag_enabled: bool = get_config_bool("insight.rag_enabled")
+    rag_top_k: int = get_config_int("insight.rag_top_k")
+    rag_min_score: float = get_config_float("insight.rag_min_score")
+    rag_embed_model: str = get_config_str("insight.rag_embed_model")
+    observe_auto_reply_enabled: bool = get_config_bool("insight.observe_auto_reply_enabled")
+    observe_ferment_threshold: float = get_config_float("insight.observe_ferment_threshold")
+    observe_logic1_base: float = get_config_float("insight.observe_logic1_base")
+    observe_logic2_base: float = get_config_float("insight.observe_logic2_base")
+    observe_logic3_base: float = get_config_float("insight.observe_logic3_base")
+    observe_force_non_observe_on_pop: bool = get_config_bool("insight.observe_force_non_observe_on_pop")
 
 
 @dataclass(slots=True)
@@ -433,7 +432,7 @@ class Engine:
                 store=self.state_store,
                 card=task_card,
                 run_id=self._build_run_id(message),
-                push_config=TaskPushConfig(enabled=self.config.task_push_enabled, chat_id=self.config.task_push_chat_id, env_file=self.config.env_file),
+                push_config=TaskPushConfig(enabled=self.config.task_push_enabled, env_file=self.config.env_file),
                 source_chat_id=message.chat_id,
                 identity_map=self.identity_map,
             )

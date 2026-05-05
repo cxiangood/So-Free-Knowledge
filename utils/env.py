@@ -3,6 +3,10 @@ from pathlib import Path
 from typing import Optional, Any
 from dotenv import load_dotenv
 
+from .logging_config import get_logger
+
+LOGGER = get_logger(__name__)
+
 
 class EnvManager:
     """环境变量管理器，优先从.env文件读取，失败则从系统环境变量读取"""
@@ -56,6 +60,14 @@ def getenv(name: str, default: Any = None) -> Optional[str]:
         环境变量值，如果不存在则返回default
     """
     return env_manager.getenv(name, default)
+
+
+def getenv_required(name: str) -> str:
+    value = env_manager.getenv(name)
+    if value is None or not str(value).strip():
+        LOGGER.error("Required environment variable is missing: %s", name)
+        raise KeyError(f"Required environment variable is missing: {name}")
+    return str(value).strip()
 
 
 def load_env_file(path: str | Path | None, override: bool = False) -> None:

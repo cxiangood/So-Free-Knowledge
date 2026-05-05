@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from threading import RLock
 from typing import Any
-from utils import getenv, load_env_file as _load_env_file
+from utils import getenv_required, load_env_file as _load_env_file
 
 from ..msg.parse import parse_message_event, should_accept_message_event
 from ..msg.types import MessageEvent
@@ -124,18 +124,7 @@ def load_listener_env(path: str = "") -> None:
 
 def resolve_listener_credentials(env_file: str = "") -> tuple[str, str]:
     load_listener_env(env_file)
-    app_id = (_safe_text(getenv("LISTENER_APP_ID")) or _safe_text(getenv("SOFREE_FEISHU_APP_ID")) or _safe_text(getenv("FEISHU_APP_ID")))
-    app_secret = (
-        _safe_text(getenv("LISTENER_APP_SECRET"))
-        or _safe_text(getenv("SOFREE_FEISHU_APP_SECRET"))
-        or _safe_text(getenv("FEISHU_APP_SECRET"))
-    )
-    if not app_id or not app_secret:
-        raise ValueError(
-            "Missing listener credentials. Required: LISTENER_APP_ID/SECRET "
-            "or SOFREE_FEISHU_APP_ID/SECRET or FEISHU_APP_ID/SECRET."
-        )
-    return app_id, app_secret
+    return _safe_text(getenv_required("APP_ID")), _safe_text(getenv_required("SECRET_ID"))
 
 
 def parse_event_types(event_types: str | list[str] | tuple[str, ...] | set[str] | None) -> set[str]:
