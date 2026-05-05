@@ -1,6 +1,8 @@
 ﻿from sofree_knowledge.assistant_online import collect_online_personal_inputs
 
 
+from sofree_knowledge.assistant_online import _message_mentions_target_user
+from sofree_knowledge.assistant_online import _normalize_message_text
 from sofree_knowledge.feishu_client import FeishuAPIError
 
 
@@ -400,6 +402,36 @@ def test_collect_online_personal_inputs_marks_only_targeted_mentions(monkeypatch
     by_id = {item["message_id"]: item for item in out["messages"]}
     assert by_id["m_target"]["mentions_target_user"] is True
     assert by_id["m_other"]["mentions_target_user"] is False
+
+
+def test_normalize_message_text_prefers_mentions_display_name():
+    message = {
+        "content": "@_user_1 请确认 @_user_2 的排期",
+        "mentions": [
+            {"id": "ou_real_1", "key": "@_user_1", "name": "张三"},
+            {"id": "ou_real_2", "key": "@_user_2", "name": "李四"},
+        ],
+    }
+
+    user_id_to_name: dict[str, str] = {}
+    normalized = _normalize_message_text(message, user_id_to_name)
+
+    assert normalized == "@张三 请确认 @李四 的排期"
+    assert user_id_to_name["ou_real_1"] == "张三"
+    assert user_id_to_name["ou_real_2"] == "李四"
+
+
+def test_message_mentions_target_user_matches_mentions_metadata():
+    message = {
+        "content": "@_user_1 请确认一下",
+        "mentions": [
+            {"id": "ou_target", "key": "@_user_1", "name": "曹林江"},
+        ],
+    }
+
+    assert _message_mentions_target_user(message, {"ou_target"}) is True
+    assert _message_mentions_target_user(message, {"曹林江"}) is True
+    assert _message_mentions_target_user(message, {"ou_other"}) is False
 
 
 def test_collect_online_personal_inputs_skips_system_messages(monkeypatch):
