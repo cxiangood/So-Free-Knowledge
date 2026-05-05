@@ -255,9 +255,10 @@
 
 如果用户还没有完成应用创建、权限申请、发布或安装到组织，这一步先停下，让用户先处理飞书侧配置，再继续后面的安装流程。
 
-## Step 1 - 获取代码
+## Step 1 - 获取/更新代码
 
-优先使用 GitHub 克隆；如果网络环境不稳定，再用 tarball 下载。如果已有仓库，尝试用API更新一下，如果没有更新就跳过。
+如果已有仓库，尝试用API拉取一下最新代码，如果没有更新就跳过。
+优先使用 GitHub 克隆；如果网络环境不稳定，再用 tarball 下载。
 
 ### 方式 1：GitHub 克隆
 
@@ -342,22 +343,21 @@ sofree-knowledge --env-file ./.env auth-status
 
 ## Step 5 - 用户 OAuth 登录
 
-这一部分使用当前 CLI 已实现的设备流登录。
+这一部分使用当前 CLI 已实现的授权链接 + 回调 URL 交换流程。
 
-### 第一次调用：获取授权链接
+### 第一次调用：生成授权链接
 
-启动设备流，但不要让 Agent 自己打开浏览器：
+生成授权链接，并把它发给用户：
 
 ```bash
-sofree-knowledge --env-file ./.env auth login --no-wait
+sofree-knowledge --env-file ./.env auth-url
 ```
 
 stdout 是 JSON。你需要从里面读取：
 
-- `request.verification_uri_complete`
-- `request.device_code`
+- `authorization_url`
 
-把 `request.verification_uri_complete` 用 markdown autolink 形式发给用户，例如：
+把 `authorization_url` 用 markdown autolink 形式发给用户，例如：
 
 ```text
 <https://accounts.feishu.cn/...>
@@ -369,15 +369,15 @@ stdout 是 JSON。你需要从里面读取：
 
 **⚠️ 如果你用用户授权登录：请勿将此机器人分享给他人或拉入群聊中使用 —— 它可能访问你的个人飞书数据。**
 
-### 第二次调用：完成设备流登录
+### 第二次调用：交换回调 URL 或 code
 
-用户确认授权完成后，再执行：
+用户完成授权后，让用户把浏览器最终跳转到的完整回调 URL 发回来，或者直接发回调里的 `code`。然后执行：
 
 ```bash
-sofree-knowledge --env-file ./.env auth login --device-code <device_code>
+sofree-knowledge --env-file ./.env exchange-code "<callback_url_or_code>"
 ```
 
-这里的 `<device_code>` 必须使用第一次调用返回的 `request.device_code`。
+这里的 `<callback_url_or_code>` 可以是完整回调 URL，也可以是其中的 `code`。
 
 如果成功，stdout 会返回 JSON，包含 `ok: true`，以及脱敏后的 token 信息。
 
@@ -468,7 +468,8 @@ sofree-knowledge --help
 查看某个子命令帮助：
 
 ```bash
-sofree-knowledge auth login --help
+sofree-knowledge auth-url --help
+sofree-knowledge exchange-code --help
 sofree-knowledge brief --help
 sofree-knowledge lingo-write --help
 ```

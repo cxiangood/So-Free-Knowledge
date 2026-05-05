@@ -47,7 +47,7 @@ class FeishuClient:
         user_access_token = get_user_access_token(token_file=token_file)
         if require_user_token and not user_access_token:
             raise MissingFeishuConfigError(
-                "Missing Feishu user access token. Run `sofree-knowledge auth login` first."
+                "Missing Feishu user access token. Run `sofree-knowledge auth-url` and `sofree-knowledge exchange-code` first."
             )
         return cls(
             base_url=base_url,
@@ -430,13 +430,15 @@ class FeishuClient:
 
     def refresh_user_access_token(self) -> str:
         if not self.token_file:
-            raise MissingFeishuConfigError("Missing token file for user token refresh. Re-run `sofree-knowledge auth login`.")
+            raise MissingFeishuConfigError(
+                "Missing token file for user token refresh. Re-run `sofree-knowledge auth-url` and `sofree-knowledge exchange-code`."
+            )
         store = TokenStore(token_file=self.token_file)
         token_data = store.load()
         refresh_token = str(token_data.get("refresh_token") or "").strip()
         if not refresh_token:
             raise MissingFeishuConfigError(
-                "Missing Feishu refresh token. Re-run `sofree-knowledge auth login` to refresh authorization."
+                "Missing Feishu refresh token. Re-run `sofree-knowledge auth-url` and `sofree-knowledge exchange-code` to refresh authorization."
             )
         try:
             response = httpx.post(

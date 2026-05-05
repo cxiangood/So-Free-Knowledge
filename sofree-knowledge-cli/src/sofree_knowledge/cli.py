@@ -25,12 +25,9 @@ from .auth import (
     DEFAULT_SCOPE,
     auth_status,
     build_authorization_url,
-    device_login,
     ensure_user_auth,
     exchange_code_for_token,
     init_token,
-    resume_device_login,
-    start_device_login,
 )
 from .config import get_user_access_token, get_user_identity, load_env_file, resolve_env_file
 from .confused_detector import (
@@ -138,19 +135,6 @@ def build_parser() -> argparse.ArgumentParser:
     status = subparsers.add_parser("auth-status", help="Show local Feishu token status.")
     status.add_argument("--token-file", default="")
     status.set_defaults(func=cmd_auth_status)
-
-    auth = subparsers.add_parser("auth", help="Authentication operations.")
-    auth_subparsers = auth.add_subparsers(dest="auth_command")
-
-    auth_login = auth_subparsers.add_parser("login", help="Run Feishu device-flow login.")
-    auth_login.add_argument("--scope", default=DEFAULT_SCOPE)
-    auth_login.add_argument("--token-file", default="")
-    auth_login.add_argument("--no-browser", action="store_true", help="Do not open the verification URL automatically.")
-    auth_login.add_argument("--no-wait", action="store_true", help="Start device flow and return device_code immediately.")
-    auth_login.add_argument("--device-code", default="", help="Resume a previous device-flow login with a device code.")
-    auth_login.add_argument("--interval", type=int, default=5, help="Polling interval used with --device-code.")
-    auth_login.add_argument("--expires-in", type=int, default=240, help="Polling timeout used with --device-code.")
-    auth_login.set_defaults(func=cmd_auth_login)
 
     # Lingo commands
     lingo = subparsers.add_parser("lingo", help="Lingo (glossary) operations.")
@@ -589,28 +573,6 @@ def cmd_auth_status(args: argparse.Namespace) -> dict[str, Any]:
     return result
 
 
-def cmd_auth_login(args: argparse.Namespace) -> dict[str, Any]:
-    prepare_env(args)
-    if str(args.device_code or "").strip():
-        result = resume_device_login(
-            str(args.device_code).strip(),
-            interval=int(args.interval),
-            expires_in=int(args.expires_in),
-            token_file=get_token_file_arg(args),
-        )
-    elif args.no_wait:
-        result = start_device_login(scope=args.scope)
-    else:
-        result = device_login(
-            scope=args.scope,
-            token_file=get_token_file_arg(args),
-            open_browser=not bool(args.no_browser),
-        )
-    result = _attach_auth_profile_bootstrap(args, result)
-    result["ok"] = True
-    return result
-
-
 def prepare_env(args: argparse.Namespace) -> None:
     env_file = resolve_env_file(args.env_file, output_dir=args.output_dir)
     load_env_file(env_file)
@@ -687,7 +649,9 @@ def build_user_feishu_client(args: argparse.Namespace, *, require_token: bool = 
     token_file = get_token_file_arg(args)
     token = get_user_access_token(token_file=token_file)
     if require_token and not token:
-        raise ValueError("Missing Feishu user access token. Run `sofree-knowledge auth login` first.")
+        raise ValueError(
+            "Missing Feishu user access token. Run `sofree-knowledge auth-url` and `sofree-knowledge exchange-code` first."
+        )
     return _instantiate_feishu_client(user_access_token=token, token_file=token_file)
 
 
