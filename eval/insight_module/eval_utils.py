@@ -25,6 +25,7 @@ class TestCase:
     expected_target_pool: str
     # 新增语义升维预期字段
     expected_title: str
+    expected_message_role: str
     expected_summary: str
     expected_problem: str
     expected_suggestion: str
@@ -100,6 +101,7 @@ def load_eval_cases(csv_path: str = "D:\\MasterDegreeCandidate\\Projects\\Feishu
                 expected_target_pool=row['预期decisions/target_pool'],
                 # 新增语义升维预期字段
                 expected_title=row.get('预期title', '').strip(),
+                expected_message_role=row.get('预期message_role', '').strip(),
                 expected_summary=row.get('预期summary', '').strip(),
                 expected_problem=row.get('预期problem', '').strip(),
                 expected_suggestion=row.get('预期suggestion', '').strip(),
@@ -148,7 +150,7 @@ def generate_summary_report(all_results: Dict[str, Any], output_dir: str = "outp
             f.write(f"### {module}\n")
             f.write(f"- 得分: {result.get('score', 0):.2f}/100\n")
             for metric, value in result.items():
-                if metric != 'score':
+                if metric != 'score' and metric != 'details':
                     f.write(f"- {metric}: {value}\n")
             f.write("\n")
 

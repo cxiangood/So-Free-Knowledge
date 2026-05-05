@@ -76,7 +76,7 @@ class PromptStore:
         return prompts
 
 
-_DEFAULT_YAML_PATH = Path(__file__).with_name("prompts.yaml")
+_DEFAULT_YAML_PATH = Path(__file__).with_name("prompts_compact.yaml")
 _DEFAULT_STORE = PromptStore(yaml_path=_DEFAULT_YAML_PATH)
 
 

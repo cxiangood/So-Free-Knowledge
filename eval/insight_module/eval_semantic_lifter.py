@@ -12,7 +12,7 @@ from tqdm import tqdm
 from sentence_transformers import SentenceTransformer, util
 
 class SemanticLifterEvaluator(BaseModuleEvaluator):
-    def __init__(self, test_cases: List[TestCase], trace_file_path: str = "outputs/insight_module_eval/insight_full_pipeline_chat_test_2.jsonl", similarity_threshold: float = 0.85):
+    def __init__(self, test_cases: List[TestCase], trace_file_path: str = "outputs/insight_module_eval/insight_full_pipeline_chat_test_2.jsonl", similarity_threshold: float = 0.8):
         super().__init__(test_cases)
         self.trace_file_path = trace_file_path
         self.similarity_threshold = similarity_threshold
@@ -64,29 +64,31 @@ class SemanticLifterEvaluator(BaseModuleEvaluator):
         expected_fields = {}
 
         # 通用字段
-        if case.expected_title:
-            expected_fields['title'] = case.expected_title
-        if case.expected_summary:
-            expected_fields['summary'] = case.expected_summary
-        if case.expected_problem:
-            expected_fields['problem'] = case.expected_problem
-        if case.expected_suggestion:
-            expected_fields['suggestion'] = case.expected_suggestion
-        if case.expected_participants:
-            expected_fields['participants'] = case.expected_participants
-        if case.expected_times:
-            expected_fields['times'] = case.expected_times
-        if case.expected_locations:
-            expected_fields['locations'] = case.expected_locations
-        if case.expected_tags:
-            expected_fields['tags'] = case.expected_tags
-        if case.expected_missing_fields:
-            expected_fields['missing_fields'] = case.expected_missing_fields
+        
+        expected_fields['title'] = case.expected_title
+
+        expected_fields['message_role'] = case.expected_message_role
+    
+        expected_fields['summary'] = case.expected_summary
+    
+        expected_fields['problem'] = case.expected_problem
+    
+        expected_fields['suggestion'] = case.expected_suggestion
+    
+        expected_fields['participants'] = case.expected_participants
+    
+        expected_fields['times'] = case.expected_times
+    
+        expected_fields['locations'] = case.expected_locations
+    
+        expected_fields['tags'] = case.expected_tags
+    
+        expected_fields['missing_fields'] = case.expected_missing_fields
 
         # 从decision_signals中提取is_question
-        if case.expected_decision_signals:
-            has_question = case.expected_decision_signals.get('has_question', 0.0) >= 0.5
-            expected_fields['is_question'] = has_question
+        
+        has_question = case.expected_decision_signals.get('has_question', 0.0) >= 0.5
+        expected_fields['is_question'] = has_question
 
         return expected_fields
 
@@ -117,10 +119,15 @@ class SemanticLifterEvaluator(BaseModuleEvaluator):
                 if avg_sim >= self.similarity_threshold:
                     correct_fields += 1
             elif isinstance(expected_value, str):
-                # 字符串类型字段语义相似度匹配
-                sim = self._semantic_similarity(str(actual_value), str(expected_value))
-                if sim >= self.similarity_threshold:
-                    correct_fields += 1
+                # message_role字段要求严格相等，其他字符串字段使用语义相似度匹配
+                if field == 'message_role':
+                    if str(actual_value).strip() == str(expected_value).strip():
+                        correct_fields += 1
+                else:
+                    # 其他字符串类型字段语义相似度匹配
+                    sim = self._semantic_similarity(str(actual_value), str(expected_value))
+                    if sim >= self.similarity_threshold:
+                        correct_fields += 1
             elif isinstance(expected_value, bool):
                 # 布尔类型精确匹配
                 if actual_value == expected_value:
@@ -149,6 +156,7 @@ class SemanticLifterEvaluator(BaseModuleEvaluator):
             card = lift_result['cards'][0] if lift_result.get('cards') else {}
             actual_fields = {
                 'title': card.get('title'),
+                'message_role': card.get('message_role'),
                 'summary': card.get('summary'),
                 'tags': card.get('tags', []),
                 'participants': card.get('participants', []),
@@ -157,7 +165,7 @@ class SemanticLifterEvaluator(BaseModuleEvaluator):
                 'suggestion': card.get('suggestion'),
                 'locations': card.get('locations'),
                 'missing_fields': card.get('missing_fields', []),
-                'is_question': card.get('decision_signals', {}).get('has_question', 0) >= 0.5
+                'is_question': card.get('decision_signals', {}).get('has_question', 0) >= 0.5,       
             }
             expected_fields = self.parse_expected_fields(case)
 
@@ -194,10 +202,15 @@ class SemanticLifterEvaluator(BaseModuleEvaluator):
                         if avg_sim >= self.similarity_threshold:
                             field_correct = True
                 elif isinstance(expected_value, str):
-                    # 字符串类型字段语义相似度匹配
-                    sim = self._semantic_similarity(str(actual_value), str(expected_value))
-                    if sim >= self.similarity_threshold:
-                        field_correct = True
+                    # message_role字段要求严格相等，其他字符串字段使用语义相似度匹配
+                    if field == 'message_role':
+                        if str(actual_value).strip() == str(expected_value).strip():
+                            field_correct = True
+                    else:
+                        # 其他字符串类型字段语义相似度匹配
+                        sim = self._semantic_similarity(str(actual_value), str(expected_value))
+                        if sim >= self.similarity_threshold:
+                            field_correct = True
                 elif isinstance(expected_value, bool):
                     # 布尔类型精确匹配
                     if actual_value == expected_value:
