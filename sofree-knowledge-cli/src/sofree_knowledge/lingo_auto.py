@@ -480,6 +480,7 @@ def build_lingo_openclaw_prompt(
         "- decision 为 skip_* 时，value 必须为空字符串\n"
         "- decision 为 append_new_sense 或 create_entry 时，value 必须是可直接入库的定义\n\n"
         "- 如果 web_search_needed=true，且当前定义仍不稳，优先使用 skip_uncertain，等待检索后再入库\n"
+        "- 执行落库时，默认不要建议使用 --force-remote-create；这个参数会绕过重复保护，可能把同一词条重复创建到飞书词典。\n"
         + json.dumps(payload, ensure_ascii=False, indent=2)
     )
 
@@ -598,19 +599,16 @@ def sync_openclaw_judgements(
         remote_created: dict[str, Any] | None = None
         remote_create_skipped = False
         remote_skip_reason = ""
+        matching_sense = store.find_matching_sense(keyword, entry_type=entry_type, value=value)
         if remote_client is not None and entry_type in {"key", "black"} and value:
-            existing = store.get_entry(keyword)
             if (
                 not force_remote_create
-                and existing
-                and any(
-                    str(sense.get("value") or "").strip() == value
-                    for sense in existing.get("senses", [])
-                    if isinstance(sense, dict)
-                )
+                and matching_sense
+                and str(matching_sense.get("entity_id") or "").strip()
             ):
                 remote_create_skipped = True
-                remote_skip_reason = "duplicate_guard: same keyword/value already exists in local senses"
+                remote_skip_reason = "duplicate_guard: same keyword/type/value already has remote entity_id in local mirror"
+                entity_id = str(matching_sense.get("entity_id") or "")
             else:
                 remote_created = remote_client.create_lingo_entity(
                     key=keyword,

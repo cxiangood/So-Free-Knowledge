@@ -1113,18 +1113,16 @@ def _sync_lingo_judgements(
         remote_created: dict[str, Any] | None = None
         remote_create_skipped = False
         remote_skip_reason = ""
-        existing = store.get_entry(keyword)
+        matching_sense = store.find_matching_sense(keyword, entry_type=entry_type, value=value)
         if (
             client is not None
             and not force_remote_create
-            and existing
-            and str(existing.get("entity_id") or "").strip()
-            and str(existing.get("type") or "").strip().lower() == entry_type
-            and str(existing.get("value") or "").strip() == value
+            and matching_sense
+            and str(matching_sense.get("entity_id") or "").strip()
         ):
             remote_create_skipped = True
             remote_skip_reason = "duplicate_guard: same keyword/type/value already has remote entity_id in local mirror"
-            entity_id = str(existing.get("entity_id") or "")
+            entity_id = str(matching_sense.get("entity_id") or "")
         if client is not None:
             if remote_create_skipped:
                 pass

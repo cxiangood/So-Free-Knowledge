@@ -1109,6 +1109,156 @@ def test_lingo_auto_sync_cli_applies_ai_review_judgements_and_appends_sense(tmp_
     assert entry["senses"][1]["value"] == "团队内部使用的模型项目简称"
 
 
+def test_lingo_sync_from_file_skips_remote_create_when_matching_sense_already_has_entity_id(
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    scoped_root = tmp_path / "users" / "ou_lingo_test"
+    scoped_root.mkdir(parents=True, exist_ok=True)
+    existing_file = scoped_root / "lingo_entries.json"
+    existing_file.write_text(
+        json.dumps(
+            {
+                "entries": {
+                    "JEPA": {
+                        "keyword": "JEPA",
+                        "type": "black",
+                        "value": "旧释义",
+                        "entity_id": "",
+                        "senses": [
+                            {
+                                "sense_id": "sense_old",
+                                "type": "black",
+                                "value": "旧释义",
+                                "entity_id": "",
+                                "context_ids": ["ctx_old"],
+                            },
+                            {
+                                "sense_id": "sense_new",
+                                "type": "black",
+                                "value": "团队内部使用的模型项目简称",
+                                "entity_id": "ent_existing",
+                                "context_ids": ["ctx_new"],
+                            },
+                        ],
+                    }
+                }
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    judgements_file = tmp_path / "judgements.json"
+    judgements_file.write_text(
+        json.dumps(
+            [
+                {
+                    "keyword": "JEPA",
+                    "type": "black",
+                    "value": "团队内部使用的模型项目简称",
+                    "aliases": ["Joint Embedding"],
+                    "context_ids": ["ctx_newer"],
+                }
+            ],
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    class FailIfCalledClient:
+        def create_lingo_entity(self, **kwargs):
+            raise AssertionError("remote create should be skipped for already synced matching sense")
+
+    monkeypatch.setattr(cli_module, "_instantiate_feishu_client", lambda: FailIfCalledClient())
+
+    code = main(
+        [
+            "--output-dir",
+            str(tmp_path),
+            "--user-open-id",
+            "ou_lingo_test",
+            "lingo",
+            "sync-from-file",
+            "--input-file",
+            str(judgements_file),
+        ]
+    )
+
+    out = json.loads(capsys.readouterr().out)
+    assert code == 0
+    assert out["ok"] is True
+    assert out["entries"][0]["remote_create_skipped"] is True
+    assert out["entries"][0]["entity_id"] == "ent_existing"
+
+
+def test_lingo_auto_sync_skips_remote_create_when_matching_sense_already_has_entity_id(
+    tmp_path,
+    monkeypatch,
+):
+    scoped_root = tmp_path / "users" / "ou_lingo_test"
+    scoped_root.mkdir(parents=True, exist_ok=True)
+    (scoped_root / "lingo_entries.json").write_text(
+        json.dumps(
+            {
+                "entries": {
+                    "JEPA": {
+                        "keyword": "JEPA",
+                        "type": "black",
+                        "value": "旧释义",
+                        "entity_id": "",
+                        "senses": [
+                            {
+                                "sense_id": "sense_old",
+                                "type": "black",
+                                "value": "旧释义",
+                                "entity_id": "",
+                            },
+                            {
+                                "sense_id": "sense_new",
+                                "type": "black",
+                                "value": "团队内部使用的模型项目简称",
+                                "entity_id": "ent_existing",
+                            },
+                        ],
+                    }
+                }
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    judgements = [
+        {
+            "keyword": "JEPA",
+            "decision": "append_new_sense",
+            "type": "black",
+            "value": "团队内部使用的模型项目简称",
+            "context_ids": ["ctx_1"],
+            "matched_existing_sense_ids": ["sense_new"],
+            "aliases": ["Joint Embedding"],
+        }
+    ]
+
+    class FailIfCalledClient:
+        def create_lingo_entity(self, **kwargs):
+            raise AssertionError("remote create should be skipped for already synced matching sense")
+
+    result = cli_module.sync_ai_review_judgements(
+        output_dir=scoped_root,
+        judgements=judgements,
+        source="lingo_auto",
+        remote=True,
+        write_local=True,
+        force_remote_create=False,
+        client=FailIfCalledClient(),
+        publishable_only=True,
+    )
+
+    assert result["entries"][0]["remote_create_skipped"] is True
+    assert result["entries"][0]["entity_id"] == "ent_existing"
+
+
 def test_lingo_auto_sync_cli_keeps_web_search_pending_without_writing(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(
         cli_module,
@@ -1204,6 +1354,7 @@ def test_lingo_auto_review_prompt_contains_chinese_noun_positive_example():
     assert "你就是这批候选词的最终判断者" in prompt
     assert "initial_type / initial_value" in prompt
     assert "不要要求用户去配置 ~/.sofree/knowledge_config.json" in prompt
+    assert "--force-remote-create" in prompt
 
 
 def test_lingo_candidate_keyword_filter_rejects_system_template_fields():
