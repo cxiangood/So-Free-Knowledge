@@ -268,6 +268,40 @@ def test_assistant_build_personal_brief_online_uses_collector(monkeypatch, capsy
     assert out["report"]["summary"]["doc_count"] == 1
 
 
+def test_brief_shortcut_pushes_card_with_defaults(monkeypatch, capsys):
+    captured: dict[str, object] = {}
+
+    def fake_recommend_command_result(args, **kwargs):
+        captured["args"] = args
+        return {
+            "ok": True,
+            "meta": {
+                "push": {
+                    "enabled": args.push,
+                    "interest_enabled": args.push_interest_card,
+                    "summary_enabled": args.push_summary_card,
+                }
+            },
+            "output_format": args.output_format,
+        }
+
+    monkeypatch.setattr(cli_module, "recommend_command_result", fake_recommend_command_result)
+
+    code = main(["brief"])
+
+    out = json.loads(capsys.readouterr().out)
+    assert code == 0
+    assert out["ok"] is True
+    assert out["output_format"] == "card"
+    assert out["meta"]["push"]["enabled"] is True
+    assert out["meta"]["push"]["interest_enabled"] is True
+    assert out["meta"]["push"]["summary_enabled"] is False
+    args = captured["args"]
+    assert args.command == "brief"
+    assert args.recent_days == 7
+    assert args.max_chats == 20
+
+
 def test_assistant_profile_set_and_get_cli(tmp_path, capsys):
     code = main(
         [
@@ -1018,6 +1052,36 @@ def test_lingo_auto_sync_cli_emits_ai_review_prompt_without_sync(tmp_path, monke
     assert out["candidate_count"] == 2
     assert out["sync"]["performed"] is False
     assert out["ai_review"]["prompt"] == "review this"
+
+
+def test_lingo_write_shortcut_reuses_auto_sync_defaults(monkeypatch, capsys):
+    captured: dict[str, object] = {}
+
+    def fake_run_lingo_auto_pipeline(**kwargs):
+        captured["kwargs"] = kwargs
+        return {
+            "ok": True,
+            "skipped": False,
+            "run_id": "20260505T120000Z",
+            "candidate_count": 1,
+            "candidates": [{"keyword": "JEPA", "frequency": 3, "context_count": 2}],
+            "ai_review": {"prompt": "review this"},
+        }
+
+    monkeypatch.setattr(cli_module, "run_lingo_auto_pipeline", fake_run_lingo_auto_pipeline)
+
+    code = main(["lingo-write", "--no-remote"])
+
+    out = json.loads(capsys.readouterr().out)
+    assert code == 0
+    assert out["ok"] is True
+    assert out["sync"]["performed"] is False
+    assert out["candidate_count"] == 1
+    kwargs = captured["kwargs"]
+    assert kwargs["recent_days"] == 7
+    assert kwargs["max_chats"] == 200
+    assert kwargs["top_keywords"] == 30
+    assert kwargs["candidate_limit"] == 20
 
 
 def test_lingo_auto_sync_cli_applies_ai_review_judgements_and_appends_sense(tmp_path, monkeypatch, capsys):
