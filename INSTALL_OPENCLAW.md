@@ -293,7 +293,7 @@ pip install -e ./sofree-knowledge-cli
 
 ```bash
 APP_ID=cli_xxx
-APP_SECRET=xxx
+SECRET_ID=xxx
 ```
 
 等价变量名也支持：
@@ -340,13 +340,24 @@ sofree-knowledge --env-file ./.env auth-status
 
 ### 第一次调用：获取授权链接
 
-直接启动设备流并进入授权：
+启动设备流，但不要让 Agent 自己打开浏览器：
 
 ```bash
-sofree-knowledge --env-file ./.env auth login
+sofree-knowledge --env-file ./.env auth login --no-wait
 ```
 
-这个命令会直接发起设备流登录。默认会尝试打开浏览器，并在用户完成授权后返回结果。
+stdout 是 JSON。你需要从里面读取：
+
+- `request.verification_uri_complete`
+- `request.device_code`
+
+把 `request.verification_uri_complete` 用 markdown autolink 形式发给用户，例如：
+
+```text
+<https://accounts.feishu.cn/...>
+```
+
+不要改写这个 URL，也不要让 Agent 自己尝试打开浏览器。应由用户自己在浏览器里打开该链接并完成授权。
 
 同时把下面这条警告原样发给用户，作为独立段落：
 
