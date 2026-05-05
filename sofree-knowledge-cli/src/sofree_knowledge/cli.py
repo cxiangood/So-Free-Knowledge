@@ -459,6 +459,50 @@ def build_parser() -> argparse.ArgumentParser:
     )
     ws_delete_sheet.set_defaults(func=wikisheet_module.cmd_delete_sheet)
 
+    shortcut_brief = subparsers.add_parser(
+        "brief",
+        aliases=["b"],
+        help="Shortcut: collect online data and push the knowledge aggregation card with sane defaults.",
+    )
+    shortcut_brief.add_argument("--token-file", default="", help="Optional token file for auto-resolving current user id.")
+    shortcut_brief.add_argument("--chat-ids", default="", help="Comma-separated chat IDs. Empty means rely on visible chats.")
+    shortcut_brief.add_argument("--include-visible-chats", action=argparse.BooleanOptionalAction, default=True)
+    shortcut_brief.add_argument("--recent-days", type=int, default=7)
+    shortcut_brief.add_argument("--max-chats", type=int, default=20)
+    shortcut_brief.add_argument("--max-messages-per-chat", type=int, default=200)
+    shortcut_brief.add_argument("--max-drive-docs", type=int, default=50)
+    shortcut_brief.add_argument("--max-knowledge", type=int, default=30)
+    shortcut_brief.add_argument("--profile-file", default="", help="Optional profile json path.")
+    shortcut_brief.add_argument("--persona", default="", help="Override persona/avatar for this run.")
+    shortcut_brief.add_argument("--role", default="", help="Override role/profession for this run.")
+    shortcut_brief.add_argument("--businesses", default="", help="Override business tracks, comma-separated.")
+    shortcut_brief.add_argument("--interests", default="", help="Override interests, comma-separated.")
+    shortcut_brief.add_argument("--receive-chat-id", default="", help="Explicit target chat_id for push. If set, push to group chat.")
+    shortcut_brief.add_argument("--receive-open-id", default="", help="Explicit target open_id for push. Used when --receive-chat-id is empty.")
+    shortcut_brief.add_argument("--output-format", choices=["all", "json", "card"], default="card")
+    shortcut_brief.add_argument("--push-interest-card", action=argparse.BooleanOptionalAction, default=True)
+    shortcut_brief.add_argument("--push-summary-card", action=argparse.BooleanOptionalAction, default=False)
+    shortcut_brief.set_defaults(func=cmd_shortcut_brief)
+
+    shortcut_lingo = subparsers.add_parser(
+        "lingo-write",
+        aliases=["lw"],
+        help="Shortcut: mine glossary candidates and optionally sync reviewed entries with defaults tuned for Feishu Lingo.",
+    )
+    shortcut_lingo.add_argument("--token-file", default="", help="Optional token file for auth context.")
+    shortcut_lingo.add_argument("--chat-ids", default="", help="Comma-separated chat IDs. Empty means rely on visible chats.")
+    shortcut_lingo.add_argument("--include-visible-chats", action=argparse.BooleanOptionalAction, default=True)
+    shortcut_lingo.add_argument("--recent-days", type=int, default=7, help="How many recent days of chat history to scan.")
+    shortcut_lingo.add_argument("--force", action="store_true", help="Ignore last-run interval guard.")
+    shortcut_lingo.add_argument("--judgements-file", default="", help="Optional AI review result JSON file. If provided, shortcut writes reviewed entries.")
+    shortcut_lingo.add_argument("--publishable-only", action="store_true", help="Only sync create/append decisions when judgements are provided.")
+    shortcut_lingo.add_argument("--source", default="lingo_shortcut")
+    shortcut_lingo.add_argument("--remote", action=argparse.BooleanOptionalAction, default=True, help="Write reviewed entries to Feishu Lingo remotely.")
+    shortcut_lingo.add_argument("--write-local", action=argparse.BooleanOptionalAction, default=True, help="Mirror reviewed entries to local store.")
+    shortcut_lingo.add_argument("--top-keywords", type=int, default=30)
+    shortcut_lingo.add_argument("--candidate-limit", type=int, default=20)
+    shortcut_lingo.set_defaults(func=cmd_shortcut_lingo_write)
+
     return parser
 
 
@@ -1343,6 +1387,54 @@ def cmd_assistant_recommend(args: argparse.Namespace) -> dict[str, Any]:
         client_factory=lambda: build_user_feishu_client(args, require_token=False),
         push_client_factory=build_bot_feishu_client,
     )
+
+
+def cmd_shortcut_brief(args: argparse.Namespace) -> dict[str, Any]:
+    payload = vars(args).copy()
+    payload.update(
+        command="brief",
+        target_user_id="",
+        max_docs=10,
+        max_related=5,
+        max_interest_items=8,
+        mode="",
+        timezone="",
+        weekly_brief_cron="",
+        nightly_interest_cron="",
+        weekly_enabled=None,
+        nightly_enabled=None,
+        dual_tower_model="",
+        dual_tower_model_file="",
+        dual_tower_top_k=None,
+        dual_tower_min_score=None,
+        dual_tower_min_samples=20,
+        push=True,
+    )
+    shortcut_args = argparse.Namespace(**payload)
+    return cmd_assistant_recommend(shortcut_args)
+
+
+def cmd_shortcut_lingo_write(args: argparse.Namespace) -> dict[str, Any]:
+    payload = vars(args).copy()
+    payload.update(
+        command="lingo-write",
+        lingo_command="auto-sync",
+        min_run_interval_days=7,
+        start_time="",
+        end_time="",
+        max_chats=200,
+        max_messages_per_chat=500,
+        page_size=50,
+        min_frequency=2,
+        min_contexts=1,
+        context_before=1,
+        context_after=1,
+        max_contexts=80,
+        analyzer_enabled=True,
+        force_remote_create=False,
+    )
+    shortcut_args = argparse.Namespace(**payload)
+    return cmd_lingo_auto_sync(shortcut_args)
 
 
 if __name__ == "__main__":

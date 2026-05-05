@@ -11,6 +11,60 @@ cd sofree-knowledge-cli
 python -m pip install -e .
 ```
 
+## Shortcuts
+
+Two short commands are available for the common online flows:
+
+Knowledge aggregation card push:
+
+```bash
+sofree-knowledge brief
+```
+
+This is equivalent to a defaulted online recommendation run with push enabled. By default it:
+
+- collects recent online data
+- pushes the interest card
+- returns card JSON (`--output-format card`)
+
+Common overrides:
+
+```bash
+sofree-knowledge brief --recent-days 3
+sofree-knowledge brief --chat-ids oc_xxx,oc_yyy
+sofree-knowledge brief --receive-chat-id oc_group_xxx
+sofree-knowledge brief --push-summary-card
+```
+
+There is also a one-letter alias:
+
+```bash
+sofree-knowledge b
+```
+
+Intelligent Feishu Lingo write:
+
+```bash
+sofree-knowledge lingo-write
+```
+
+This is a shortcut around the automatic Lingo mining flow with sensible defaults. Without `--judgements-file`, it mines candidates and emits the AI review prompt. With `--judgements-file`, it also writes reviewed entries to Feishu Lingo and the local mirror by default.
+
+Common overrides:
+
+```bash
+sofree-knowledge lingo-write --recent-days 3
+sofree-knowledge lingo-write --chat-ids oc_xxx,oc_yyy
+sofree-knowledge lingo-write --judgements-file ./ai_review_judgements.json
+sofree-knowledge lingo-write --no-remote
+```
+
+There is also a short alias:
+
+```bash
+sofree-knowledge lw
+```
+
 ## Configure App Credentials
 
 Use environment variables or an env file:
