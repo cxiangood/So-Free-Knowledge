@@ -32,6 +32,9 @@
 {
   "scopes": {
     "tenant": [
+      "application:application.contacts_range:write",
+      "contact:contact",
+      "contact:department.organize:readonly",
       "application:application:self_manage",
       "baike:entity",
       "baike:entity:exempt_delete",
@@ -70,10 +73,12 @@
       "docx:document:write_only",
       "drive:drive",
       "drive:drive:readonly",
+      "drive:file",
       "drive:file:readonly",
       "im:chat:read",
       "im:chat:update",
       "im:datasync.feed_card.time_sensitive:write",
+      "im:message",
       "im:message.group_at_msg.include_bot:readonly",
       "im:message.group_at_msg:readonly",
       "im:message.group_msg",
@@ -247,11 +252,12 @@
     ]
   }
 }
+
 如果用户还没有完成应用创建、权限申请、发布或安装到组织，这一步先停下，让用户先处理飞书侧配置，再继续后面的安装流程。
 
 ## Step 1 - 获取代码
 
-优先使用 GitHub 克隆；如果网络环境不稳定，再用 tarball 下载。
+优先使用 GitHub 克隆；如果网络环境不稳定，再用 tarball 下载。如果已有仓库，尝试用API更新一下，如果没有更新就跳过。
 
 ### 方式 1：GitHub 克隆
 

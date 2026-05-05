@@ -1,11 +1,11 @@
 import json
 
 from sofree_knowledge.auth_device_flow import has_required_scopes
-from sofree_knowledge.auth import auth_status, build_authorization_url, extract_code, save_token
+from sofree_knowledge.auth import DEFAULT_SCOPE, auth_status, build_authorization_url, extract_code, save_token
 
 
 def test_build_authorization_url_uses_env(monkeypatch):
-    monkeypatch.setenv("FEISHU_APP_ID", "cli_test")
+    monkeypatch.setenv("APP_ID", "cli_test")
 
     url = build_authorization_url(
         redirect_uri="http://localhost:8000/callback",
@@ -54,3 +54,8 @@ def test_has_required_scopes_matches_space_separated_scopes():
         ["im:chat:read", "drive:file:read"],
     )
     assert not has_required_scopes("im:chat:read offline_access", "drive:file:read")
+
+
+def test_default_scope_uses_existing_contact_scope_name():
+    assert "contact:contact.base:readonly" in DEFAULT_SCOPE
+    assert "contact:user.base:readonly" not in DEFAULT_SCOPE

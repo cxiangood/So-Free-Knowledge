@@ -22,7 +22,7 @@ DEFAULT_REDIRECT_URI = "http://localhost:8000/callback"
 DEFAULT_SCOPE = (
     "im:chat:read im:message:readonly "
     "im:message.group_msg:get_as_user im:message.p2p_msg:get_as_user "
-    "search:message contact:user.base:readonly "
+    "search:message contact:contact.base:readonly "
     "drive:file:readonly docs:doc:readonly wiki:node:read wiki:space:read"
 )
 
