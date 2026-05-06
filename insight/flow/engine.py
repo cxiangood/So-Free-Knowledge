@@ -7,6 +7,9 @@ from typing import Any, TypedDict
 
 from langgraph.graph import END, StateGraph
 from utils import get_config_bool, get_config_float, get_config_int, get_config_str
+from utils.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 from ..comm.feishu import resolve_sender_credentials
 from ..comm.identity_map import UserIdentityMap, resolve_identity_map_config
@@ -318,7 +321,7 @@ class Engine:
         result = state["result"]
         if self.config.step_trace_enabled:
             trace_node(message_id=message.message_id, node_name="semantic_lift")
-        lift_result = lift_candidates(state.get("simple_messages", []))
+        lift_result = lift_candidates(state.get("simple_messages", []), message_id=message.message_id)
         result.warnings.extend(lift_result.warnings)
         result.module_traces["lift"] = {
             "cards": [card.to_dict() for card in lift_result.cards],
@@ -404,8 +407,8 @@ class Engine:
             task_card = card
             if self.config.rag_enabled:
                 if self.config.step_trace_enabled:
-                    trace_node(message_id=message.message_id, node_name="rag_retrieve_task")
-                query = f"{card.summary} {card.problem} {card.suggestion}".strip()
+                    trace_node(message_id=message.message_id, node_name="rag_task_retrieve_kb_main")
+                query = self._build_rag_query_from_card(card)
                 try:
                     hits = retrieve(self.vector_store, query=query, top_k=self.config.rag_top_k, min_score=self.config.rag_min_score)
                 except Exception as exc:
@@ -476,6 +479,8 @@ class Engine:
                 "observe_rag_hit_count": 0,
                 "decision_reason_codes": [],
             }
+            if self.config.step_trace_enabled:
+                trace_node(message_id=message.message_id, node_name="observe_question_check")
             should_question = is_question_with_llm(
                 summary=card.summary,
                 problem=card.problem,
@@ -487,19 +492,24 @@ class Engine:
                 result.observe_question_count += 1
                 observe_trace["is_question"] = True
             if self.config.step_trace_enabled:
-                trace_node(message_id=message.message_id, node_name="rag_retrieve_observe")
-            observe_query = f"{card.summary} {card.problem} {message.content_text}".strip()
+                trace_node(message_id=message.message_id, node_name="rag_observe_retrieve_kb_main")
+            observe_query = self._build_rag_query_from_card(card)
             try:
                 kb_hits = retrieve(self.vector_store, query=observe_query, top_k=self.config.rag_top_k, min_score=self.config.rag_min_score)
             except Exception as exc:
                 kb_hits = []
                 result.warnings.append(f"observe rag retrieval failed: {exc}")
+
+            logger.debug(f"observe rag retrieval kb_hits: {kb_hits}")
+
             if kb_hits:
                 result.rag_retrieval_count += 1
             observe_trace["kb_rag_hit_count"] = len(kb_hits)
 
             if should_question and self.config.observe_auto_reply_enabled and self.config.rag_enabled:
-                answer_result = try_answer_with_rag(observe_query, kb_hits)
+                if self.config.step_trace_enabled:
+                    trace_node(message_id=message.message_id, node_name="observe_answer_check")
+                answer_result = try_answer_with_rag(observe_query, message.get_simple_message(), kb_hits)
                 if answer_result.can_answer and answer_result.answer:
                     if self.config.step_trace_enabled:
                         trace_node(message_id=message.message_id, node_name="observe_reply")
@@ -530,6 +540,8 @@ class Engine:
                     decision.stored_id = self._store_and_resolve_observe(card, message, result, observe_trace)
                     observe_trace["stored_id"] = decision.stored_id
             else:
+                if self.config.step_trace_enabled:
+                    trace_node(message_id=message.message_id, node_name="observe_convert_check")
                 non_question_decision = decide_non_question_target(card, kb_hits)
                 observe_trace["decision_reason_codes"] = list(non_question_decision.reason_codes)
                 target_pool = non_question_decision.target_pool
@@ -568,7 +580,6 @@ class Engine:
                             "reason_codes": list(non_question_decision.reason_codes),
                         }
                     )
-                    self._handle_observe_backflow(message=message, result=result, card=optimized, default_target=target_pool)
                 else:
                     decision.stored_id = self._store_and_resolve_observe(card, message, result, observe_trace)
                     observe_trace["stored_id"] = decision.stored_id
@@ -612,7 +623,9 @@ class Engine:
         observe_id = save_observe(self.state_store, card)
         observe_trace["decision_action"] = "keep"
         observe_trace["final_target"] = "observe"
-        observe_hits = self._search_observe_hits(query=f"{card.title} {card.summary} {card.problem}".strip())
+        if self.config.step_trace_enabled:
+            trace_node(message_id=message.message_id, node_name="rag_observe_store_retrieve_observe_pool")
+        observe_hits = self._search_observe_hits(query=self._build_rag_query_from_card(card))
         observe_trace["observe_rag_hit_count"] = len(observe_hits)
         if self.observe_vector_store is not None:
             try:
@@ -627,6 +640,8 @@ class Engine:
                 )
             except Exception as exc:
                 result.warnings.append(f"observe vector upsert failed: {exc}")
+        if self.config.step_trace_enabled:
+            trace_node(message_id=message.message_id, node_name="observe_merge_convert_check")
         merge_decision = decide_observe_merge_or_convert(card, observe_hits)
         observe_trace["decision_reason_codes"] = list(merge_decision.reason_codes)
         if merge_decision.action == "merge":
@@ -648,7 +663,14 @@ class Engine:
                     return str(merged.get("observe_id", target_observe_id))
         if merge_decision.action == "convert" and merge_decision.target_pool in {"knowledge", "task"}:
             target = merge_decision.target_pool
-            fused_card = optimize_card_with_llm(card, [], target_pool=target)
+            selected_ids = [item for item in merge_decision.observe_ids if item]
+            if not selected_ids:
+                return observe_id
+            selected_items = [self.state_store.get_observe_item(item) for item in selected_ids]
+            selected_items = [item for item in selected_items if isinstance(item, dict)]
+            if not selected_items:
+                return observe_id
+            fused_card = self._build_fused_observe_card(base_card=card, observe_items=selected_items, target_pool=target)
             if target == "task":
                 task_result = save_task(
                     store=self.state_store,
@@ -669,6 +691,8 @@ class Engine:
             else:
                 stored_id = save_knowledge(self.state_store, fused_card, vector_store=self.vector_store)
             self.state_store.mark_observe_popped(observe_id, final_target=target)
+            for item_id in selected_ids:
+                self.state_store.mark_observe_popped(item_id, final_target=target)
             observe_trace["decision_action"] = "convert"
             observe_trace["final_target"] = target
             observe_trace["stored_id"] = stored_id
@@ -677,6 +701,7 @@ class Engine:
                     "message_id": message.message_id,
                     "chat_id": message.chat_id,
                     "observe_id": observe_id,
+                    "observe_ids": selected_ids,
                     "target_pool": target,
                     "stored_id": stored_id,
                     "reason_codes": list(merge_decision.reason_codes),
@@ -694,14 +719,26 @@ class Engine:
             return []
 
     def _handle_observe_backflow(self, *, message: MessageEvent, result: EngineResult, card: LiftedCard, default_target: str) -> None:
-        hits = self._search_observe_hits(query=f"{card.title} {card.summary} {card.problem}".strip())
+        if self.config.step_trace_enabled:
+            trace_node(message_id=message.message_id, node_name="rag_backflow_retrieve_observe_pool")
+        hits = self._search_observe_hits(query=self._build_rag_query_from_card(card))
         if not hits:
             return
         decision = decide_observe_merge_or_convert(card, hits)
         if decision.action != "convert":
             return
+        selected_ids = [item for item in decision.observe_ids if item]
+        if not selected_ids:
+            return
         target_pool = decision.target_pool if decision.target_pool in {"knowledge", "task"} else default_target
-        fused_card = optimize_card_with_llm(card, [], target_pool=target_pool)
+        selected_items = [self.state_store.get_observe_item(item) for item in selected_ids]
+        selected_items = [item for item in selected_items if isinstance(item, dict)]
+        if not selected_items:
+            return
+        poppable_ids = [str(item.get("observe_id", "")).strip() for item in selected_items if str(item.get("observe_id", "")).strip()]
+        if not poppable_ids:
+            return
+        fused_card = self._build_fused_observe_card(base_card=card, observe_items=selected_items, target_pool=target_pool)
         if target_pool == "task":
             task_result = save_task(
                 store=self.state_store,
@@ -722,10 +759,12 @@ class Engine:
         else:
             stored_id = save_knowledge(self.state_store, fused_card, vector_store=self.vector_store)
         popped_ids: list[str] = []
-        for observe_id in decision.observe_ids:
+        for observe_id in poppable_ids:
             item = self.state_store.mark_observe_popped(observe_id, final_target=target_pool)
             if item is not None:
                 popped_ids.append(observe_id)
+        if not popped_ids:
+            return
         self._append_observe_convert_event(
             {
                 "message_id": message.message_id,
@@ -738,9 +777,52 @@ class Engine:
             }
         )
 
+    def _build_fused_observe_card(self, *, base_card: LiftedCard, observe_items: list[dict[str, Any]], target_pool: str) -> LiftedCard:
+        observe_evidence: list[str] = []
+        observe_topics: list[str] = []
+        for item in observe_items:
+            topic = str(item.get("topic", "")).strip()
+            if topic:
+                observe_topics.append(topic)
+            evidence = item.get("evidence", [])
+            if isinstance(evidence, list):
+                for snippet in evidence:
+                    text = str(snippet).strip()
+                    if text and text not in observe_evidence:
+                        observe_evidence.append(text)
+        merged_hits = [
+            {
+                "knowledge_id": str(item.get("observe_id", "")),
+                "card_id": str(item.get("card_ref", {}).get("card_id", "")) if isinstance(item.get("card_ref"), dict) else "",
+                "score": 1.0,
+                "text": " ".join(observe_evidence),
+                "title": " / ".join(observe_topics),
+                "summary": " ; ".join(observe_topics),
+                "evidence": observe_evidence,
+                "tags": ["observe-hit"],
+            }
+            for item in observe_items
+        ]
+        from ..shared.models import RagHit
+
+        rag_hits = [RagHit(**item) for item in merged_hits if item["knowledge_id"]]
+        return optimize_card_with_llm(base_card, rag_hits, target_pool=target_pool)
+
     @staticmethod
     def _build_run_id(message: MessageEvent) -> str:
         return f"rt-{message.message_id}"
+
+    @staticmethod
+    def _build_rag_query_from_card(card: LiftedCard) -> str:
+        people = ", ".join(str(item).strip() for item in card.participants if str(item).strip())
+        return (
+            f"title: {str(card.title or '').strip()}\n"
+            f"topic_focus: {str(card.topic_focus or '').strip()}\n"
+            f"summary: {str(card.summary or '').strip()}\n"
+            f"times: {str(card.times or '').strip()}\n"
+            f"locations: {str(card.locations or '').strip()}\n"
+            f"participants: {people}"
+        ).strip()
 
 
 __all__ = ["Engine", "EngineConfig", "EngineResult"]

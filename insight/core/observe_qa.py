@@ -80,15 +80,15 @@ def is_question_with_llm(*, summary: str, problem: str, content: str, message_id
     return rule_guess
 
 
-def try_answer_with_rag(query: str, hits: list[RagHit], min_hits: int = 1) -> ObserveAnswerResult:
+def try_answer_with_rag(query: str, message_content: str, hits: list[RagHit], min_hits: int = 1) -> ObserveAnswerResult:
     if not hits or len(hits) < max(1, int(min_hits or 1)):
         return ObserveAnswerResult(can_answer=False, reason="no_relevant_knowledge")
-    top = hits[:3]
-    thinking_type = get_config_str("insight.llm.observe_qa.thinking_type").strip()
+    top = hits
+    thinking_type = get_config_str("insight.llm.observe_answer.thinking_type").strip()
     config = llm_client.LLMConfig.from_env(
-        max_tokens=get_config_int("insight.llm.observe_qa.max_tokens"),
-        temperature=get_config_float("insight.llm.observe_qa.temperature"),
-        top_p=get_config_float("insight.llm.observe_qa.top_p"),
+        max_tokens=get_config_int("insight.llm.observe_answer.max_tokens"),
+        temperature=get_config_float("insight.llm.observe_answer.temperature"),
+        top_p=get_config_float("insight.llm.observe_answer.top_p"),
         extra_body={"thinking": {"type": thinking_type}} if thinking_type else None,
     )
     if config.missing_fields():
@@ -97,6 +97,7 @@ def try_answer_with_rag(query: str, hits: list[RagHit], min_hits: int = 1) -> Ob
         system_prompt = get_prompt("observe_answer_v1.system_prompt")
         user_prompt = get_prompt("observe_answer_v1.user_prompt").format(
             query=query,
+            message_content=str(message_content or "").strip(),
             hits_json=json.dumps([item.to_dict() for item in top], ensure_ascii=False),
         )
     except Exception:
@@ -119,11 +120,11 @@ def try_answer_with_rag(query: str, hits: list[RagHit], min_hits: int = 1) -> Ob
 
 
 def decide_non_question_target(card: LiftedCard, hits: list[RagHit]) -> ObserveConvertDecision:
-    thinking_type = get_config_str("insight.llm.route.thinking_type").strip()
+    thinking_type = get_config_str("insight.llm.observe_convert.thinking_type").strip()
     config = llm_client.LLMConfig.from_env(
-        max_tokens=get_config_int("insight.llm.route.max_tokens"),
-        temperature=get_config_float("insight.llm.route.temperature"),
-        top_p=get_config_float("insight.llm.route.top_p"),
+        max_tokens=get_config_int("insight.llm.observe_convert.max_tokens"),
+        temperature=get_config_float("insight.llm.observe_convert.temperature"),
+        top_p=get_config_float("insight.llm.observe_convert.top_p"),
         extra_body={"thinking": {"type": thinking_type}} if thinking_type else None,
     )
     if config.missing_fields():
@@ -132,7 +133,7 @@ def decide_non_question_target(card: LiftedCard, hits: list[RagHit]) -> ObserveC
         system_prompt = get_prompt("observe_convert_v1.system_prompt")
         user_prompt = get_prompt("observe_convert_v1.user_prompt").format(
             card_json=json.dumps(card.to_dict(), ensure_ascii=False),
-            hits_json=json.dumps([item.to_dict() for item in hits[:5]], ensure_ascii=False),
+            hits_json=json.dumps([item.to_dict() for item in hits], ensure_ascii=False),
         )
     except Exception:
         return ObserveConvertDecision(target_pool="observe", reason_codes=["prompt-error"])
@@ -155,11 +156,11 @@ def decide_non_question_target(card: LiftedCard, hits: list[RagHit]) -> ObserveC
 
 
 def decide_observe_merge_or_convert(card: LiftedCard, observe_hits: list[dict[str, str]]) -> ObserveMergeDecision:
-    thinking_type = get_config_str("insight.llm.route.thinking_type").strip()
+    thinking_type = get_config_str("insight.llm.observe_merge_convert.thinking_type").strip()
     config = llm_client.LLMConfig.from_env(
-        max_tokens=get_config_int("insight.llm.route.max_tokens"),
-        temperature=get_config_float("insight.llm.route.temperature"),
-        top_p=get_config_float("insight.llm.route.top_p"),
+        max_tokens=get_config_int("insight.llm.observe_merge_convert.max_tokens"),
+        temperature=get_config_float("insight.llm.observe_merge_convert.temperature"),
+        top_p=get_config_float("insight.llm.observe_merge_convert.top_p"),
         extra_body={"thinking": {"type": thinking_type}} if thinking_type else None,
     )
     if config.missing_fields():
@@ -168,7 +169,7 @@ def decide_observe_merge_or_convert(card: LiftedCard, observe_hits: list[dict[st
         system_prompt = get_prompt("observe_merge_convert_v1.system_prompt")
         user_prompt = get_prompt("observe_merge_convert_v1.user_prompt").format(
             card_json=json.dumps(card.to_dict(), ensure_ascii=False),
-            observe_hits_json=json.dumps(observe_hits[:5], ensure_ascii=False),
+            observe_hits_json=json.dumps(observe_hits, ensure_ascii=False),
         )
     except Exception:
         return ObserveMergeDecision(action="keep", target_pool="observe", observe_ids=[], reason_codes=["prompt-error"])
@@ -197,11 +198,11 @@ def decide_observe_merge_or_convert(card: LiftedCard, observe_hits: list[dict[st
 
 
 def optimize_card_with_llm(card: LiftedCard, hits: list[RagHit], target_pool: str) -> LiftedCard:
-    thinking_type = get_config_str("insight.llm.route.thinking_type").strip()
+    thinking_type = get_config_str("insight.llm.observe_optimize_card.thinking_type").strip()
     config = llm_client.LLMConfig.from_env(
-        max_tokens=max(512, get_config_int("insight.llm.lift.max_tokens")),
-        temperature=get_config_float("insight.llm.lift.temperature"),
-        top_p=get_config_float("insight.llm.lift.top_p"),
+        max_tokens=max(512, get_config_int("insight.llm.observe_optimize_card.max_tokens")),
+        temperature=get_config_float("insight.llm.observe_optimize_card.temperature"),
+        top_p=get_config_float("insight.llm.observe_optimize_card.top_p"),
         extra_body={"thinking": {"type": thinking_type}} if thinking_type else None,
     )
     if config.missing_fields():
@@ -211,7 +212,7 @@ def optimize_card_with_llm(card: LiftedCard, hits: list[RagHit], target_pool: st
         user_prompt = get_prompt("observe_optimize_card_v1.user_prompt").format(
             target_pool=target_pool,
             card_json=json.dumps(card.to_dict(), ensure_ascii=False),
-            hits_json=json.dumps([item.to_dict() for item in hits[:5]], ensure_ascii=False),
+            hits_json=json.dumps([item.to_dict() for item in hits], ensure_ascii=False),
         )
     except Exception:
         return card

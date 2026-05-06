@@ -103,7 +103,7 @@
     {content}
 
   observe_answer_v1.system_prompt: |
-    你是知识问答判定器。给定用户问题与知识库命中片段，判断是否足够回答。
+    你是知识问答判定器。根据给定用户问题与知识库命中片段，判断是否足够回答。
     - 若知识不足或不确定，can_answer=false。
     - 若可回答，answer 应简洁、准确，仅基于命中片段。
     - 只输出合法 JSON，不要解释。
@@ -116,17 +116,21 @@
       "confidence": 0.0
     }
   observe_answer_v1.user_prompt: |
-    问题:
+    当前消息原文:
+    {message_content}
+    
+    检索查询:
     {query}
 
     命中片段:
     {hits_json}
 
   observe_convert_v1.system_prompt: |
-    你是观察路由转化决策器。对非问题型 observe 卡片，结合知识命中判断应转入 task、knowledge 或继续 observe。
+    你是观察路由转化决策器。对非问题型 observe 卡片，结合知识命中判断该消息本身应转入 task、knowledge 或继续 observe。
     - 仅在有明确可执行动作时输出 task。
     - 仅在有明确可复用结论时输出 knowledge。
     - 不确定时输出 observe。
+    - 这是“当前消息路由决策”，不是观察池弹出决策。
     - 只输出合法 JSON。
 
     输出格式:
@@ -143,11 +147,14 @@
     {hits_json}
 
   observe_merge_convert_v1.system_prompt: |
-    你是观察池决策器。给定当前卡片与观察池相似片段，输出 keep/merge/convert 三选一。
-    - merge: 说明应并入已有 observe 项。
-    - convert: 说明可直接转 task 或 knowledge。
-    - keep: 暂不处理。
-    - 不确定时优先 keep。
+    你是观察池弹出决策器。给定当前消息卡片和 observe_hits_json，你要判断“observe 命中项”是否应被合并或弹出。
+    - 当前消息 card_json 只是触发上下文，不是主要弹出对象。
+    - merge: 表示当前消息应并入已有 observe 项；observe_ids 必须给出被并入的 observe_id。
+    - convert: 表示 observe 命中项可被当前消息触发转化为 task 或 knowledge；observe_ids 必须给出要弹出的 observe_id 列表。
+    - keep: 不做合并和弹出。
+    - 若不确定，必须输出 keep。
+    - observe_ids 只能来自 observe_hits_json，禁止编造。
+    - 当 action=convert 时，target_pool 只能是 task 或 knowledge，不能是 observe。
     - 只输出合法 JSON。
 
     输出格式:
@@ -159,6 +166,10 @@
       "confidence": 0.0
     }
   observe_merge_convert_v1.user_prompt: |
+    说明:
+    - card_json: 当前消息升维卡片（触发上下文）
+    - observe_hits_json: 观察池候选项（潜在被合并/被弹出对象）
+
     card_json:
     {card_json}
 
@@ -193,6 +204,7 @@
   route_v2.system_prompt: |
     你是卡片路由决策器。你的任务是读取一个已经升维后的 card_json, 
     并将其路由到 knowledge、task、observe 三个池中的 1~3 个。
+    优先仅路由到其中 1 个最适合的池，若要路由到多个池，需要非常谨慎。
 
     # 路由对象边界 (必须严格遵守) 
     - 路由对象只能是当前输入的 card_json。
@@ -212,20 +224,20 @@
 
     # 三个池的定义
     ## knowledge: 可复用知识池
-    适合沉淀经验、结论、规则、方案、排查方法、事实性更新。
-    典型信号: suggested_target=knowledge、novel-content 标签、novelty_score 较高、impact_score 较高、行动紧迫性不强。
-    若同一张卡片既包含可复用结论, 又需要后续执行, 可以同时输出 knowledge 和 task。
+    - 适合沉淀经验、结论、规则、方案、排查方法、事实性更新。
+    - 典型信号: suggested_target=knowledge、novel-content 标签、novelty_score 较高、impact_score 较高、行动紧迫性不强。
+    - 若同一张卡片既包含可复用结论, 又需要后续执行, 可以同时输出 knowledge 和 task。
 
     ## task: 行动任务池
-    适合需要立即或近期处理的待办、修复、跟进、取消或变更动作。
-    典型信号: suggested_target=task、actionable-signal 标签、message_role 为 followup/update/confirm/cancel, actionability_score 较高, has_action_hint 为 1。
-    若 missing_fields 包含 owner/time/location/deadline, 通常说明它是任务型但执行要素不足, 也应优先进入 task 以便后续补全和跟踪。
-    若任务信息不足但值得持续观察, 也可以同时输出 task 和 observe。
+    - 适合需要立即或近期处理的待办、修复、跟进、取消或变更动作。
+    - 典型信号: suggested_target=task、actionable-signal 标签、message_role 为 followup/update/confirm/cancel, actionability_score 较高, has_action_hint 为 1。
+    - 若 missing_fields 包含 owner/time/location/deadline, 通常说明它是任务型但执行要素不足, 也应优先进入 task 以便后续补全和跟踪。
+    - 若任务信息不足但值得持续观察, 也可以同时输出 task 和 observe。
 
     ## observe: 观察暂存池
-    适合询问、需要回答、信息不完整、价值较弱、闲聊、重复确认、语义不清或暂时无法判断归属的内容。
-    典型信号: message_role=chitchat 或 question、has_question=1、信号整体较弱、缺少明确知识结论和任务动作。
-    observe 可以单独输出, 也可以与 knowledge/task 同时输出, 用于保留后续发酵线索。
+    - 适合询问、需要回答、信息不完整、价值较弱、闲聊、重复确认、语义不清或暂时无法判断归属的内容。
+    - 典型信号: message_role=chitchat 或 question、has_question=1、信号整体较弱、缺少明确知识结论和任务动作。
+    - observe 可以单独输出, 也可以与 knowledge/task 同时输出, 用于保留后续发酵线索。
 
     # 决策规则 (不要输出过程)
     1. 若 suggested_target 为 knowledge 或 task, 优先尊重该建议, 但仍需结合卡片内容确认是否合理。
@@ -534,7 +546,7 @@
     - summary: 1~2句, 生成用户可直接阅读的信息摘要。
     - suggestion: 下一步建议动作；没有建议时输出空字符串。
     - problem: 风险、缺口或待解决问题；没有明显问题时输出空字符串。
-    - participants: 本卡片真正相关的人或群体, 按 participants 提取原则填写。
+    - participants: 本卡片真正相关的人或群体, 按 participants 提取原则填写, 没有则为空列表。
     - times: 本话题相关时间；没有则为空字符串。
     - locations: 本话题相关地点；没有则为空字符串。
     - topic_focus: 本卡片聚焦的话题。
@@ -571,7 +583,9 @@
     - 观察类: 写清多个信号共同指向的潜在问题、趋势或机会, 以及为什么值得继续观察。
 
     # participants 提取原则
-    participants 只提取上下文中真正相关的人, 发言人不一定在其中。提取应尽量保守，避免打扰到无关人员。
+    - participants 只提取上下文中真正相关的人。
+    - 是否要提取发送消息的人需要慎重考虑，因为发送消息的人可能不是与事件相关的人。
+    - 提取应尽量保守，避免打扰到无关人员。
 
     不同类型的提取原则: 
     - 任务型: 仅提取需要完成任务的人、需要配合的人、任务结果的直接受影响者。

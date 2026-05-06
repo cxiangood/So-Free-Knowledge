@@ -77,8 +77,7 @@ class PromptStore:
         return prompts
 
 
-_DEFAULT_YAML_PATH = get_config_path("insight.prompt.yaml_path")
-_DEFAULT_STORE = PromptStore(yaml_path=_DEFAULT_YAML_PATH)
+_DEFAULT_STORE = PromptStore(yaml_path=get_config_path("insight.prompt.yaml_path"))
 
 
 def get_prompt_store() -> PromptStore:

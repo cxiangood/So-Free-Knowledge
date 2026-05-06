@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
 import re
 from typing import Any
 
@@ -140,7 +141,7 @@ def _try_llm_parts(*, current_line: str, context_lines: list[str]) -> dict[str, 
     }
 
 
-def lift_candidates(messages: list[str], *, llm_max_items: int = 20) -> LiftResult:
+def lift_candidates(messages: list[str], *, message_id: str = "", llm_max_items: int = 20) -> LiftResult:
     del llm_max_items
     cards: list[LiftedCard] = []
     warnings: list[str] = []
@@ -189,9 +190,11 @@ def lift_candidates(messages: list[str], *, llm_max_items: int = 20) -> LiftResu
         ),
     )
 
+    normalized_message_id = str(message_id or "").strip() or "current"
+    message_hash = hashlib.md5(normalized_message_id.encode("utf-8")).hexdigest()[:12]
     card = LiftedCard(
-        card_id="card-current",
-        candidate_id="cand-current",
+        card_id=f"card-{message_hash}",
+        candidate_id=f"cand-{message_hash}",
         title=str(parts.get("title", defaults["title"])),
         summary=str(parts.get("summary", defaults["summary"])),
         problem=str(parts.get("problem", defaults["problem"])),
@@ -203,7 +206,7 @@ def lift_candidates(messages: list[str], *, llm_max_items: int = 20) -> LiftResu
         tags=tags,
         confidence=float(confidence),
         suggested_target=suggested_target,
-        source_message_ids=["current"],
+        source_message_ids=[normalized_message_id],
         topic_focus=str(parts.get("topic_focus", defaults["topic_focus"])),
         message_role=str(parts.get("message_role", defaults["message_role"])),
         context_relation=str(parts.get("context_relation", defaults["context_relation"])),

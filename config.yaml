@@ -1,5 +1,5 @@
 logging:
-  level: "INFO"
+  level: "DEBUG"
   log_file: "logs/sofree.log"
 
 insight:
@@ -20,7 +20,7 @@ insight:
   step_trace_enabled: true
   rag_enabled: true
   rag_top_k: 5
-  rag_min_score: 0.35
+  rag_min_score: 0.1
   rag_embed_model: "BAAI/bge-large-zh"
   observe_auto_reply_enabled: true
 
@@ -55,6 +55,26 @@ insight:
       thinking_type: "disabled"
     observe_qa:
       max_tokens: 64
+      temperature: 0.0
+      top_p: 0.1
+      thinking_type: "disabled"
+    observe_answer:
+      max_tokens: 320
+      temperature: 0.0
+      top_p: 0.1
+      thinking_type: "disabled"
+    observe_convert:
+      max_tokens: 256
+      temperature: 0.0
+      top_p: 0.1
+      thinking_type: "disabled"
+    observe_merge_convert:
+      max_tokens: 320
+      temperature: 0.0
+      top_p: 0.1
+      thinking_type: "disabled"
+    observe_optimize_card:
+      max_tokens: 768
       temperature: 0.0
       top_p: 0.1
       thinking_type: "disabled"
