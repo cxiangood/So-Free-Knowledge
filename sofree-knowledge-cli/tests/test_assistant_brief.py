@@ -433,6 +433,38 @@ def test_interest_digest_accepts_single_interest_hit_without_mention():
     assert items[0]["message_id"] == "om_interest_single"
 
 
+def test_interest_digest_accepts_task_signal_without_interest_keyword_hit():
+    report = build_personal_brief(
+        documents=[{"doc_id": "d1", "title": "Any", "summary": "Any"}],
+        messages=[
+            {
+                "message_id": "om_task_signal",
+                "chat_id": "oc_chat",
+                "content": "大家注意一下，本项目的截止日期是2026年5月7号，大家抓紧做好收尾工作",
+            }
+        ],
+        user_profile={"interests": ["知识协同", "项目推进"]},
+    )
+    items = report["interest_digest"]["items"]
+    assert len(items) == 1
+    assert items[0]["message_id"] == "om_task_signal"
+
+
+def test_interest_digest_filters_low_signal_messages_by_score_threshold():
+    report = build_personal_brief(
+        documents=[{"doc_id": "d1", "title": "Any", "summary": "Any"}],
+        messages=[
+            {
+                "message_id": "om_low_signal",
+                "chat_id": "oc_chat",
+                "content": "收到，明白了",
+            }
+        ],
+        user_profile={"interests": ["知识协同", "项目推进"]},
+    )
+    assert report["interest_digest"]["items"] == []
+
+
 def test_interest_digest_filters_low_information_placeholder_mentions():
     report = build_personal_brief(
         documents=[{"doc_id": "d1", "title": "Any", "summary": "Any"}],

@@ -88,6 +88,8 @@ TASK_SIGNAL_KEYWORDS = (
     "排期",
 )
 
+MIN_INTEREST_DIGEST_SCORE = 24
+
 INTEREST_NEGATIVE_CONTEXT_PATTERNS = (
     "若继续发布此类违规内容",
     "无法为你提供后续服务",
@@ -779,13 +781,6 @@ def _build_interest_digest(messages: list[dict[str, Any]], interests: list[str],
         if mention_signal:
             candidate_terms.append(mention_signal)
         candidate_terms.extend(task_signal_terms)
-        if (
-            not candidate_terms
-            and signal_hits <= 0
-            and not urgency_hit
-            and (openclaw_importance or 0.0) < 0.45
-        ):
-            continue
         openclaw_screen = _openclaw_interest_screen(
             message=message,
             signal_hits=signal_hits,
@@ -804,14 +799,6 @@ def _build_interest_digest(messages: list[dict[str, Any]], interests: list[str],
             hit_term_count=len(candidate_terms),
             mention_signal=mention_signal,
             openclaw_importance=openclaw_importance,
-        ):
-            continue
-        if (
-            mention_signal == ""
-            and len(candidate_terms) < 1
-            and signal_hits <= 0
-            and not urgency_hit
-            and (openclaw_importance or 0.0) < 0.5
         ):
             continue
         final_review = _final_interest_recommendation_decision(
@@ -833,7 +820,7 @@ def _build_interest_digest(messages: list[dict[str, Any]], interests: list[str],
         if summary in dedupe_summary:
             continue
         dedupe_summary.add(summary)
-        score = len(hit_terms) * 24 + len(task_signal_terms) * 18 + signal_hits * 8 + (20 if urgency_hit else 0)
+        score = len(hit_terms) * 24 + len(task_signal_terms) * 24 + signal_hits * 8 + (20 if urgency_hit else 0)
         if mention_signal == "@all":
             score += 36
         elif mention_signal == "@mention":
@@ -842,6 +829,8 @@ def _build_interest_digest(messages: list[dict[str, Any]], interests: list[str],
             score += int(openclaw_importance * 100)
         if openclaw_screen["reason"].startswith("accepted_by_openclaw_"):
             score += 12
+        if score < MIN_INTEREST_DIGEST_SCORE:
+            continue
         items.append(
             {
                 "message_id": message.get("message_id", ""),
@@ -982,6 +971,16 @@ def _final_interest_recommendation_decision(
         if mention_count >= 2 and len(compact) < 40:
             return {"accepted": False, "reason": "rejected_multi_mention_low_density"}
 
+    if (
+        mention_signal == ""
+        and mention_count >= 1
+        and content_keywords == 0
+        and task_signal_count == 0
+        and signal_hits <= 0
+        and not urgency_hit
+    ):
+        return {"accepted": False, "reason": "rejected_indirect_mention_without_content_signal"}
+
     if mention_signal == "@mention" and content_keywords == 0 and signal_hits <= 0 and not urgency_hit and len(compact) < 12:
         return {"accepted": False, "reason": "rejected_low_information_direct_mention"}
 
@@ -997,7 +996,7 @@ def _final_interest_recommendation_decision(
         return {"accepted": True, "reason": "accepted_direct_mention"}
     if content_keywords >= 1:
         return {"accepted": True, "reason": "accepted_interest_term_match"}
-    return {"accepted": False, "reason": "rejected_no_final_value"}
+    return {"accepted": True, "reason": "accepted_low_signal_candidate"}
 
 
 def _openclaw_interest_screen(
@@ -1045,10 +1044,10 @@ def _openclaw_interest_screen(
     if explicit_relevant is True:
         return {"accepted": True, "reason": "accepted_by_openclaw_relevant_true"}
 
-    # Fallback rule path when OpenClaw metadata is absent.
+    # Fallback path: default to candidate inclusion unless explicit garbage metadata blocked earlier.
     if signal_hits > 0 or urgency_hit or task_signal_count > 0 or hit_term_count >= 1 or bool(mention_signal):
         return {"accepted": True, "reason": "accepted_by_rule_fallback"}
-    return {"accepted": False, "reason": "blocked_by_rule_fallback"}
+    return {"accepted": True, "reason": "accepted_by_default_fallback"}
 
 
 def _collect_openclaw_labels(value: Any) -> list[str]:
