@@ -26,15 +26,6 @@ except ModuleNotFoundError:  # pragma: no cover
                 def register_p2_im_message_receive_v1(self, handler):
                     return self
 
-                def register_p2_im_message_reaction_created_v1(self, handler):
-                    return self
-
-                def register_p2_im_message_reaction_deleted_v1(self, handler):
-                    return self
-
-                def register_p2_im_message_read_v1(self, handler):
-                    return self
-
                 def build(self):
                     return object()
 
@@ -55,18 +46,7 @@ except ModuleNotFoundError:  # pragma: no cover
 
 LOGGER = logging.getLogger(__name__)
 SUPPORTED_EVENT_TYPE = "im.message.receive_v1"
-HANDLED_EVENT_TYPES = frozenset({SUPPORTED_EVENT_TYPE})
-PERMISSION_COUPLED_IGNORED_EVENT_REGISTER_METHODS = {
-    "im.message.reaction.created_v1": "register_p2_im_message_reaction_created_v1",
-    "im.message.reaction.deleted_v1": "register_p2_im_message_reaction_deleted_v1",
-    "im.message.message_read_v1": "register_p2_im_message_read_v1",
-}
-SUPPORTED_EVENT_TYPES = frozenset(
-    {
-        SUPPORTED_EVENT_TYPE,
-        *PERMISSION_COUPLED_IGNORED_EVENT_REGISTER_METHODS.keys(),
-    }
-)
+SUPPORTED_EVENT_TYPES = frozenset({SUPPORTED_EVENT_TYPE})
 TOPIC_MESSAGE_RECEIVED = "message.received"
 TOPIC_MESSAGE_USER_P2P = "message.user.p2p"
 TOPIC_MESSAGE_USER_GROUP = "message.user.group"
@@ -172,24 +152,7 @@ class OpenAPIMessageListener:
         if SUPPORTED_EVENT_TYPE in self._enabled_event_types:
             builder = builder.register_p2_im_message_receive_v1(self._handle_message_receive)
         else:
-            builder = builder.register_p2_im_message_receive_v1(self._handle_ignored_event)
-
-        ignored_enabled_event_types = self._enabled_event_types - HANDLED_EVENT_TYPES - unknown_event_types
-        if ignored_enabled_event_types:
-            LOGGER.warning(
-                "event_types have SDK processors but no insight pipeline handler yet: %s",
-                sorted(ignored_enabled_event_types),
-            )
-
-        # These events are bound to the same Lark permission set as message
-        # listening, so the app may receive them even when insight only handles
-        # messages. Register no-op processors to avoid Lark SDK ERROR logs.
-        for event_type, method_name in PERMISSION_COUPLED_IGNORED_EVENT_REGISTER_METHODS.items():
-            register = getattr(builder, method_name, None)
-            if register is None:
-                LOGGER.warning("lark sdk processor register method not found: event_type=%s method=%s", event_type, method_name)
-                continue
-            builder = register(self._handle_ignored_event)
+            builder = builder.register_p2_im_message_receive_v1(lambda _data: None)
 
         return builder.build()
 
@@ -211,21 +174,6 @@ class OpenAPIMessageListener:
         except Exception:
             LOGGER.debug("resolve user name failed for user_id=%s", user_id, exc_info=True)
             return ""
-
-    def _handle_ignored_event(self, data: Any) -> None:
-        event_type = _event_type_from_lark_payload(data)
-        LOGGER.warning("ignored lark event without insight pipeline handler: event_type=%s", event_type or "unknown")
-
-
-def _event_type_from_lark_payload(data: Any) -> str:
-    header = getattr(data, "header", None)
-    event_type = getattr(header, "event_type", "") or getattr(data, "event_type", "")
-    if event_type:
-        return str(event_type)
-    event = getattr(data, "event", None)
-    event_type = getattr(event, "event_type", "")
-    return str(event_type or "")
-
 
 __all__ = [
     "MessageEvent",

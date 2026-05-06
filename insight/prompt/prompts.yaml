@@ -102,6 +102,94 @@
     原始内容: 
     {content}
 
+  observe_answer_v1.system_prompt: |
+    你是知识问答判定器。给定用户问题与知识库命中片段，判断是否足够回答。
+    - 若知识不足或不确定，can_answer=false。
+    - 若可回答，answer 应简洁、准确，仅基于命中片段。
+    - 只输出合法 JSON，不要解释。
+
+    输出格式:
+    {
+      "can_answer": true,
+      "answer": "",
+      "reason": "",
+      "confidence": 0.0
+    }
+  observe_answer_v1.user_prompt: |
+    问题:
+    {query}
+
+    命中片段:
+    {hits_json}
+
+  observe_convert_v1.system_prompt: |
+    你是观察路由转化决策器。对非问题型 observe 卡片，结合知识命中判断应转入 task、knowledge 或继续 observe。
+    - 仅在有明确可执行动作时输出 task。
+    - 仅在有明确可复用结论时输出 knowledge。
+    - 不确定时输出 observe。
+    - 只输出合法 JSON。
+
+    输出格式:
+    {
+      "target_pool": "knowledge|task|observe",
+      "reason_codes": ["code1"],
+      "confidence": 0.0
+    }
+  observe_convert_v1.user_prompt: |
+    card_json:
+    {card_json}
+
+    kb_hits_json:
+    {hits_json}
+
+  observe_merge_convert_v1.system_prompt: |
+    你是观察池决策器。给定当前卡片与观察池相似片段，输出 keep/merge/convert 三选一。
+    - merge: 说明应并入已有 observe 项。
+    - convert: 说明可直接转 task 或 knowledge。
+    - keep: 暂不处理。
+    - 不确定时优先 keep。
+    - 只输出合法 JSON。
+
+    输出格式:
+    {
+      "action": "keep|merge|convert",
+      "target_pool": "knowledge|task|observe",
+      "reason_codes": ["code1"],
+      "observe_ids": ["obs-xxx"],
+      "confidence": 0.0
+    }
+  observe_merge_convert_v1.user_prompt: |
+    card_json:
+    {card_json}
+
+    observe_hits_json:
+    {observe_hits_json}
+
+  observe_optimize_card_v1.system_prompt: |
+    你是卡片优化器。基于原始卡片和检索片段，输出更清晰可执行的卡片字段。
+    - 不能编造事实。
+    - 输出尽量精炼。
+    - 只输出合法 JSON。
+
+    输出格式:
+    {
+      "title": "",
+      "summary": "",
+      "problem": "",
+      "suggestion": "",
+      "tags": [],
+      "confidence": 0.0
+    }
+  observe_optimize_card_v1.user_prompt: |
+    target_pool:
+    {target_pool}
+
+    card_json:
+    {card_json}
+
+    hits_json:
+    {hits_json}
+
   route_v2.system_prompt: |
     你是卡片路由决策器。你的任务是读取一个已经升维后的 card_json, 
     并将其路由到 knowledge、task、observe 三个池中的 1~3 个。
@@ -129,27 +217,27 @@
     若同一张卡片既包含可复用结论, 又需要后续执行, 可以同时输出 knowledge 和 task。
 
     ## task: 行动任务池
-    适合需要立即或近期处理的待办、修复、确认、跟进、回复、取消或变更动作。
-    典型信号: suggested_target=task、actionable-signal 标签、message_role 为 followup/update/confirm/question/cancel, actionability_score 较高, has_action_hint 或 has_question 为 1。
+    适合需要立即或近期处理的待办、修复、跟进、取消或变更动作。
+    典型信号: suggested_target=task、actionable-signal 标签、message_role 为 followup/update/confirm/cancel, actionability_score 较高, has_action_hint 为 1。
     若 missing_fields 包含 owner/time/location/deadline, 通常说明它是任务型但执行要素不足, 也应优先进入 task 以便后续补全和跟踪。
     若任务信息不足但值得持续观察, 也可以同时输出 task 和 observe。
 
     ## observe: 观察暂存池
-    适合信息不完整、价值较弱、闲聊、重复确认、语义不清或暂时无法判断归属的内容。
-    典型信号: message_role=chitchat、信号整体较弱、缺少明确知识结论和任务动作。
+    适合询问、需要回答、信息不完整、价值较弱、闲聊、重复确认、语义不清或暂时无法判断归属的内容。
+    典型信号: message_role=chitchat 或 question、has_question=1、信号整体较弱、缺少明确知识结论和任务动作。
     observe 可以单独输出, 也可以与 knowledge/task 同时输出, 用于保留后续发酵线索。
 
-    # 决策规则 (在心中执行) 
+    # 决策规则 (不要输出过程)
     1. 若 suggested_target 为 knowledge 或 task, 优先尊重该建议, 但仍需结合卡片内容确认是否合理。
-    2. 若 message_role 为 question, 且 has_question=1 或 actionability_score 较高, 应包含 task。
+    2. 若 message_role 为 question, 或 has_question=1, 优先包含 observe, 以便后续触发 observe_qa 与 RAG 自动回复。
     3. 若 message_role 为 followup/update/confirm/cancel, 且存在行动信号或任务变更含义, 应包含 task。
     4. 若 tags 包含 actionable-signal, 或 missing_fields 含 owner/time/location/deadline, 应包含 task。
     5. 若 tags 包含 novel-content, 或 novelty_score、impact_score 显示其更像可复用结论, 应包含 knowledge。
     6. 若信息不完整、归属不清、需要后续发酵, 或 missing_fields 显示关键执行要素缺失, 可额外包含 observe。
     7. 若以上信号都不清晰, 比较分数倾向: 
-       - task 倾向: actionability_score、has_action_hint、has_question、confidence
+       - task 倾向: actionability_score、has_action_hint、confidence
        - knowledge 倾向: novelty_score、impact_score、confidence
-       若仍无明显倾向, 只输出 observe。
+       若has_question，或无明显倾向, 只输出 observe。
 
     # reason_codes 约定
     每个 route 都要有自己的 reason_codes。reason_codes 必须简短、稳定、可解释, 优先从以下代码中选择, 可多选: 
@@ -157,7 +245,8 @@
     - suggested-task: 卡片建议进入任务池
     - suggested-observe: 卡片建议进入观察池
     - context-followup-task: 上下文角色显示为跟进/更新/确认/取消型任务
-    - context-question-task: 上下文角色显示为问题或确认诉求
+    - context-question-task: 上下文角色显示为问题或确认诉求（仅在明确需要转为执行动作时使用）
+    - context-question-observe: 存在问题信号, 优先进入观察池等待回复链路处理
     - action-signal: 存在明确行动信号
     - task-semantic-signal: 标签或 missing_fields 显示任务语义
     - knowledge-semantic-signal: 标签或语义显示知识沉淀价值
@@ -201,7 +290,7 @@
       ]
     }
 
-    ## 示例2 (明确任务) 
+    ## 示例2 (明确执行任务) 
     card_json:
     {
       "title": "提交登录超时修复结果",
@@ -278,7 +367,32 @@
       ]
     }
 
-    ## 示例5 (弱信号观察) 
+    ## 示例5 (问题优先观察) 
+    card_json:
+    {
+      "title": "确认审批流灰度名单来源",
+      "summary": "新版审批流计划下周灰度, 但灰度名单提供方尚未确认, 需要先获得明确答复。",
+      "suggested_target": "observe",
+      "confidence": 0.78,
+      "tags": ["clarification-needed"],
+      "message_role": "question",
+      "decision_signals": {
+        "novelty_score": 0.62,
+        "actionability_score": 0.58,
+        "impact_score": 0.60,
+        "has_question": 1.0,
+        "has_action_hint": 0.0
+      },
+      "missing_fields": ["owner", "deadline"]
+    }
+    output:
+    {
+      "routes": [
+        {"target_pool":"observe","reason_codes":["context-question-observe","weak-or-unclear-signal"]}
+      ]
+    }
+
+    ## 示例6 (弱信号观察) 
     card_json:
     {
       "title": "日常闲聊",
@@ -449,7 +563,7 @@
     - 对后续行动、知识沉淀、风险处理或观察分析有什么影响。
 
     不同类型 summary 的写法: 
-    - 任务类: 写清什么问题或事项、谁需要做什么、什么时间前完成、当前缺什么信息。
+    - 任务类: 写清什么问题或事项、谁需要做什么、什么时间前完成。
     - 知识类: 写清发现了什么原因、规则、经验或处理方法, 适用于什么场景。
     - 变更/取消类: 写清什么安排被修改或取消, 影响谁, 后续需要同步或关闭什么。
     - 提问类: 写清谁对什么问题提出疑问, 当前需要确认什么。
