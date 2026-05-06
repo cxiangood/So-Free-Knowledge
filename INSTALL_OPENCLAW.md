@@ -345,6 +345,16 @@ sofree-knowledge --env-file ./.env auth-status
 
 这一部分使用当前 CLI 已实现的授权链接 + 回调 URL 交换流程。
 
+这里的执行要求要写死：
+
+- 不要只告诉用户“需要认证”。
+- 必须先实际调用 `sofree-knowledge --env-file ./.env auth-url`。
+- 必须从 stdout JSON 里取出 `authorization_url`。
+- 必须把这个链接主动发给用户。
+- 只有在用户回传浏览器最终跳转的完整回调 URL，或回调里的 `code` 之后，才进入 `exchange-code`。
+
+如果 Agent 还没实际拿到 `authorization_url`，就不要让用户自己“去认证”或“去找链接”。
+
 ### 第一次调用：生成授权链接
 
 生成授权链接，并把它发给用户：
@@ -361,6 +371,15 @@ stdout 是 JSON。你需要从里面读取：
 
 ```text
 <https://accounts.feishu.cn/...>
+```
+
+推荐直接按下面这个模板发给用户，不要只发一句“请先认证”：
+
+```text
+请打开下面这个飞书授权链接完成登录：
+<https://accounts.feishu.cn/...>
+
+完成后，把浏览器最终跳转到的完整回调 URL 发给我；如果你只能拿到其中的 code，也可以直接把 code 发给我。
 ```
 
 不要改写这个 URL，也不要让 Agent 自己尝试打开浏览器。应由用户自己在浏览器里打开该链接并完成授权。
@@ -403,6 +422,111 @@ sofree-knowledge --env-file ./.env auth-status
 ## Step 7 - 推荐的可用命令
 
 安装完成后，优先使用下面这些当前真实存在的命令。
+
+### 先看这个：cron 是“原生支持配置”，不是“原生代管系统调度”
+
+`sofree-knowledge assistant set-profile` 确实原生支持保存 cron 表达式，例如 `--weekly-brief-cron`、`--nightly-interest-cron`。但它做的事情是把 schedule 写进用户 profile，并在 `build-personal-brief` 的输出里生成 `runtime_plan`，不会自动写入 Linux `crontab`、不会自动创建 OpenClaw/Hermes 的系统级定时任务。
+
+换句话说：
+
+- `assistant set-profile` = 保存“什么时候应该跑”
+- 外部 cron / scheduler = 负责“真的在那个时间执行命令”
+
+如果用户问“不是原生支持 cron 吗”，正确回答应该是：
+
+- 支持原生 cron 表达式配置
+- 不支持自动代管宿主机的系统 cron
+- 真正落地定时推送时，仍然要由外部调度器执行 `sofree-knowledge ...` 命令
+
+### 定时推送时必须显式处理的 5 件事
+
+1. 永远传 `--env-file`
+
+不要假设 cron 进程能自动找到正确的 `.env`。交互式 shell 和 cron 的工作目录经常不同，最稳妥的方式是显式传绝对路径：
+
+```bash
+sofree-knowledge --env-file /abs/path/.env ...
+```
+
+2. 永远传固定的 `--output-dir`
+
+push 去重状态、用户 profile、token/缓存隔离都依赖 `output-dir`。定时任务和手动执行如果用了不同目录，会出现“手动能跑、cron 跑不到同一份状态”的问题。
+
+3. 推送目标不要写成 `--to`
+
+当前 CLI 没有 `--to` 参数。真正支持的是：
+
+- `--receive-chat-id oc_xxx`
+- `--receive-open-id ou_xxx`
+
+如果 cron 环境里拿不到用户 token 对应的 open_id，就必须显式传其中一个，否则会报错。
+
+4. 明确区分“保存 schedule”与“真正执行推送”
+
+保存配置：
+
+```bash
+sofree-knowledge --env-file ./.env assistant set-profile \
+  --timezone "Asia/Shanghai" \
+  --weekly-brief-cron "30 14 * * *" \
+  --nightly-interest-cron "40 14 * * *"
+```
+
+真正执行一次推送：
+
+```bash
+sofree-knowledge --env-file ./.env --output-dir . brief --receive-chat-id oc_xxx
+```
+
+5. 注意内容去重
+
+同一个接收目标、同一类卡片、完全相同的 payload，不会重复发送。去重状态保存在：
+
+```text
+<output-dir>/assistant_push_state.json
+```
+
+如果用户要求“立刻重发一次”，但内容与上次完全一样，CLI 可能返回 `duplicate_content`。这是正常行为，不是 cron 没跑。
+
+### 如何查看当前 schedule 配置
+
+```bash
+sofree-knowledge --env-file ./.env assistant get-profile
+```
+
+### 如何查看 runtime_plan
+
+`runtime_plan` 只是建议你应该如何接 cron 的 handler，不会自动注册到系统：
+
+```bash
+sofree-knowledge --env-file ./.env assistant build-personal-brief --online --output-format all
+```
+
+返回 JSON 里的 `report.runtime_plan.cron_jobs` 可用于检查：
+
+- job 名称
+- cron 表达式
+- 建议 handler
+
+### 推荐的系统 cron 写法
+
+如果用户明确要“14:30、14:40、14:50 各推一次”，应该由外部调度器分别调用三条命令，示例：
+
+```cron
+30 14 * * * cd /abs/path/So-Free-Knowledge && timeout 600 sofree-knowledge --env-file /abs/path/.env --output-dir /abs/path/So-Free-Knowledge brief --receive-chat-id oc_xxx
+40 14 * * * cd /abs/path/So-Free-Knowledge && timeout 600 sofree-knowledge --env-file /abs/path/.env --output-dir /abs/path/So-Free-Knowledge brief --receive-chat-id oc_xxx
+50 14 * * * cd /abs/path/So-Free-Knowledge && timeout 600 sofree-knowledge --env-file /abs/path/.env --output-dir /abs/path/So-Free-Knowledge brief --receive-chat-id oc_xxx
+```
+
+兼容性原则：
+
+- 显式 `cd` 到仓库目录
+- 显式传 `.env` 绝对路径
+- 显式传 `--output-dir`
+- 显式传 `--receive-chat-id` 或 `--receive-open-id`
+- 显式加超时，避免调度器长时间挂死
+
+如果宿主环境没有 `timeout` 命令，就用该平台自己的超时机制，但不要省略超时控制。
 
 ### 1. 知识推荐卡片推送
 

@@ -131,20 +131,58 @@ export HF_TOKEN="你的Hugging Face Token"
 python start_insight.py
 ```
 
+5. 如果后续流程需要用户 OAuth，不要只提示“请认证”，而是先实际生成授权链接再发给用户：
+```bash
+sofree-knowledge --env-file ./.env auth-url
+```
+
+从返回 JSON 中读取 `authorization_url`，直接把该链接发给用户。用户完成授权后，再执行：
+
+```bash
+sofree-knowledge --env-file ./.env exchange-code "<callback_url_or_code>"
+```
+
+`<callback_url_or_code>` 可以是浏览器最终回调 URL，也可以直接是其中的 `code`。
+
 ### 常用命令使用
 #### 知识推荐推送（OpenClaw使用）
 ```bash
-# shortcut 主动推送知识+兴趣混合卡片给用户
+# shortcut：默认推送兴趣 digest 卡片
 sofree-knowledge brief
 
-# 只推送知识摘要卡片（不推兴趣内容）
+# 推送到指定群聊
 sofree-knowledge brief --receive-chat-id oc_xxx
 
-# 只推送兴趣 digest 卡片（不推知识摘要）
+# 显式只推送兴趣 digest 卡片（等价于默认行为）
+sofree-knowledge brief --no-push-summary-card --push-interest-card
+
+# 只推送知识摘要卡片（不推兴趣内容）
 sofree-knowledge brief --push-summary-card --no-push-interest-card
 
-# 配置定时推送（在用户profile中设置推送时间）
-sofree-knowledge assistant set-profile --weekly-brief-cron "0 9 * * MON" --nightly-interest-cron "0 21 * * *"
+# 在用户 profile 中保存 cron 表达式与时区
+sofree-knowledge assistant set-profile --timezone "Asia/Shanghai" --weekly-brief-cron "0 9 * * MON" --nightly-interest-cron "0 21 * * *"
+
+# 查看当前 profile / schedule
+sofree-knowledge assistant get-profile
+```
+
+#### 定时推送说明（重要）
+`assistant set-profile` 原生支持 cron 表达式配置，但它不会自动写系统 `crontab`，也不会自动创建宿主环境的定时任务。它的作用是把 schedule 保存到 profile，并在 `assistant build-personal-brief` 的输出中给出 `runtime_plan`。
+
+真正要落地自动推送，仍然需要外部 cron / scheduler 去执行命令。定时任务建议始终显式传：
+
+- `--env-file`
+- `--output-dir`
+- `--receive-chat-id` 或 `--receive-open-id`
+
+不要使用不存在的 `--to` 参数。
+
+一个更稳妥的 cron 示例：
+
+```cron
+30 14 * * * cd /abs/path/So-Free-Knowledge && timeout 600 sofree-knowledge --env-file /abs/path/.env --output-dir /abs/path/So-Free-Knowledge brief --receive-chat-id oc_xxx
+40 14 * * * cd /abs/path/So-Free-Knowledge && timeout 600 sofree-knowledge --env-file /abs/path/.env --output-dir /abs/path/So-Free-Knowledge brief --receive-chat-id oc_xxx
+50 14 * * * cd /abs/path/So-Free-Knowledge && timeout 600 sofree-knowledge --env-file /abs/path/.env --output-dir /abs/path/So-Free-Knowledge brief --receive-chat-id oc_xxx
 ```
 
 #### 智能飞书词典写入

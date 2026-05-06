@@ -822,6 +822,8 @@ def _lookup_user_display_name(client: FeishuClient, identity: dict[str, Any]) ->
     open_id = str(identity.get("open_id") or "").strip()
     if not open_id:
         return ""
+    if getattr(client, "_contact_user_lookup_disabled", False):
+        return ""
     path = f"/open-apis/contact/v3/users/{open_id}"
     params = {"user_id_type": "open_id"}
     try:
@@ -830,6 +832,7 @@ def _lookup_user_display_name(client: FeishuClient, identity: dict[str, Any]) ->
         try:
             data = client.request("GET", path, params=params, access_token=client.get_tenant_access_token())
         except Exception:
+            setattr(client, "_contact_user_lookup_disabled", True)
             return ""
     user = data.get("data", {}).get("user", {}) if isinstance(data, dict) else {}
     return str(user.get("name") or user.get("en_name") or "").strip()
