@@ -92,9 +92,8 @@ def collect_online_personal_inputs(
                     else:
                         # 缓存没有就查API
                         user_info = _get_user_info(client, sender_id)
-                        if user_info.get("name"):
-                            sender_name = user_info["name"]
-                            user_id_to_name[sender_id] = sender_name
+                        sender_name = str(user_info.get("name") or "").strip()
+                        user_id_to_name[sender_id] = sender_name
 
                 if sender_id and sender_name and not _looks_like_principal_id(sender_name):
                     user_id_to_name[sender_id] = sender_name
@@ -749,6 +748,8 @@ def _get_user_info(client: FeishuClient, user_id: str) -> dict[str, str]:
     """调用通讯录API获取用户信息"""
     if not user_id or not user_id.startswith("ou_"):
         return {}
+    if getattr(client, "_contact_user_lookup_disabled", False):
+        return {}
     try:
         path = f"/open-apis/contact/v3/users/{user_id}?user_id_type=open_id"
         data = client.request("GET", path)
@@ -756,6 +757,7 @@ def _get_user_info(client: FeishuClient, user_id: str) -> dict[str, str]:
         try:
             data = client.request("GET", path, access_token=client.get_tenant_access_token())
         except Exception:
+            setattr(client, "_contact_user_lookup_disabled", True)
             return {}
     try:
         user = data.get("data", {}).get("user", {})

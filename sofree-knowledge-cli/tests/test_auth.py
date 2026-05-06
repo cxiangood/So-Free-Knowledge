@@ -58,4 +58,4 @@ def test_has_required_scopes_matches_space_separated_scopes():
 
 def test_default_scope_uses_existing_contact_scope_name():
     assert "contact:contact.base:readonly" in DEFAULT_SCOPE
-    assert "contact:user.base:readonly" not in DEFAULT_SCOPE
+    assert "contact:user.base:readonly" in DEFAULT_SCOPE

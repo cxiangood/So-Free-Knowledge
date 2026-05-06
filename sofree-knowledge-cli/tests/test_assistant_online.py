@@ -309,6 +309,61 @@ def test_collect_online_personal_inputs_resolves_sender_name_with_tenant_fallbac
     assert out["messages"][0]["sender_name"] == "曹林江"
 
 
+def test_collect_online_personal_inputs_disables_contact_lookup_after_permission_failure(monkeypatch):
+    class ContactDeniedClient(FakeClient):
+        def __init__(self):
+            self.contact_attempts = 0
+
+        def list_chat_messages(self, chat_id, start_time="", end_time="", page_size=50, page_token="", sort="asc"):
+            return {
+                "items": [
+                    {
+                        "message_id": "m1",
+                        "chat_id": chat_id,
+                        "msg_type": "text",
+                        "create_time": "1710000000",
+                        "sender": {"sender_id": {"open_id": "ou_a"}},
+                        "body": {"content": '{"text":"第一条消息"}'},
+                    },
+                    {
+                        "message_id": "m2",
+                        "chat_id": chat_id,
+                        "msg_type": "text",
+                        "create_time": "1710000001",
+                        "sender": {"sender_id": {"open_id": "ou_b"}},
+                        "body": {"content": '{"text":"第二条消息"}'},
+                    },
+                ],
+                "has_more": False,
+                "page_token": "",
+            }
+
+        def get_tenant_access_token(self):
+            return "tenant-token"
+
+        def request(self, method, path, access_token=None, **kwargs):
+            if path.startswith("/open-apis/contact/v3/users/"):
+                self.contact_attempts += 1
+                raise FeishuAPIError("HTTP 400; code=99991663; msg=no permission")
+            raise FeishuAPIError(f"unexpected path: {path}")
+
+    monkeypatch.setattr("sofree_knowledge.assistant_online.get_user_identity", lambda token_file=None: {"open_id": "ou_target"})
+    client = ContactDeniedClient()
+
+    out = collect_online_personal_inputs(
+        client=client,
+        target_user_id="",
+        include_visible_chats=True,
+        max_chats=5,
+        max_messages_per_chat=20,
+        max_drive_docs=10,
+        recent_days=3650,
+    )
+
+    assert out["messages"]
+    assert client.contact_attempts == 2
+
+
 def test_collect_online_personal_inputs_resolves_wiki_title_from_get_node(monkeypatch):
     class WikiClient(FakeClient):
         def list_chat_messages(self, chat_id, start_time="", end_time="", page_size=50, page_token="", sort="asc"):
