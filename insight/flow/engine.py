@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import hashlib
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from threading import RLock
 from typing import Any, TypedDict
@@ -394,7 +395,13 @@ class Engine:
                 }
             )
             result.module_traces["kb"] = kb_trace
-            self._handle_observe_backflow(message=message, result=result, card=card, default_target="knowledge")
+            self._handle_observe_backflow(
+                message=message,
+                result=result,
+                card=card,
+                default_target="knowledge",
+                disable_observe_backflow=False,
+            )
         return {"result": result, "decision_index": int(state.get("decision_index", 0)) + 1}
 
     def _node_task_store(self, state: EngineGraphState) -> dict[str, Any]:
@@ -442,7 +449,13 @@ class Engine:
                 }
             )
             result.module_traces["task"] = task_trace
-            self._handle_observe_backflow(message=message, result=result, card=task_card, default_target="task")
+            self._handle_observe_backflow(
+                message=message,
+                result=result,
+                card=task_card,
+                default_target="task",
+                disable_observe_backflow=False,
+            )
             result.task_push_attempted += 1
             if task_result.push_attempt is not None:
                 if self.config.step_trace_enabled:
@@ -617,6 +630,111 @@ class Engine:
     def _append_observe_convert_event(self, payload: dict[str, Any]) -> None:
         append_jsonl(self.observe_convert_events_path, [{**payload, "created_at": now_utc_iso()}])
 
+    def _run_observe_popped_message(
+        self,
+        *,
+        trigger_message: MessageEvent,
+        result: EngineResult,
+        base_card: LiftedCard,
+        popped_observe_items: list[dict[str, Any]],
+        target_hint: str,
+        reason_codes: list[str],
+    ) -> tuple[str, str, str]:
+        if not popped_observe_items:
+            return "observe", "", ""
+        seed = "|".join(str(item.get("observe_id", "")) for item in popped_observe_items if item)
+        popped_message_id = f"pop-{trigger_message.message_id}-{hashlib.md5(seed.encode('utf-8')).hexdigest()[:8]}"
+        topic = str(popped_observe_items[0].get("topic", "")).strip() or "observe_pop"
+        popped_message = replace(
+            trigger_message,
+            message_id=popped_message_id,
+            event_id=f"evt-{popped_message_id}",
+            content_text=f"[ObservePop] {topic}",
+            content_raw=f'{{"text":"[ObservePop] {topic}"}}',
+            parent_id=trigger_message.message_id,
+            root_id=trigger_message.root_id or trigger_message.message_id,
+        )
+        if self.config.step_trace_enabled:
+            trace_start(
+                message_id=popped_message_id,
+                chat_id=popped_message.chat_id,
+                content=f"[OBS_POP] {topic}",
+            )
+            trace_node(message_id=popped_message_id, node_name="observe_pop_spawn")
+        fused_card = self._build_fused_observe_card(base_card=base_card, observe_items=popped_observe_items, target_pool=target_hint)
+        if self.config.step_trace_enabled:
+            trace_node(message_id=popped_message_id, node_name="observe_pop_route")
+        decisions = route_cards(
+            [fused_card],
+            message_id=popped_message_id,
+            chat_id=popped_message.chat_id,
+        )
+        if not decisions:
+            if self.config.step_trace_enabled:
+                trace_finish(message_id=popped_message_id, suffix_status="ok")
+            return "observe", "", popped_message_id
+        first = decisions[0]
+        final_target = str(first.target_pool)
+        stored_id = ""
+        final_target="task"
+        if final_target == "knowledge":
+            if self.config.step_trace_enabled:
+                trace_node(message_id=popped_message_id, node_name="observe_pop_knowledge_store")
+            stored_id = save_knowledge(self.state_store, fused_card, vector_store=self.vector_store)
+        elif final_target == "task":
+            task_card = fused_card
+            if self.config.rag_enabled:
+                query = self._build_rag_query_from_card(fused_card)
+                try:
+                    hits = retrieve(self.vector_store, query=query, top_k=self.config.rag_top_k, min_score=self.config.rag_min_score)
+                except Exception as exc:
+                    hits = []
+                    result.warnings.append(f"observe pop task rag retrieval failed: {exc}")
+                if hits:
+                    result.rag_retrieval_count += 1
+                    task_card = enhance_task_card_with_rag(fused_card, hits)
+            if self.config.step_trace_enabled:
+                trace_node(message_id=popped_message_id, node_name="observe_pop_task_store")
+            task_result = save_task(
+                store=self.state_store,
+                card=task_card,
+                run_id=self._build_run_id(popped_message),
+                push_config=TaskPushConfig(enabled=self.config.task_push_enabled, env_file=self.config.env_file),
+                source_chat_id=popped_message.chat_id,
+                identity_map=self.identity_map,
+            )
+            stored_id = task_result.task_id
+            result.task_push_attempted += 1
+            if task_result.push_attempt is not None:
+                if self.config.step_trace_enabled:
+                    trace_node(message_id=popped_message_id, node_name="observe_pop_task_push")
+                if task_result.push_attempt.status == "sent":
+                    result.task_push_sent += 1
+                elif task_result.push_attempt.status == "failed":
+                    result.task_push_failed += 1
+                    result.errors.append(task_result.push_attempt.error)
+        else:
+            observe_trace: dict[str, Any] = {
+                "card_id": fused_card.card_id,
+                "target_pool": "observe",
+                "reason_codes": list(reason_codes),
+                "is_question": False,
+                "decision_action": "keep",
+                "final_target": "observe",
+                "stored_id": "",
+                "kb_rag_hit_count": 0,
+                "observe_rag_hit_count": 0,
+                "decision_reason_codes": [],
+            }
+            if self.config.step_trace_enabled:
+                trace_node(message_id=popped_message_id, node_name="observe_store")
+            stored_id = self._store_and_resolve_observe(fused_card, popped_message, result, observe_trace)
+            final_target = str(observe_trace.get("final_target", "observe"))
+        if self.config.step_trace_enabled:
+            trace_node(message_id=popped_message_id, node_name="done")
+            trace_finish(message_id=popped_message_id, suffix_status="ok")
+        return final_target, stored_id, popped_message_id
+
     def _store_and_resolve_observe(self, card: LiftedCard, message: MessageEvent, result: EngineResult, observe_trace: dict[str, Any]) -> str:
         if self.config.step_trace_enabled:
             trace_node(message_id=message.message_id, node_name="observe_store")
@@ -671,43 +789,34 @@ class Engine:
             selected_items = [item for item in selected_items if isinstance(item, dict)]
             if not selected_items:
                 return observe_id
-            fused_card = self._build_fused_observe_card(base_card=card, observe_items=selected_items, target_pool=target)
-            if target == "task":
-                task_result = save_task(
-                    store=self.state_store,
-                    card=fused_card,
-                    run_id=self._build_run_id(message),
-                    push_config=TaskPushConfig(enabled=self.config.task_push_enabled, env_file=self.config.env_file),
-                    source_chat_id=message.chat_id,
-                    identity_map=self.identity_map,
-                )
-                stored_id = task_result.task_id
-                result.task_push_attempted += 1
-                if task_result.push_attempt is not None:
-                    if task_result.push_attempt.status == "sent":
-                        result.task_push_sent += 1
-                    elif task_result.push_attempt.status == "failed":
-                        result.task_push_failed += 1
-                        result.errors.append(task_result.push_attempt.error)
-            else:
-                stored_id = save_knowledge(self.state_store, fused_card, vector_store=self.vector_store)
+            final_target, stored_id, popped_message_id = self._run_observe_popped_message(
+                trigger_message=message,
+                result=result,
+                base_card=card,
+                popped_observe_items=selected_items,
+                target_hint=target,
+                reason_codes=list(merge_decision.reason_codes),
+            )
             if self.config.step_trace_enabled:
                 trace_node(message_id=message.message_id, node_name="observe_pop")
-            self.state_store.mark_observe_popped(observe_id, final_target=target)
+            self.state_store.mark_observe_popped(observe_id, final_target=final_target)
             for item_id in selected_ids:
-                self.state_store.mark_observe_popped(item_id, final_target=target)
+                self.state_store.mark_observe_popped(item_id, final_target=final_target)
             self._delete_observe_vectors([observe_id, *selected_ids])
             observe_trace["decision_action"] = "convert"
-            observe_trace["final_target"] = target
-            observe_trace["stored_id"] = stored_id
+            observe_trace["final_target"] = final_target
+            observe_trace["stored_id"] = f"{final_target}:{stored_id}" if stored_id else final_target
             self._append_observe_convert_event(
                 {
                     "message_id": message.message_id,
                     "chat_id": message.chat_id,
                     "observe_id": observe_id,
                     "observe_ids": selected_ids,
-                    "target_pool": target,
+                    "target_pool": final_target,
                     "stored_id": stored_id,
+                    "spawned_message_id": popped_message_id,
+                    "spawn_final_target": final_target,
+                    "spawn_stored_id": stored_id,
                     "reason_codes": list(merge_decision.reason_codes),
                 }
             )
@@ -722,7 +831,17 @@ class Engine:
         except Exception:
             return []
 
-    def _handle_observe_backflow(self, *, message: MessageEvent, result: EngineResult, card: LiftedCard, default_target: str) -> None:
+    def _handle_observe_backflow(
+        self,
+        *,
+        message: MessageEvent,
+        result: EngineResult,
+        card: LiftedCard,
+        default_target: str,
+        disable_observe_backflow: bool = False,
+    ) -> None:
+        if disable_observe_backflow:
+            return
         if self.config.step_trace_enabled:
             trace_node(message_id=message.message_id, node_name="rag_backflow_retrieve_observe_pool")
         hits = self._search_observe_hits(query=self._build_rag_query_from_card(card))
@@ -743,29 +862,17 @@ class Engine:
         poppable_ids = [str(item.get("observe_id", "")).strip() for item in selected_items if str(item.get("observe_id", "")).strip()]
         if not poppable_ids:
             return
-        fused_card = self._build_fused_observe_card(base_card=card, observe_items=selected_items, target_pool=target_pool)
-        if target_pool == "task":
-            task_result = save_task(
-                store=self.state_store,
-                card=fused_card,
-                run_id=self._build_run_id(message),
-                push_config=TaskPushConfig(enabled=self.config.task_push_enabled, env_file=self.config.env_file),
-                source_chat_id=message.chat_id,
-                identity_map=self.identity_map,
-            )
-            stored_id = task_result.task_id
-            result.task_push_attempted += 1
-            if task_result.push_attempt is not None:
-                if task_result.push_attempt.status == "sent":
-                    result.task_push_sent += 1
-                elif task_result.push_attempt.status == "failed":
-                    result.task_push_failed += 1
-                    result.errors.append(task_result.push_attempt.error)
-        else:
-            stored_id = save_knowledge(self.state_store, fused_card, vector_store=self.vector_store)
+        final_target, stored_id, popped_message_id = self._run_observe_popped_message(
+            trigger_message=message,
+            result=result,
+            base_card=card,
+            popped_observe_items=selected_items,
+            target_hint=target_pool,
+            reason_codes=list(decision.reason_codes),
+        )
         popped_ids: list[str] = []
         for observe_id in poppable_ids:
-            item = self.state_store.mark_observe_popped(observe_id, final_target=target_pool)
+            item = self.state_store.mark_observe_popped(observe_id, final_target=final_target)
             if item is not None:
                 popped_ids.append(observe_id)
         if not popped_ids:
@@ -778,9 +885,12 @@ class Engine:
                 "message_id": message.message_id,
                 "chat_id": message.chat_id,
                 "from_target": default_target,
-                "converted_target": target_pool,
+                "converted_target": final_target,
                 "stored_id": stored_id,
                 "observe_ids": popped_ids,
+                "spawned_message_id": popped_message_id,
+                "spawn_final_target": final_target,
+                "spawn_stored_id": stored_id,
                 "reason_codes": list(decision.reason_codes),
             }
         )
@@ -814,7 +924,43 @@ class Engine:
         from ..shared.models import RagHit
 
         rag_hits = [RagHit(**item) for item in merged_hits if item["knowledge_id"]]
-        return optimize_card_with_llm(base_card, rag_hits, target_pool=target_pool)
+        anchor_item = observe_items[0] if observe_items else {}
+        card_ref = anchor_item.get("card_ref") if isinstance(anchor_item, dict) else None
+        anchor_card = self._build_lifted_card_from_observe_ref(card_ref, fallback=base_card)
+        return optimize_card_with_llm(anchor_card, rag_hits, target_pool=target_pool, trigger_card=base_card)
+
+    @staticmethod
+    def _build_lifted_card_from_observe_ref(card_ref: Any, fallback: LiftedCard) -> LiftedCard:
+        if not isinstance(card_ref, dict):
+            return fallback
+        try:
+            suggested_target = str(card_ref.get("suggested_target") or fallback.suggested_target).strip().lower()
+            if suggested_target not in {"knowledge", "task", "observe"}:
+                suggested_target = str(fallback.suggested_target)
+            return LiftedCard(
+                card_id=str(card_ref.get("card_id") or fallback.card_id),
+                candidate_id=str(card_ref.get("candidate_id") or fallback.candidate_id),
+                title=str(card_ref.get("title") or fallback.title),
+                summary=str(card_ref.get("summary") or fallback.summary),
+                problem=str(card_ref.get("problem") or fallback.problem),
+                suggestion=str(card_ref.get("suggestion") or fallback.suggestion),
+                participants=[str(x).strip() for x in card_ref.get("participants", []) if str(x).strip()] if isinstance(card_ref.get("participants"), list) else list(fallback.participants),
+                times=str(card_ref.get("times") or fallback.times),
+                locations=str(card_ref.get("locations") or fallback.locations),
+                evidence=[str(x).strip() for x in card_ref.get("evidence", []) if str(x).strip()] if isinstance(card_ref.get("evidence"), list) else list(fallback.evidence),
+                tags=[str(x).strip() for x in card_ref.get("tags", []) if str(x).strip()] if isinstance(card_ref.get("tags"), list) else list(fallback.tags),
+                confidence=float(card_ref.get("confidence")) if card_ref.get("confidence") is not None else float(fallback.confidence),
+                suggested_target=suggested_target,  # type: ignore[arg-type]
+                source_message_ids=[str(x).strip() for x in card_ref.get("source_message_ids", []) if str(x).strip()] if isinstance(card_ref.get("source_message_ids"), list) else list(fallback.source_message_ids),
+                topic_focus=str(card_ref.get("topic_focus") or fallback.topic_focus),
+                message_role=str(card_ref.get("message_role") or fallback.message_role),
+                context_relation=str(card_ref.get("context_relation") or fallback.context_relation),
+                context_evidence=[str(x).strip() for x in card_ref.get("context_evidence", []) if str(x).strip()] if isinstance(card_ref.get("context_evidence"), list) else list(fallback.context_evidence),
+                decision_signals=dict(card_ref.get("decision_signals", {})) if isinstance(card_ref.get("decision_signals"), dict) else dict(fallback.decision_signals),
+                missing_fields=[str(x).strip() for x in card_ref.get("missing_fields", []) if str(x).strip()] if isinstance(card_ref.get("missing_fields"), list) else list(fallback.missing_fields),
+            )
+        except Exception:
+            return fallback
 
     @staticmethod
     def _build_run_id(message: MessageEvent) -> str:

@@ -197,7 +197,7 @@ def decide_observe_merge_or_convert(card: LiftedCard, observe_hits: list[dict[st
     )
 
 
-def optimize_card_with_llm(card: LiftedCard, hits: list[RagHit], target_pool: str) -> LiftedCard:
+def optimize_card_with_llm(card: LiftedCard, hits: list[RagHit], target_pool: str, trigger_card: LiftedCard | None = None) -> LiftedCard:
     thinking_type = get_config_str("insight.llm.observe_optimize_card.thinking_type").strip()
     config = llm_client.LLMConfig.from_env(
         max_tokens=max(512, get_config_int("insight.llm.observe_optimize_card.max_tokens")),
@@ -210,9 +210,8 @@ def optimize_card_with_llm(card: LiftedCard, hits: list[RagHit], target_pool: st
     try:
         system_prompt = get_prompt("observe_optimize_card_v1.system_prompt")
         user_prompt = get_prompt("observe_optimize_card_v1.user_prompt").format(
-            target_pool=target_pool,
             card_json=json.dumps(card.to_dict(), ensure_ascii=False),
-            hits_json=json.dumps([item.to_dict() for item in hits], ensure_ascii=False),
+            trigger_card_json=json.dumps(trigger_card.to_dict(), ensure_ascii=False) if trigger_card is not None else "{}",
         )
     except Exception:
         return card
@@ -224,33 +223,30 @@ def optimize_card_with_llm(card: LiftedCard, hits: list[RagHit], target_pool: st
     )
     if payload is None:
         return card
-    title = str(payload.title or "").strip() or card.title
-    summary = str(payload.summary or "").strip() or card.summary
-    problem = str(payload.problem or "").strip() or card.problem
-    suggestion = str(payload.suggestion or "").strip() or card.suggestion
-    tags = [str(item).strip() for item in (payload.tags or []) if str(item).strip()] or list(card.tags)
-    confidence = float(payload.confidence) if payload.confidence is not None else float(card.confidence)
+    suggested_target = str(payload.suggested_target or target_pool or card.suggested_target).strip().lower()
+    if suggested_target not in {"knowledge", "task", "observe"}:
+        suggested_target = str(card.suggested_target)
     return LiftedCard(
-        card_id=card.card_id,
-        candidate_id=card.candidate_id,
-        title=title,
-        summary=summary,
-        problem=problem,
-        suggestion=suggestion,
-        participants=list(card.participants),
-        times=str(card.times or ""),
-        locations=str(card.locations or ""),
-        evidence=list(card.evidence),
-        tags=tags,
-        confidence=confidence,
-        suggested_target=target_pool if target_pool in {"knowledge", "task", "observe"} else card.suggested_target,
-        source_message_ids=list(card.source_message_ids),
-        topic_focus=card.topic_focus,
-        message_role=card.message_role,
-        context_relation=card.context_relation,
-        context_evidence=list(card.context_evidence),
-        decision_signals=dict(card.decision_signals),
-        missing_fields=list(card.missing_fields),
+        card_id=str(payload.card_id or "").strip() or card.card_id,
+        candidate_id=str(payload.candidate_id or "").strip() or card.candidate_id,
+        title=str(payload.title or "").strip() or card.title,
+        summary=str(payload.summary or "").strip() or card.summary,
+        problem=str(payload.problem or "").strip() or card.problem,
+        suggestion=str(payload.suggestion or "").strip() or card.suggestion,
+        participants=[str(item).strip() for item in (payload.participants or []) if str(item).strip()] or list(card.participants),
+        times=str(payload.times or "").strip() or str(card.times or ""),
+        locations=str(payload.locations or "").strip() or str(card.locations or ""),
+        evidence=[str(item).strip() for item in (payload.evidence or []) if str(item).strip()] or list(card.evidence),
+        tags=[str(item).strip() for item in (payload.tags or []) if str(item).strip()] or list(card.tags),
+        confidence=float(payload.confidence) if payload.confidence is not None else float(card.confidence),
+        suggested_target=suggested_target,  # type: ignore[arg-type]
+        source_message_ids=[str(item).strip() for item in (payload.source_message_ids or []) if str(item).strip()] or list(card.source_message_ids),
+        topic_focus=str(payload.topic_focus or "").strip() or card.topic_focus,
+        message_role=str(payload.message_role or "").strip() or card.message_role,
+        context_relation=str(payload.context_relation or "").strip() or card.context_relation,
+        context_evidence=[str(item).strip() for item in (payload.context_evidence or []) if str(item).strip()] or list(card.context_evidence),
+        decision_signals=dict(payload.decision_signals or {}) if isinstance(payload.decision_signals, dict) and payload.decision_signals else dict(card.decision_signals),
+        missing_fields=[str(item).strip() for item in (payload.missing_fields or []) if str(item).strip()] or list(card.missing_fields),
     )
 
 

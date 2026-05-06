@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import logging
 import os
@@ -12,9 +12,8 @@ LOGGER = logging.getLogger(__name__)
 _TRACE_LOCK = Lock()
 _TRACE_STATE: dict[str, dict[str, str | list[str]]] = {}
 
-# 动态任务状态追踪
 _TRACKING_TASKS: OrderedDict[str, dict] = OrderedDict()
-_MAX_DISPLAY_TASKS = 10  # 最多同时显示10个任务
+_MAX_DISPLAY_TASKS = 10
 _STEP_NAMES = {
     "message_cache": "消息缓存",
     "deduplicate": "去重判断",
@@ -40,12 +39,15 @@ _STEP_NAMES = {
     "task_push": "任务推送",
     "observe_pop_route": "观察弹出路由",
     "observe_pop": "观察池内容弹出",
+    "observe_pop_spawn": "观察池弹出生成独立消息",
+    "observe_pop_task_store": "观察弹出消息任务存储",
+    "observe_pop_knowledge_store": "观察弹出消息知识存储",
+    "observe_pop_task_push": "观察弹出消息任务推送",
     "done": "处理完成",
 }
 
 
 def _clear_screen() -> None:
-    """清屏，兼容Windows和Unix系统"""
     os.system('cls' if sys.platform == 'win32' else 'clear')
 
 
@@ -64,15 +66,14 @@ def _format_timeline(timeline: list[tuple[str, int | None]]) -> str:
             parts.append(name)
         else:
             parts.append(f"{name}({elapsed_ms})")
-    return " → ".join(parts)
+    return " -> ".join(parts)
 
 
 def _format_step_path(nodes: list[str]) -> str:
-    return " → ".join(_format_step_name(node) for node in nodes)
+    return " -> ".join(_format_step_name(node) for node in nodes)
 
 
 def _render_progress() -> None:
-    """渲染当前所有任务的进度"""
     with _TRACE_LOCK:
         if not _TRACKING_TASKS:
             return
@@ -105,20 +106,17 @@ def trace_start(*, message_id: str, chat_id: str, content: str) -> None:
             "last_tick": 0.0,
         }
 
-        # 加入任务追踪
         _TRACKING_TASKS[message_id] = {
             "content": short_content,
             "current_step": "消息缓存",
-            "completed": False
+            "completed": False,
         }
 
-        # 限制最多显示任务数
         if len(_TRACKING_TASKS) > _MAX_DISPLAY_TASKS:
             _TRACKING_TASKS.popitem(last=False)
 
         LOGGER.info(f"[{short_content}] trace started")
 
-    # 刷新进度
     _render_progress()
 
 
@@ -147,11 +145,9 @@ def trace_node(*, message_id: str, node_name: str) -> None:
             state["last_tick"] = now
             current_step = _format_timeline(timeline)
 
-            # 更新任务追踪中的当前步骤完整路径
             if message_id in _TRACKING_TASKS:
                 _TRACKING_TASKS[message_id]["current_step"] = current_step
 
-    # 刷新进度
     _render_progress()
 
 
@@ -166,7 +162,6 @@ def trace_finish(*, message_id: str, suffix_status: str = "ok") -> None:
         if not isinstance(nodes, list):
             nodes = []
 
-        # 去除重复的连续节点（解决context_extract出现两次的问题）
         unique_nodes = []
         prev_node = None
         for node in nodes:
@@ -177,7 +172,7 @@ def trace_finish(*, message_id: str, suffix_status: str = "ok") -> None:
         if suffix_status and suffix_status != "ok" and unique_nodes:
             unique_nodes[-1] = f"{unique_nodes[-1]}({suffix_status})"
 
-        path = "→".join(unique_nodes) if unique_nodes else "无节点"
+        path = "->".join(unique_nodes) if unique_nodes else "无节点"
         line = f"[{content}] 完成: {path}"
         LOGGER.info(line)
         display_path = _format_step_path(unique_nodes) if unique_nodes else "无节点"
@@ -190,12 +185,10 @@ def trace_finish(*, message_id: str, suffix_status: str = "ok") -> None:
                 timeline[-1] = (prev_node, elapsed_ms)
             display_path = _format_timeline(timeline)
 
-        # 更新任务状态为已完成
         if message_id in _TRACKING_TASKS:
             _TRACKING_TASKS[message_id]["completed"] = True
             _TRACKING_TASKS[message_id]["current_step"] = display_path
 
-    # 刷新进度显示最终状态
     _render_progress()
 
 

@@ -88,11 +88,25 @@ class ObserveMergeConvertOutput(BaseModel):
 
 
 class CardOptimizationOutput(BaseModel):
+    card_id: str = ""
+    candidate_id: str = ""
     title: str = ""
     summary: str = ""
     problem: str = ""
     suggestion: str = ""
+    participants: list[str] = Field(default_factory=list)
+    times: str = ""
+    locations: str = ""
+    evidence: list[str] = Field(default_factory=list)
     tags: list[str] = Field(default_factory=list)
+    suggested_target: Literal["knowledge", "task", "observe"] | None = None
+    source_message_ids: list[str] = Field(default_factory=list)
+    topic_focus: str = ""
+    message_role: str = ""
+    context_relation: str = ""
+    context_evidence: list[str] = Field(default_factory=list)
+    decision_signals: dict[str, float] = Field(default_factory=dict)
+    missing_fields: list[str] = Field(default_factory=list)
     confidence: float | None = None
 
 

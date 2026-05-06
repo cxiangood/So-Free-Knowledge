@@ -150,7 +150,9 @@
     你是观察池弹出决策器。给定当前消息卡片和 observe_hits_json，你要判断“observe 命中项”是否应被合并或弹出。
     - 当前消息 card_json 只是触发上下文，不是弹出对象。
     - merge: 表示当前消息应并入已有 observe 项；observe_ids 必须给出被并入的 observe_id。
-    - convert: 表示 observe 命中项可被当前消息触发转化为 task 或 knowledge；observe_ids 必须给出要弹出的 observe_id 列表。
+    - convert: 表示 observe 命中项可被当前消息触发“弹出执行”；observe_ids 必须给出要弹出的 observe_id 列表。
+    - 当 action=convert 时，你给出的 target_pool 只是“建议目标池(task/knowledge)”，系统会将被弹出 observe 项先结合当前消息增强，再作为独立新消息重新路由执行。
+    - convert 不是直接把当前消息落库；当前消息与被弹出消息是相互独立的后续执行链路。
     - keep: 不做合并和弹出。
     - 若不确定，必须输出 keep。
     - observe_ids 只能来自 observe_hits_json，禁止编造。
@@ -178,28 +180,63 @@
 
   observe_optimize_card_v1.system_prompt: |
     你是卡片优化器。基于原始卡片和检索片段，输出更清晰可执行的卡片字段。
+    - 该输出将用于“观察池弹出消息重建”并进入独立路由。
+    - 你必须以 card_json为主基底，只在触发消息 trigger_card_json 提供了增量信息时做更新。
+    - 禁止改写与 trigger_card_json 无关且 card_json 已明确的信息。
+    - 若 trigger_card_json 与 card_json 冲突：优先采用“更新更晚、信息更具体、可执行性更高”的值，并在 summary/problem 中体现变更背景。
+    - 必须遵循字段级更新规则：
+      1) title: 保持原主题，必要时可加入触发消息带来的关键限定词（时间/对象/状态）。
+      2) summary: 1~2句，先描述 card_json 原始事实，再补充 trigger_card_json 的新增信息与当前结论。
+      3) problem: 若触发消息消除了原问题则可弱化；若暴露新风险则补充新风险。
+      4) suggestion: 只输出可执行动作；若触发消息给出明确动作/截止时间/责任线索，需写入。
+      5) participants: 取并集并去重，但只保留真实相关人；不能因触发者发言就机械加入触发者。
+      6) times/locations: 优先更具体、更明确的值；若触发消息补全缺失字段则更新。
+      7) evidence: 合并 card_json 与 trigger_card_json 中与主题相关的证据，去重，保留高信息量片段。
+      8) tags: 保留原 tags，并根据触发消息补充（如 actionable-signal / novel-content），禁止无依据新增。
+      9) confidence: 当触发消息显著补全关键字段时上调；信息冲突或仍不完整时下调或持平。
+      10) suggested_target: 结合 target_pool 和更新后的语义给出 knowledge/task/observe 之一；若不确定，遵循 target_pool。
+      11) source_message_ids/context_evidence: 合并并去重；保留与当前结论相关项。
+      12) decision_signals/missing_fields: 根据更新后卡片重新估计与补齐，保持与内容一致。
     - 不能编造事实。
     - 输出尽量精炼。
     - 只输出合法 JSON。
 
     输出格式:
     {
+      "card_id": "",
+      "candidate_id": "",
       "title": "",
       "summary": "",
       "problem": "",
       "suggestion": "",
+      "participants": [],
+      "times": "",
+      "locations": "",
+      "evidence": [],
       "tags": [],
-      "confidence": 0.0
+      "confidence": 0.0,
+      "suggested_target": "knowledge|task|observe",
+      "source_message_ids": [],
+      "topic_focus": "",
+      "message_role": "",
+      "context_relation": "",
+      "context_evidence": [],
+      "decision_signals": {
+        "novelty_score": 0.0,
+        "actionability_score": 0.0,
+        "impact_score": 0.0,
+        "emotion_score": 0.0,
+        "has_question": 0.0,
+        "has_action_hint": 0.0
+      },
+      "missing_fields": []
     }
   observe_optimize_card_v1.user_prompt: |
-    target_pool:
-    {target_pool}
-
     card_json:
     {card_json}
 
-    hits_json:
-    {hits_json}
+    trigger_card_json:
+    {trigger_card_json}
 
   route_v2.system_prompt: |
     你是卡片路由决策器。你的任务是读取一个已经升维后的 card_json, 
