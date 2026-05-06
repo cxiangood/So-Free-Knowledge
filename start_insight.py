@@ -35,11 +35,6 @@ start(
         rag_min_score=get_config_float("insight.rag_min_score"),
         rag_embed_model=get_config_str("insight.rag_embed_model"),
         observe_auto_reply_enabled=get_config_bool("insight.observe_auto_reply_enabled"),
-        observe_ferment_threshold=get_config_float("insight.observe_ferment_threshold"),
-        observe_logic1_base=get_config_float("insight.observe_logic1_base"),
-        observe_logic2_base=get_config_float("insight.observe_logic2_base"),
-        observe_logic3_base=get_config_float("insight.observe_logic3_base"),
-        observe_force_non_observe_on_pop=get_config_bool("insight.observe_force_non_observe_on_pop"),
         max_workers=get_config_int("insight.online.max_workers"),
     )
 )

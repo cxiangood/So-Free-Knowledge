@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from threading import RLock
 from typing import Any
+import re
 
 from ..shared.models import LiftedCard
 from ..shared.utils import now_utc_iso
@@ -60,8 +61,25 @@ class LocalStateStore:
         write_json(path, {"items": items})
 
     def add_knowledge(self, card: LiftedCard) -> str:
+        knowledge_id, _ = self.add_or_merge_knowledge(card)
+        return knowledge_id
+
+    def add_or_merge_knowledge(self, card: LiftedCard, similarity_threshold: float = 0.72) -> tuple[str, bool]:
         with self._lock:
             items = self._load_items(self.knowledge_path)
+            incoming_text = _semantic_text(card)
+            matched = _find_most_similar_item(items, incoming_text, similarity_threshold, text_key="semantic_text")
+            if matched is not None:
+                matched["card_ref"] = card.to_dict()
+                matched["title"] = str(card.title or matched.get("title", ""))
+                matched["summary"] = _merge_text(str(matched.get("summary", "")), str(card.summary or ""))
+                matched["tags"] = _merge_list(matched.get("tags", []), card.tags)
+                matched["confidence"] = max(float(matched.get("confidence", 0.0) or 0.0), float(card.confidence or 0.0))
+                matched["semantic_text"] = _merge_text(str(matched.get("semantic_text", "")), incoming_text)
+                matched["updated_at"] = now_utc_iso()
+                self._save_items(self.knowledge_path, items)
+                return str(matched.get("knowledge_id", "")), False
+
             entry_id = "kg-" + hashlib.md5(card.card_id.encode("utf-8")).hexdigest()[:12]
             items.append(
                 {
@@ -72,15 +90,38 @@ class LocalStateStore:
                     "summary": card.summary,
                     "tags": card.tags,
                     "confidence": card.confidence,
+                    "semantic_text": incoming_text,
                     "created_at": now_utc_iso(),
+                    "updated_at": now_utc_iso(),
                 }
             )
             self._save_items(self.knowledge_path, items)
-            return entry_id
+            return entry_id, True
 
     def add_task(self, card: LiftedCard) -> str:
+        task_id, _ = self.add_or_merge_task(card)
+        return task_id
+
+    def add_or_merge_task(self, card: LiftedCard, similarity_threshold: float = 0.72) -> tuple[str, bool]:
         with self._lock:
             items = self._load_items(self.task_path)
+            incoming_text = _semantic_text(card)
+            active_items = [item for item in items if str(item.get("status", "todo")) in {"todo", "in_progress", "blocked"}]
+            matched = _find_most_similar_item(active_items, incoming_text, similarity_threshold, text_key="semantic_text")
+            if matched is not None:
+                matched["action"] = _merge_text(str(matched.get("action", "")), str(card.suggestion or ""))
+                matched["owner_hint"] = _merge_list(matched.get("owner_hint", []), card.participants)
+                matched["evidence"] = _merge_list(matched.get("evidence", []), card.evidence)[:10]
+                matched["semantic_text"] = _merge_text(str(matched.get("semantic_text", "")), incoming_text)
+                matched["updated_at"] = now_utc_iso()
+                history = matched.get("history", [])
+                if not isinstance(history, list):
+                    history = []
+                history.append({"status": str(matched.get("status", "todo")), "comment": "merged_similar_signal", "updated_at": matched["updated_at"]})
+                matched["history"] = history[-50:]
+                self._save_items(self.task_path, items)
+                return str(matched.get("task_id", "")), False
+
             task_id = "task-" + hashlib.md5(card.card_id.encode("utf-8")).hexdigest()[:12]
             items.append(
                 {
@@ -91,6 +132,7 @@ class LocalStateStore:
                     "deadline_hint": "",
                     "priority": _priority_from_confidence(card.confidence),
                     "evidence": card.evidence,
+                    "semantic_text": incoming_text,
                     "status": "todo",
                     "created_at": now_utc_iso(),
                     "updated_at": now_utc_iso(),
@@ -98,7 +140,7 @@ class LocalStateStore:
                 }
             )
             self._save_items(self.task_path, items)
-            return task_id
+            return task_id, True
 
     def add_observe(self, card: LiftedCard) -> str:
         with self._lock:
@@ -115,12 +157,6 @@ class LocalStateStore:
                     "last_seen_at": "",
                     "escalation_state": "tracking",
                     "evidence": [],
-                    "ferment_score": 0.0,
-                    "logic1_count": 0,
-                    "logic2_count": 0,
-                    "logic3_count": 0,
-                    "last_logic": "",
-                    "last_trigger_at": "",
                     "pop_status": "tracking",
                     "pop_count": 0,
                     "last_popped_at": "",
@@ -151,29 +187,35 @@ class LocalStateStore:
     def list_observe_items(self) -> list[dict[str, Any]]:
         return self._load_items(self.observe_path)
 
-    def apply_observe_ferment(self, observe_id: str, *, logic: str, score_added: float) -> dict[str, Any] | None:
+    def merge_observe_items(self, source_observe_id: str, target_observe_id: str) -> dict[str, Any] | None:
         with self._lock:
             items = self._load_items(self.observe_path)
-            normalized = str(observe_id or "").strip()
-            if not normalized:
+            source_id = str(source_observe_id or "").strip()
+            target_id = str(target_observe_id or "").strip()
+            if not source_id or not target_id or source_id == target_id:
                 return None
-            matched = next((item for item in items if str(item.get("observe_id", "")) == normalized), None)
-            if matched is None:
+            source = next((item for item in items if str(item.get("observe_id", "")) == source_id), None)
+            target = next((item for item in items if str(item.get("observe_id", "")) == target_id), None)
+            if source is None or target is None:
                 return None
-            if str(matched.get("pop_status", "tracking")) == "popped":
-                return matched
-            before = float(matched.get("ferment_score", 0.0) or 0.0)
-            matched["ferment_score"] = round(before + float(score_added), 4)
-            if logic == "logic1":
-                matched["logic1_count"] = int(matched.get("logic1_count", 0)) + 1
-            elif logic == "logic2":
-                matched["logic2_count"] = int(matched.get("logic2_count", 0)) + 1
-            elif logic == "logic3":
-                matched["logic3_count"] = int(matched.get("logic3_count", 0)) + 1
-            matched["last_logic"] = logic
-            matched["last_trigger_at"] = now_utc_iso()
+            evidence = target.get("evidence", [])
+            if not isinstance(evidence, list):
+                evidence = []
+            source_evidence = source.get("evidence", [])
+            if isinstance(source_evidence, list):
+                for item in source_evidence:
+                    text = str(item).strip()
+                    if text and text not in evidence:
+                        evidence.append(text)
+            target["evidence"] = evidence[:10]
+            target["hit_count"] = int(target.get("hit_count", 0)) + int(source.get("hit_count", 0))
+            target["last_seen_at"] = now_utc_iso()
+            source["pop_status"] = "popped"
+            source["pop_count"] = int(source.get("pop_count", 0)) + 1
+            source["last_popped_at"] = now_utc_iso()
+            source["escalation_state"] = "merged_into_observe"
             self._save_items(self.observe_path, items)
-            return matched
+            return target
 
     def mark_observe_popped(self, observe_id: str, *, final_target: str) -> dict[str, Any] | None:
         with self._lock:
@@ -190,30 +232,6 @@ class LocalStateStore:
             matched["escalation_state"] = f"popped_{final_target}"
             self._save_items(self.observe_path, items)
             return matched
-
-    def escalate_observations(self, threshold: int = 3) -> list[dict[str, Any]]:
-        with self._lock:
-            items = self._load_items(self.observe_path)
-            escalated: list[dict[str, Any]] = []
-            for item in items:
-                hit = int(item.get("hit_count", 0))
-                state = str(item.get("escalation_state", "tracking"))
-                if hit < threshold or state != "tracking":
-                    continue
-                target = "task" if hit >= threshold + 1 else "knowledge"
-                item["escalation_state"] = f"escalated_{target}"
-                item["escalated_at"] = now_utc_iso()
-                escalated.append(
-                    {
-                        "observe_id": item.get("observe_id", ""),
-                        "topic": item.get("topic", ""),
-                        "target": target,
-                        "hit_count": hit,
-                    }
-                )
-            if escalated:
-                self._save_items(self.observe_path, items)
-            return escalated
 
     def apply_task_updates(self, updates_file: str | Path | None) -> FeedbackSummary:
         summary = FeedbackSummary()
@@ -292,5 +310,72 @@ def _priority_from_confidence(confidence: float) -> str:
     if confidence >= 0.55:
         return "medium"
     return "low"
+
+
+_WORD_RE = re.compile(r"[\w\u4e00-\u9fff]+")
+
+
+def _semantic_text(card: LiftedCard) -> str:
+    participants = ", ".join([str(item).strip() for item in card.participants if str(item).strip()])
+    return "\n".join(
+        [
+            f"title: {str(card.title or '').strip()}",
+            f"topic_focus: {str(card.topic_focus or '').strip()}",
+            f"summary: {str(card.summary or '').strip()}",
+            f"times: {str(card.times or '').strip()}",
+            f"locations: {str(card.locations or '').strip()}",
+            f"participants: {participants}",
+        ]
+    ).strip()
+
+
+def _tokens(text: str) -> set[str]:
+    return {item.lower() for item in _WORD_RE.findall(str(text or "")) if len(item.strip()) >= 2}
+
+
+def _similarity(left: str, right: str) -> float:
+    a = _tokens(left)
+    b = _tokens(right)
+    if not a or not b:
+        return 0.0
+    return float(len(a & b)) / float(max(1, len(a | b)))
+
+
+def _find_most_similar_item(items: list[dict[str, Any]], incoming_text: str, threshold: float, text_key: str) -> dict[str, Any] | None:
+    best_item: dict[str, Any] | None = None
+    best_score = float(threshold)
+    for item in items:
+        current_text = str(item.get(text_key, "")).strip()
+        if not current_text:
+            continue
+        score = _similarity(incoming_text, current_text)
+        if score >= best_score:
+            best_score = score
+            best_item = item
+    return best_item
+
+
+def _merge_list(left: Any, right: list[str]) -> list[str]:
+    out: list[str] = []
+    if isinstance(left, list):
+        out.extend([str(item).strip() for item in left if str(item).strip()])
+    out.extend([str(item).strip() for item in (right or []) if str(item).strip()])
+    uniq: list[str] = []
+    for item in out:
+        if item not in uniq:
+            uniq.append(item)
+    return uniq
+
+
+def _merge_text(left: str, right: str) -> str:
+    a = str(left or "").strip()
+    b = str(right or "").strip()
+    if not a:
+        return b
+    if not b:
+        return a
+    if b in a:
+        return a
+    return f"{a} | {b}"
 
 __all__ = ["FeedbackSummary", "LocalStateStore"]

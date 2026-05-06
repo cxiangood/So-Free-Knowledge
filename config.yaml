@@ -23,11 +23,6 @@ insight:
   rag_min_score: 0.35
   rag_embed_model: "BAAI/bge-large-zh"
   observe_auto_reply_enabled: true
-  observe_ferment_threshold: 4.0
-  observe_logic1_base: 1.0
-  observe_logic2_base: 1.5
-  observe_logic3_base: 2.0
-  observe_force_non_observe_on_pop: true
 
   logging:
     app_name: "INSIGHT"

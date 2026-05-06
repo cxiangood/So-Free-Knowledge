@@ -13,9 +13,11 @@ def save_knowledge(store: LocalStateStore, card: LiftedCard, vector_store: Vecto
                 knowledge_id=knowledge_id,
                 card_id=card.card_id,
                 title=card.title,
+                topic_focus=card.topic_focus,
                 summary=card.summary,
-                evidence=card.evidence,
-                tags=card.tags,
+                times=card.times,
+                locations=card.locations,
+                participants=card.participants,
             )
         except Exception:
             pass

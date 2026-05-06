@@ -66,6 +66,36 @@ class ObserveQuestionOutput(BaseModel):
     confidence: float | None = None
 
 
+class ObserveAnswerOutput(BaseModel):
+    can_answer: bool = False
+    answer: str = ""
+    reason: str = ""
+    confidence: float = 0.0
+
+
+class ObserveConvertOutput(BaseModel):
+    target_pool: Literal["knowledge", "task", "observe"] = "observe"
+    reason_codes: list[str] = Field(default_factory=list)
+    confidence: float = 0.0
+
+
+class ObserveMergeConvertOutput(BaseModel):
+    action: Literal["keep", "merge", "convert"] = "keep"
+    target_pool: Literal["knowledge", "task", "observe"] = "observe"
+    reason_codes: list[str] = Field(default_factory=list)
+    observe_ids: list[str] = Field(default_factory=list)
+    confidence: float = 0.0
+
+
+class CardOptimizationOutput(BaseModel):
+    title: str = ""
+    summary: str = ""
+    problem: str = ""
+    suggestion: str = ""
+    tags: list[str] = Field(default_factory=list)
+    confidence: float | None = None
+
+
 StructuredModel = TypeVar("StructuredModel", bound=BaseModel)
 
 
