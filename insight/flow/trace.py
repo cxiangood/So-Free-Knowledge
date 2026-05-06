@@ -39,6 +39,7 @@ _STEP_NAMES = {
     "observe_reply": "观察自动回复",
     "task_push": "任务推送",
     "observe_pop_route": "观察弹出路由",
+    "observe_pop": "观察池内容弹出",
     "done": "处理完成",
 }
 

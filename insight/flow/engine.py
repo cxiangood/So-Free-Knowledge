@@ -649,6 +649,7 @@ class Engine:
             if target_observe_id:
                 merged = self.state_store.merge_observe_items(observe_id, target_observe_id)
                 if merged is not None:
+                    self._delete_observe_vectors([observe_id])
                     observe_trace["decision_action"] = "merge"
                     observe_trace["stored_id"] = str(merged.get("observe_id", target_observe_id))
                     self._append_observe_merge_event(
@@ -690,9 +691,12 @@ class Engine:
                         result.errors.append(task_result.push_attempt.error)
             else:
                 stored_id = save_knowledge(self.state_store, fused_card, vector_store=self.vector_store)
+            if self.config.step_trace_enabled:
+                trace_node(message_id=message.message_id, node_name="observe_pop")
             self.state_store.mark_observe_popped(observe_id, final_target=target)
             for item_id in selected_ids:
                 self.state_store.mark_observe_popped(item_id, final_target=target)
+            self._delete_observe_vectors([observe_id, *selected_ids])
             observe_trace["decision_action"] = "convert"
             observe_trace["final_target"] = target
             observe_trace["stored_id"] = stored_id
@@ -724,6 +728,7 @@ class Engine:
         hits = self._search_observe_hits(query=self._build_rag_query_from_card(card))
         if not hits:
             return
+        logger.debug(f"rag backflow retrieve observe pool hits: {hits}")
         decision = decide_observe_merge_or_convert(card, hits)
         if decision.action != "convert":
             return
@@ -765,6 +770,9 @@ class Engine:
                 popped_ids.append(observe_id)
         if not popped_ids:
             return
+        if self.config.step_trace_enabled:
+            trace_node(message_id=message.message_id, node_name="observe_pop")
+        self._delete_observe_vectors(popped_ids)
         self._append_observe_convert_event(
             {
                 "message_id": message.message_id,
@@ -823,6 +831,14 @@ class Engine:
             f"locations: {str(card.locations or '').strip()}\n"
             f"participants: {people}"
         ).strip()
+
+    def _delete_observe_vectors(self, observe_ids: list[str]) -> None:
+        if self.observe_vector_store is None:
+            return
+        try:
+            self.observe_vector_store.delete_observe_ids(observe_ids)
+        except Exception:
+            pass
 
 
 __all__ = ["Engine", "EngineConfig", "EngineResult"]

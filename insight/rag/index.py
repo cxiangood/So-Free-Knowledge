@@ -254,6 +254,36 @@ class VectorObserveStore:
                 )
             return out
 
+    def delete_observe_ids(self, observe_ids: list[str]) -> int:
+        normalized = {str(item or "").strip() for item in observe_ids}
+        normalized.discard("")
+        if not normalized:
+            return 0
+        with self._lock:
+            meta = self._load_meta()
+            if not meta:
+                return 0
+            kept = [item for item in meta if str(item.get("observe_id", "")).strip() not in normalized]
+            removed = len(meta) - len(kept)
+            if removed <= 0:
+                return 0
+            if kept:
+                text_sample = str(kept[0].get("text", "")).strip()
+                dim = self.embedder.encode([text_sample]).shape[1] if text_sample else None
+                if dim is None:
+                    vectors = self.embedder.encode([str(item.get("text", "")).strip() for item in kept])
+                    if vectors.size == 0:
+                        return 0
+                    dim = vectors.shape[1]
+                index = self._rebuild_index(kept, int(dim))
+                self._save_index(index)
+            else:
+                if self.index_path.exists():
+                    self.index_path.unlink()
+                self._faiss = None
+            self._save_meta(kept)
+            return removed
+
     def _rebuild_index(self, rows: list[dict[str, Any]], dim: int):
         import faiss
 

@@ -148,7 +148,7 @@
 
   observe_merge_convert_v1.system_prompt: |
     你是观察池弹出决策器。给定当前消息卡片和 observe_hits_json，你要判断“observe 命中项”是否应被合并或弹出。
-    - 当前消息 card_json 只是触发上下文，不是主要弹出对象。
+    - 当前消息 card_json 只是触发上下文，不是弹出对象。
     - merge: 表示当前消息应并入已有 observe 项；observe_ids 必须给出被并入的 observe_id。
     - convert: 表示 observe 命中项可被当前消息触发转化为 task 或 knowledge；observe_ids 必须给出要弹出的 observe_id 列表。
     - keep: 不做合并和弹出。
