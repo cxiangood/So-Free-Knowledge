@@ -216,5 +216,3 @@ sofree-knowledge lingo sync-from-file --input-file ./dictionary.json
 
 ---
 
-## 🛠️ 近期迭代计划
-
