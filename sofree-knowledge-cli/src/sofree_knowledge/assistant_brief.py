@@ -71,6 +71,23 @@ INTEREST_SIGNAL_KEYWORDS = (
     "待办",
 )
 
+TASK_SIGNAL_KEYWORDS = (
+    "截止",
+    "截止日期",
+    "ddl",
+    "deadline",
+    "due",
+    "收尾",
+    "验收",
+    "交付",
+    "里程碑",
+    "提测",
+    "回归",
+    "封板",
+    "上线前",
+    "排期",
+)
+
 INTEREST_NEGATIVE_CONTEXT_PATTERNS = (
     "若继续发布此类违规内容",
     "无法为你提供后续服务",
@@ -754,35 +771,44 @@ def _build_interest_digest(messages: list[dict[str, Any]], interests: list[str],
             continue
         mention_signal = _mention_signal_text(message, raw_text or base_text)
         hit_terms = [term for term in interest_terms if term in normalized_text.lower()]
-        if mention_signal:
-            hit_terms.append(mention_signal)
-        if not hit_terms:
-            continue
+        task_signal_terms = _extract_task_signal_terms(normalized_text)
         signal_hits = sum(1 for keyword in INTEREST_SIGNAL_KEYWORDS if keyword in normalized_text.lower())
         urgency_hit = any(keyword in normalized_text.lower() for keyword in URGENCY_KEYWORDS)
+        openclaw_importance = _coerce_float(message.get("openclaw_importance"))
+        candidate_terms = list(hit_terms)
+        if mention_signal:
+            candidate_terms.append(mention_signal)
+        candidate_terms.extend(task_signal_terms)
+        if (
+            not candidate_terms
+            and signal_hits <= 0
+            and not urgency_hit
+            and (openclaw_importance or 0.0) < 0.45
+        ):
+            continue
         openclaw_screen = _openclaw_interest_screen(
             message=message,
             signal_hits=signal_hits,
             urgency_hit=urgency_hit,
-            hit_term_count=len(hit_terms),
+            hit_term_count=len(candidate_terms),
             mention_signal=mention_signal,
+            task_signal_count=len(task_signal_terms),
         )
         if not openclaw_screen["accepted"]:
             continue
-        openclaw_importance = _coerce_float(message.get("openclaw_importance"))
         if _is_low_information_mention_message(
             message=message,
             normalized_text=normalized_text,
             signal_hits=signal_hits,
             urgency_hit=urgency_hit,
-            hit_term_count=len(hit_terms),
+            hit_term_count=len(candidate_terms),
             mention_signal=mention_signal,
             openclaw_importance=openclaw_importance,
         ):
             continue
         if (
             mention_signal == ""
-            and len(hit_terms) < 1
+            and len(candidate_terms) < 1
             and signal_hits <= 0
             and not urgency_hit
             and (openclaw_importance or 0.0) < 0.5
@@ -791,22 +817,23 @@ def _build_interest_digest(messages: list[dict[str, Any]], interests: list[str],
         final_review = _final_interest_recommendation_decision(
             message=message,
             normalized_text=normalized_text,
-            hit_terms=hit_terms,
+            hit_terms=candidate_terms,
             signal_hits=signal_hits,
             urgency_hit=urgency_hit,
             mention_signal=mention_signal,
             openclaw_importance=openclaw_importance,
+            task_signal_count=len(task_signal_terms),
         )
         if not final_review["accepted"]:
             continue
-        rewritten = _rewrite_interest_summary(normalized_text, hit_terms=hit_terms)
+        rewritten = _rewrite_interest_summary(normalized_text, hit_terms=candidate_terms)
         if not rewritten:
             continue
         summary = _trim(rewritten, 120)
         if summary in dedupe_summary:
             continue
         dedupe_summary.add(summary)
-        score = len(hit_terms) * 24 + signal_hits * 8 + (20 if urgency_hit else 0)
+        score = len(hit_terms) * 24 + len(task_signal_terms) * 18 + signal_hits * 8 + (20 if urgency_hit else 0)
         if mention_signal == "@all":
             score += 36
         elif mention_signal == "@mention":
@@ -821,7 +848,7 @@ def _build_interest_digest(messages: list[dict[str, Any]], interests: list[str],
                 "chat_id": message.get("chat_id", ""),
                 "sender_name": message.get("sender_name", ""),
                 "summary": summary,
-                "hit_terms": hit_terms[:5],
+                "hit_terms": candidate_terms[:5],
                 "openclaw_importance": openclaw_importance if openclaw_importance is not None else 0.0,
                 "message_url": _resolve_message_url(message),
                 "score": score,
@@ -867,6 +894,16 @@ def _mention_signal_text(message: dict[str, Any], text: str) -> str:
     if bool(message.get("mentions_target_user")):
         return "@mention"
     return ""
+
+
+def _extract_task_signal_terms(text: str) -> list[str]:
+    lowered = str(text or "").lower()
+    terms: list[str] = []
+    for keyword in TASK_SIGNAL_KEYWORDS:
+        normalized_keyword = keyword.lower()
+        if normalized_keyword in lowered and normalized_keyword not in terms:
+            terms.append(normalized_keyword)
+    return terms
 
 
 def _extract_message_sender_type(item: dict[str, Any]) -> str:
@@ -917,6 +954,7 @@ def _final_interest_recommendation_decision(
     urgency_hit: bool,
     mention_signal: str,
     openclaw_importance: float | None,
+    task_signal_count: int,
 ) -> dict[str, Any]:
     msg_type = str(message.get("msg_type") or "").strip().lower()
     if msg_type == "system":
@@ -951,6 +989,8 @@ def _final_interest_recommendation_decision(
         return {"accepted": True, "reason": "accepted_high_openclaw_importance"}
     if urgency_hit:
         return {"accepted": True, "reason": "accepted_urgency_signal"}
+    if task_signal_count > 0:
+        return {"accepted": True, "reason": "accepted_task_signal"}
     if signal_hits > 0:
         return {"accepted": True, "reason": "accepted_interest_signal_keyword"}
     if mention_signal:
@@ -966,6 +1006,7 @@ def _openclaw_interest_screen(
     urgency_hit: bool,
     hit_term_count: int = 0,
     mention_signal: str = "",
+    task_signal_count: int = 0,
 ) -> dict[str, Any]:
     explicit_include = _coerce_bool(message.get("openclaw_include_in_digest"))
     if explicit_include is False:
@@ -1005,7 +1046,7 @@ def _openclaw_interest_screen(
         return {"accepted": True, "reason": "accepted_by_openclaw_relevant_true"}
 
     # Fallback rule path when OpenClaw metadata is absent.
-    if signal_hits > 0 or urgency_hit or hit_term_count >= 1 or bool(mention_signal):
+    if signal_hits > 0 or urgency_hit or task_signal_count > 0 or hit_term_count >= 1 or bool(mention_signal):
         return {"accepted": True, "reason": "accepted_by_rule_fallback"}
     return {"accepted": False, "reason": "blocked_by_rule_fallback"}
 
