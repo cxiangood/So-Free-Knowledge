@@ -34,6 +34,22 @@ class LingoStore:
             return None
         return self._normalize_entry(normalized, value)
 
+    def find_matching_sense(
+        self,
+        keyword: str,
+        *,
+        entry_type: str,
+        value: str,
+    ) -> dict[str, Any] | None:
+        entry = self.get_entry(keyword)
+        if not entry:
+            return None
+        return self._find_matching_sense(
+            entry.get("senses", []) if isinstance(entry.get("senses", []), list) else [],
+            entry_type=str(entry_type or "").strip().lower(),
+            value=str(value or "").strip(),
+        )
+
     def upsert_entry(
         self,
         keyword: str,

@@ -1,4 +1,4 @@
-# SoFree Knowledge 飞书主动知识Agent
+﻿# SoFree Knowledge 飞书主动知识Agent
 
 **担心灵感迸发沉群底？害怕黑话太多看不懂？别怕，SoFree 稳稳接住你！**
 
@@ -134,35 +134,40 @@ python start_insight.py
 ### 常用命令使用
 #### 知识推荐推送（OpenClaw使用）
 ```bash
-# 主动推送知识+兴趣混合卡片给用户
-sofree-knowledge assistant recommend --push
+# shortcut 主动推送知识+兴趣混合卡片给用户
+sofree-knowledge brief
 
 # 只推送知识摘要卡片（不推兴趣内容）
-sofree-knowledge assistant recommend --push --no-push-interest-card
+sofree-knowledge brief --receive-chat-id oc_xxx
 
 # 只推送兴趣 digest 卡片（不推知识摘要）
-sofree-knowledge assistant recommend --push --no-push-summary-card
+sofree-knowledge brief --push-summary-card --no-push-interest-card
 
 # 配置定时推送（在用户profile中设置推送时间）
 sofree-knowledge assistant set-profile --weekly-brief-cron "0 9 * * MON" --nightly-interest-cron "0 21 * * *"
 ```
 
+#### 智能飞书词典写入
+```bash
+# shortest usable command: mine terms and emit AI review prompt
+sofree-knowledge lingo-write
+
+# scan a shorter recent window
+sofree-knowledge lingo-write --recent-days 3
+
+# write reviewed entries into Feishu Lingo + local mirror
+sofree-knowledge lingo-write --judgements-file ./ai_review_judgements.json
+
+# local-only write
+sofree-knowledge lingo-write --judgements-file ./ai_review_judgements.json --no-remote
+```
+
 #### 知识发现与词典同步
 ```bash
-# 从聊天记录中抽取关键词上下文
-sofree-knowledge lingo extract-contexts --keywords "关键词1,关键词2" --messages-file ./messages.json
 
 # 从本地词典文件批量同步到本地+飞书Lingo
 sofree-knowledge lingo sync-from-file --input-file ./dictionary.json
 ```
-
-#### 困惑检测与响应
-```bash
-# 从聊天记录中检测困惑候选
-sofree-knowledge confused detect-candidates --messages-file ./messages.json
-```
-
----
 
 ## 🌟 项目亮点
 1. **完整闭环**：实现了知识发现→结构化→分发→反馈→存储 的完整运营闭环，不仅能把信息变成知识，还能确保知识被有效利用和持续优化

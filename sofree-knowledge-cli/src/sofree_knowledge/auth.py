@@ -10,8 +10,6 @@ from typing import Any
 from urllib.parse import parse_qs, urlencode, urlparse
 
 import httpx
-
-from .auth_device_flow import has_required_scopes, login_with_device_flow, poll_device_token, request_device_authorization
 from .auth_token_manager import TokenManager
 from .auth_token_store import TokenStore
 from .config import DEFAULT_TOKEN_FILE, get_app_credentials
@@ -22,7 +20,7 @@ DEFAULT_REDIRECT_URI = "http://localhost:8000/callback"
 DEFAULT_SCOPE = (
     "im:chat:read im:message:readonly "
     "im:message.group_msg:get_as_user im:message.p2p_msg:get_as_user "
-    "search:message contact:user.base:readonly "
+    "search:message contact:contact.base:readonly "
     "drive:file:readonly docs:doc:readonly wiki:node:read wiki:space:read"
 )
 
@@ -112,46 +110,6 @@ def auth_status(token_file: str | Path | None = None) -> dict[str, Any]:
     if "scope" in data:
         result["scope"] = data["scope"]
     return result
-
-
-def device_login(
-    scope: str = DEFAULT_SCOPE,
-    *,
-    token_file: str | Path | None = None,
-    open_browser: bool = True,
-) -> dict[str, Any]:
-    result = TokenManager(token_file=token_file).device_login(scope=scope, open_browser=open_browser)
-    token_data = result.get("token", {})
-    if not isinstance(token_data, dict):
-        raise FeishuAPIError("Device login did not return token data.")
-    return {
-        "flow": "device_code",
-        "request": result.get("request", {}),
-        "token": redact_token_data(token_data),
-    }
-
-
-def start_device_login(scope: str = DEFAULT_SCOPE) -> dict[str, Any]:
-    return TokenManager().start_device_login(scope=scope)
-
-
-def resume_device_login(
-    device_code: str,
-    *,
-    interval: int = 5,
-    expires_in: int = 240,
-    token_file: str | Path | None = None,
-) -> dict[str, Any]:
-    result = TokenManager(token_file=token_file).resume_device_login(
-        device_code=device_code,
-        interval=interval,
-        expires_in=expires_in,
-    )
-    token_data = result.get("token", {})
-    return {
-        "flow": "device_code",
-        "token": redact_token_data(token_data),
-    }
 
 
 def ensure_user_auth(

@@ -67,69 +67,6 @@ def test_cli_quiet_failure_keeps_stderr_machine_readable(tmp_path, capsys):
     assert "Traceback" not in captured.err
 
 
-def test_auth_login_no_wait_cli_outputs_json(monkeypatch, capsys):
-    monkeypatch.setattr(
-        cli_module,
-        "start_device_login",
-        lambda scope: {
-            "flow": "device_code",
-            "request": {
-                "device_code": "dev123",
-                "verification_uri_complete": "https://accounts.feishu.cn/verify",
-            },
-        },
-    )
-
-    code = main(["auth", "login", "--no-wait", "--scope", "im:chat:read"])
-
-    out = json.loads(capsys.readouterr().out)
-    assert code == 0
-    assert out["ok"] is True
-    assert out["flow"] == "device_code"
-    assert out["request"]["device_code"] == "dev123"
-
-
-def test_auth_login_bootstraps_profile_after_token(monkeypatch, tmp_path, capsys):
-    class FakeAuthClient:
-        def request(self, method, path, params=None, access_token=None, **kwargs):
-            return {"data": {"user": {"name": "曹林江"}}}
-
-        def get_tenant_access_token(self):
-            return "tenant_token"
-
-    monkeypatch.setattr(
-        cli_module,
-        "device_login",
-        lambda **kwargs: {
-            "flow": "device_code",
-            "token": {"has_access_token": True, "open_id": "ou_test"},
-        },
-    )
-    monkeypatch.setattr(cli_module.FeishuClient, "from_user_context", classmethod(lambda cls, **kwargs: FakeAuthClient()))
-    monkeypatch.setattr(cli_module, "get_user_identity", lambda token_file=None: {"open_id": "ou_test"})
-    monkeypatch.setattr(
-        cli_module,
-        "collect_online_personal_inputs",
-        lambda **kwargs: {
-            "documents": [{"doc_id": "d1", "title": "关键词提取方案", "summary": "上线排期"}],
-            "messages": [{"message_id": "m1", "chat_id": "oc_x", "text": "请检查关键词提取上线排期"}],
-            "knowledge_items": [{"id": "k1", "title": "关键词提取", "content": "高频主题"}],
-            "meta": {"message_count": 1, "document_count": 1},
-        },
-    )
-
-    code = main(["--output-dir", str(tmp_path), "auth", "login", "--no-browser"])
-
-    out = json.loads(capsys.readouterr().out)
-    assert code == 0
-    assert out["ok"] is True
-    assert out["profile_bootstrap"]["pending_confirmation"] is True
-    assert out["profile_bootstrap"]["profile"]["interests"]
-    assert out["profile_bootstrap"]["profile"]["role"] != "待确认角色"
-    assert out["profile_bootstrap"]["profile"]["persona"] != "待确认形象"
-    assert "AI 画像初始化建议" == out["profile_bootstrap"]["card"]["header"]["title"]["content"]
-
-
 def test_assistant_confirm_profile_cli_marks_confirmation_complete(tmp_path, capsys):
     profile_file = tmp_path / "assistant_profile.json"
     profile_file.write_text(
@@ -146,7 +83,7 @@ def test_assistant_confirm_profile_cli_marks_confirmation_complete(tmp_path, cap
 
 
 def test_auth_url_cli_outputs_json(monkeypatch, capsys):
-    monkeypatch.setenv("FEISHU_APP_ID", "cli_test")
+    monkeypatch.setenv("APP_ID", "cli_test")
 
     code = main(["auth-url", "--scope", "im:chat:read"])
 
@@ -1172,6 +1109,156 @@ def test_lingo_auto_sync_cli_applies_ai_review_judgements_and_appends_sense(tmp_
     assert entry["senses"][1]["value"] == "团队内部使用的模型项目简称"
 
 
+def test_lingo_sync_from_file_skips_remote_create_when_matching_sense_already_has_entity_id(
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    scoped_root = tmp_path / "users" / "ou_lingo_test"
+    scoped_root.mkdir(parents=True, exist_ok=True)
+    existing_file = scoped_root / "lingo_entries.json"
+    existing_file.write_text(
+        json.dumps(
+            {
+                "entries": {
+                    "JEPA": {
+                        "keyword": "JEPA",
+                        "type": "black",
+                        "value": "旧释义",
+                        "entity_id": "",
+                        "senses": [
+                            {
+                                "sense_id": "sense_old",
+                                "type": "black",
+                                "value": "旧释义",
+                                "entity_id": "",
+                                "context_ids": ["ctx_old"],
+                            },
+                            {
+                                "sense_id": "sense_new",
+                                "type": "black",
+                                "value": "团队内部使用的模型项目简称",
+                                "entity_id": "ent_existing",
+                                "context_ids": ["ctx_new"],
+                            },
+                        ],
+                    }
+                }
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    judgements_file = tmp_path / "judgements.json"
+    judgements_file.write_text(
+        json.dumps(
+            [
+                {
+                    "keyword": "JEPA",
+                    "type": "black",
+                    "value": "团队内部使用的模型项目简称",
+                    "aliases": ["Joint Embedding"],
+                    "context_ids": ["ctx_newer"],
+                }
+            ],
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    class FailIfCalledClient:
+        def create_lingo_entity(self, **kwargs):
+            raise AssertionError("remote create should be skipped for already synced matching sense")
+
+    monkeypatch.setattr(cli_module, "_instantiate_feishu_client", lambda: FailIfCalledClient())
+
+    code = main(
+        [
+            "--output-dir",
+            str(tmp_path),
+            "--user-open-id",
+            "ou_lingo_test",
+            "lingo",
+            "sync-from-file",
+            "--input-file",
+            str(judgements_file),
+        ]
+    )
+
+    out = json.loads(capsys.readouterr().out)
+    assert code == 0
+    assert out["ok"] is True
+    assert out["entries"][0]["remote_create_skipped"] is True
+    assert out["entries"][0]["entity_id"] == "ent_existing"
+
+
+def test_lingo_auto_sync_skips_remote_create_when_matching_sense_already_has_entity_id(
+    tmp_path,
+    monkeypatch,
+):
+    scoped_root = tmp_path / "users" / "ou_lingo_test"
+    scoped_root.mkdir(parents=True, exist_ok=True)
+    (scoped_root / "lingo_entries.json").write_text(
+        json.dumps(
+            {
+                "entries": {
+                    "JEPA": {
+                        "keyword": "JEPA",
+                        "type": "black",
+                        "value": "旧释义",
+                        "entity_id": "",
+                        "senses": [
+                            {
+                                "sense_id": "sense_old",
+                                "type": "black",
+                                "value": "旧释义",
+                                "entity_id": "",
+                            },
+                            {
+                                "sense_id": "sense_new",
+                                "type": "black",
+                                "value": "团队内部使用的模型项目简称",
+                                "entity_id": "ent_existing",
+                            },
+                        ],
+                    }
+                }
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    judgements = [
+        {
+            "keyword": "JEPA",
+            "decision": "append_new_sense",
+            "type": "black",
+            "value": "团队内部使用的模型项目简称",
+            "context_ids": ["ctx_1"],
+            "matched_existing_sense_ids": ["sense_new"],
+            "aliases": ["Joint Embedding"],
+        }
+    ]
+
+    class FailIfCalledClient:
+        def create_lingo_entity(self, **kwargs):
+            raise AssertionError("remote create should be skipped for already synced matching sense")
+
+    result = cli_module.sync_ai_review_judgements(
+        output_dir=scoped_root,
+        judgements=judgements,
+        source="lingo_auto",
+        remote=True,
+        write_local=True,
+        force_remote_create=False,
+        client=FailIfCalledClient(),
+        publishable_only=True,
+    )
+
+    assert result["entries"][0]["remote_create_skipped"] is True
+    assert result["entries"][0]["entity_id"] == "ent_existing"
+
+
 def test_lingo_auto_sync_cli_keeps_web_search_pending_without_writing(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(
         cli_module,
@@ -1267,6 +1354,7 @@ def test_lingo_auto_review_prompt_contains_chinese_noun_positive_example():
     assert "你就是这批候选词的最终判断者" in prompt
     assert "initial_type / initial_value" in prompt
     assert "不要要求用户去配置 ~/.sofree/knowledge_config.json" in prompt
+    assert "--force-remote-create" in prompt
 
 
 def test_lingo_candidate_keyword_filter_rejects_system_template_fields():
